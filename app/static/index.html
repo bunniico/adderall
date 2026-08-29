@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Adderall</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⏳</text></svg>">
+</head>
+<body>
+
+<header class="topbar">
+  <h1>⏳ adderall</h1>
+  <div class="topbar-actions">
+    <button id="btn-braindump" class="ghost" title="Dump everything in your head; the Compiler turns it into tasks">🧠 Braindump</button>
+    <button id="btn-focus" class="accent" title="One task at a time with a visual timer">▶ Focus</button>
+    <button id="btn-settings" class="ghost" title="Settings">⚙</button>
+  </div>
+</header>
+
+<main>
+  <form id="add-form" autocomplete="off">
+    <input id="add-title" type="text" placeholder="Add a task… (Enter to add)" maxlength="500" required>
+    <label class="granularity" title="Breakdown granularity (1 = broad steps, 5 = tiny steps)">
+      🌶 <input id="add-granularity" type="range" min="1" max="5" value="3">
+    </label>
+    <button type="submit" class="accent">Add</button>
+  </form>
+
+  <div id="alarm-banner" class="alarm-banner" hidden></div>
+
+  <section id="task-list" class="task-list" aria-live="polite"></section>
+  <p id="empty-hint" class="empty-hint" hidden>
+    Nothing here yet. Add a task above, or hit <b>🧠 Braindump</b> and empty your head.
+  </p>
+  <details id="done-section" class="done-section" hidden>
+    <summary>Done &amp; discarded</summary>
+    <div id="done-list"></div>
+  </details>
+</main>
+
+<!-- Task detail modal -->
+<dialog id="modal-detail">
+  <form method="dialog" class="modal-body" id="detail-form">
+    <div class="modal-head">
+      <input id="d-title" type="text" maxlength="500" class="title-input">
+      <button type="button" class="ghost close" data-close>✕</button>
+    </div>
+    <label>Context / description
+      <textarea id="d-description" rows="2" placeholder="Anything specific about your situation — the AI uses this when breaking the task down"></textarea>
+    </label>
+    <div class="grid2">
+      <label>Deadline <span id="d-deadline-source" class="tag"></span>
+        <input id="d-deadline" type="datetime-local">
+      </label>
+      <label>Raw estimate (minutes)
+        <input id="d-estimate" type="number" min="1" placeholder="e.g. 45">
+      </label>
+    </div>
+    <p id="d-buffer-note" class="muted"></p>
+    <div class="grid2">
+      <label>Impact <output id="d-impact-val">–</output>
+        <input id="d-impact" type="range" min="0" max="10" value="5">
+      </label>
+      <label>Effort <output id="d-effort-val">–</output>
+        <input id="d-effort" type="range" min="0" max="10" value="5">
+      </label>
+    </div>
+    <p>Quadrant: <span id="d-quadrant" class="quad-badge"></span></p>
+    <div class="modal-actions">
+      <button type="button" id="d-breakdown" class="ghost">⚡ Break down</button>
+      <button type="button" id="d-annotate" class="ghost" title="Ask the AI to re-estimate and re-score">🎲 Re-estimate</button>
+      <button type="button" id="d-focus" class="accent">▶ Focus</button>
+      <button type="button" id="d-done" class="good">✓ Done</button>
+      <button type="button" id="d-discard" class="bad">🗑 Discard</button>
+    </div>
+    <div class="modal-actions">
+      <button type="button" id="d-save" class="accent wide">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Thankless-task discard suggestion -->
+<dialog id="modal-thankless">
+  <div class="modal-body">
+    <h2>😮‍💨 This looks like a thankless task</h2>
+    <p><b id="t-title"></b> scored <span id="t-scores"></span> — high effort, low impact.
+    Tasks like this eat energy and give little back. They're usually best minimized,
+    delegated, or dropped entirely, so your energy goes to quick wins and the projects
+    that matter.</p>
+    <div class="modal-actions">
+      <button id="t-discard" class="bad">🗑 Discard it</button>
+      <button id="t-keep" class="ghost">Keep anyway</button>
+      <button id="t-rescore" class="ghost">Re-score</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- Braindump / Compiler -->
+<dialog id="modal-braindump">
+  <div class="modal-body">
+    <div class="modal-head"><h2>🧠 Braindump</h2>
+      <button type="button" class="ghost close" data-close>✕</button></div>
+    <p class="muted">Type everything swirling around in your head — messy is fine.
+    The Compiler turns it into separate tasks.</p>
+    <textarea id="b-text" rows="8" maxlength="20000"
+      placeholder="call dentist about the thing, mom's birthday!!, that email from work I keep avoiding, laundry mountain, renew passport??"></textarea>
+    <div class="modal-actions">
+      <button id="b-compile" class="accent wide">Compile into tasks</button>
+    </div>
+    <p id="b-status" class="muted"></p>
+  </div>
+</dialog>
+
+<!-- Settings -->
+<dialog id="modal-settings">
+  <div class="modal-body">
+    <div class="modal-head"><h2>⚙ Settings</h2>
+      <button type="button" class="ghost close" data-close>✕</button></div>
+
+    <label class="row"><input id="s-auto-deadlines" type="checkbox">
+      Auto-deadlines <span class="muted">— assign a deadline when you don't set one</span></label>
+
+    <label>Time-tax buffer: <output id="s-buffer-val"></output>
+      <input id="s-buffer" type="range" min="25" max="50" value="30">
+      <span class="muted">Every estimate gets this padding — plans always take longer than they feel like they will.</span>
+    </label>
+
+    <label class="row"><input id="s-adaptive" type="checkbox">
+      Adaptive buffer <span class="muted">— learn from your actual completion times (only raises, never lowers)</span></label>
+
+    <label>Impact/effort threshold: <output id="s-threshold-val"></output>
+      <input id="s-threshold" type="range" min="1" max="9" value="5">
+    </label>
+
+    <label class="row"><input id="s-ai-scoring" type="checkbox">
+      AI impact/effort suggestions</label>
+
+    <label class="row"><input id="s-alarms" type="checkbox">
+      Transition alarms</label>
+    <div class="grid3">
+      <label>Stop <input id="s-stop-lead" type="number" min="0" max="240"> <span class="muted">min before</span></label>
+      <label>Ready <input id="s-ready-lead" type="number" min="0" max="240"> <span class="muted">min before</span></label>
+      <label>Go <input id="s-go-lead" type="number" min="0" max="60"> <span class="muted">min before</span></label>
+    </div>
+
+    <label>Timer style
+      <select id="s-timer-style">
+        <option value="both">Analog dial + color block</option>
+        <option value="analog">Analog dial only</option>
+        <option value="block">Color block only</option>
+      </select>
+    </label>
+
+    <label>Default breakdown granularity: <output id="s-granularity-val"></output>
+      <input id="s-granularity" type="range" min="1" max="5" value="3">
+    </label>
+
+    <label class="row"><input id="s-gamification" type="checkbox">
+      Completion celebration</label>
+
+    <label>Anthropic API key <span id="s-key-status" class="tag"></span>
+      <input id="s-api-key" type="password" placeholder="sk-ant-… (leave blank to keep current)">
+    </label>
+
+    <div class="modal-actions">
+      <button id="s-save" class="accent wide">Save settings</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- Taskmaster focus overlay -->
+<div id="focus-overlay" class="focus-overlay" hidden>
+  <button id="f-close" class="ghost close focus-close">✕</button>
+  <p class="focus-label">RIGHT NOW, JUST THIS:</p>
+  <h2 id="f-title"></h2>
+  <p id="f-description" class="muted"></p>
+  <div class="focus-timers">
+    <canvas id="f-dial" width="260" height="260"></canvas>
+    <div class="focus-block-wrap">
+      <div id="f-block" class="focus-block"><div id="f-block-fill"></div></div>
+      <div class="focus-times">
+        <span>elapsed <b id="f-elapsed">0m</b></span>
+        <span id="f-stage" class="stage-note"></span>
+        <span>remaining <b id="f-remaining"></b></span>
+      </div>
+    </div>
+  </div>
+  <div class="modal-actions focus-actions">
+    <button id="f-pause" class="ghost">⏸ Pause</button>
+    <button id="f-extend" class="ghost">+5 min</button>
+    <button id="f-done" class="good">✓ Done</button>
+    <button id="f-skip" class="ghost">Next task →</button>
+  </div>
+  <p id="f-next-hint" class="muted"></p>
+</div>
+
+<div id="celebration" class="celebration" hidden></div>
+<div id="toast" class="toast" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>
