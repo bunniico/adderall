@@ -51,6 +51,54 @@ docker compose up --build
 Your tasks are unaffected — they live in the mounted `./data/` volume, not in
 the image.
 
+To not have to remember any of that, start it with the included script, which
+pulls and rebuilds every time:
+
+```bash
+./start.sh          # foreground, Ctrl-C to stop
+./start.sh -d       # background
+```
+
+If the pull fails (local edits, diverged history) it says so and starts the
+version you already have, rather than refusing to launch.
+
+### Running it at boot
+
+To bring the app up automatically when the machine starts, install a systemd
+service (Linux). Replace the path and user with your own:
+
+```ini
+# /etc/systemd/system/adderall.service
+[Unit]
+Description=adderall
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/YOU/adderall
+ExecStart=/home/YOU/adderall/start.sh -d
+ExecStop=/usr/bin/docker compose down
+User=YOU
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl enable --now adderall
+```
+
+`start.sh -d` pulls, rebuilds, and starts detached, so each boot picks up the
+latest code. Note that this means the machine deploys whatever is on `main`
+unreviewed — fine for a personal app, worth thinking about if that changes.
+Drop the `git pull` from the script if you'd rather update deliberately.
+
+Alternatively, `restart: unless-stopped` is already set in
+`docker-compose.yml`, so if the Docker daemon starts at boot the container
+comes back on its own — just without pulling updates.
+
 AI features (breakdown, estimates, braindump compiling) need an Anthropic API
 key: set `ANTHROPIC_API_KEY` in the environment, or paste one into
 ⚙ Settings in the app. Everything else works without a key.
