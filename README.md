@@ -24,6 +24,19 @@ pip install -r requirements.txt
 uvicorn app.main:app --port 8000
 ```
 
+### Updating
+
+The Docker image bakes in the app code, so a plain `docker compose up` after
+pulling keeps running the **old** build. Always rebuild:
+
+```bash
+git pull
+docker compose up --build
+```
+
+Your tasks are unaffected — they live in the mounted `./data/` volume, not in
+the image.
+
 AI features (breakdown, estimates, braindump compiling) need an Anthropic API
 key: set `ANTHROPIC_API_KEY` in the environment, or paste one into
 ⚙ Settings in the app. Everything else works without a key.
