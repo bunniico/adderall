@@ -32,6 +32,8 @@ DEFAULT_SETTINGS = {
     "granularity": 3,          # default breakdown spiciness 1-5
     "gamification": True,
     "api_key": "",             # optional; falls back to ANTHROPIC_API_KEY env
+    "workspace_id": "",        # required for identity-linked keys; falls back
+                               # to ANTHROPIC_WORKSPACE_ID env
     "models": {
         "fast": "claude-haiku-4-5",    # estimates, impact/effort scoring
         "balanced": "claude-sonnet-5", # interactive task breakdown

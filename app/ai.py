@@ -46,10 +46,16 @@ class AIUnavailable(Exception):
 
 def _client(settings: dict) -> anthropic.Anthropic:
     key = (settings.get("api_key") or "").strip() or os.environ.get("ANTHROPIC_API_KEY")
+    # Identity-linked API keys must name the workspace each request acts in;
+    # the SDK only sets this header automatically for federated credential
+    # providers, so a plain api_key= client needs it passed explicitly.
+    workspace = ((settings.get("workspace_id") or "").strip()
+                 or os.environ.get("ANTHROPIC_WORKSPACE_ID", "").strip())
+    headers = {"anthropic-workspace-id": workspace} if workspace else None
     if key:
-        return anthropic.Anthropic(api_key=key)
+        return anthropic.Anthropic(api_key=key, default_headers=headers)
     # Fall back to the SDK's own resolution (auth token, ant profile, ...).
-    return anthropic.Anthropic()
+    return anthropic.Anthropic(default_headers=headers)
 
 
 def _call(settings: dict, tier: str, prompt: str, schema: dict,
@@ -76,6 +82,13 @@ def _call(settings: dict, tier: str, prompt: str, schema: dict,
             "the ANTHROPIC_API_KEY environment variable."
         ) from exc
     except anthropic.APIStatusError as exc:
+        if "anthropic-workspace-id" in str(exc.message):
+            raise AIUnavailable(
+                "Your API key is identity-linked, so it needs a workspace ID. "
+                "Add it in Settings → Workspace ID (find it in the Claude "
+                "Console URL: platform.claude.com/workspaces/<id>), or set the "
+                "ANTHROPIC_WORKSPACE_ID environment variable."
+            ) from exc
         raise AIUnavailable(f"Claude API error ({exc.status_code}): {exc.message}") from exc
     except anthropic.APIConnectionError as exc:
         raise AIUnavailable("Could not reach the Claude API (network error).") from exc

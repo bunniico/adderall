@@ -143,6 +143,14 @@ def test_settings_roundtrip_and_key_privacy(client):
     assert "api_key" not in res  # never echoed back
 
 
+def test_workspace_id_roundtrips_and_clears(client):
+    res = client.put("/api/settings", json={"workspace_id": "wrkspc_abc"}).json()
+    assert res["workspace_id"] == "wrkspc_abc"  # not a secret, safe to echo
+    assert client.get("/api/settings").json()["workspace_id"] == "wrkspc_abc"
+    # blank clears it (unlike the API key, where blank means "keep current")
+    assert client.put("/api/settings", json={"workspace_id": ""}).json()["workspace_id"] == ""
+
+
 def test_auto_deadline_respects_toggle(client):
     client.put("/api/settings", json={"auto_deadlines": False})
     state = create(client, title="floaty")
