@@ -1,21 +1,35 @@
 # ⏳ adderall
 
+> Note: This application requires a Claude API key and a workspace ID if using an identity-based API key. See Anthropic's API site for more details.
+
+goblin.tools is cool, but it also sucks.
+
+Here's what I created to fix it:
+
 A single-user, locally hosted web app for people with executive dysfunction
-(ADHD, autism, AuDHD). It ports the four most useful goblin.tools ideas —
-**Magic ToDo**, **Taskmaster**, **Estimator**, and **Compiler** — into one
-reliable single-page workspace, and fixes the gaps: nothing is ever lost,
-time is visual and honest, and the app helps you *do* tasks, not just plan
-them.
+(ADHD, autism, AuDHD) designed to help us prioritize and organize tasks with minimal effort.
+
+It ports the four most useful goblin.tools ideas:
+- **Magic ToDo**, 
+- **Taskmaster**, 
+- **Estimator**,
+- **Compiler**
+
+The app automatically sets deadline and priority using a mix of the Eisenhower matrix and Action-Impact matrix. More importantly, it fixes the horrible UI goblin.tools has that never works.
 
 ## Quick start
 
 ```bash
+git clone <repo url I need to fill in>
 docker compose up
 ```
 
-Then open <http://localhost:8000>. That's it — no accounts, no onboarding.
+Then open <http://localhost:8000>.
+
 Your tasks live in a SQLite file under `./data/` and survive restarts,
-tab closes, and crashes.
+tab closes, and crashes. 
+
+This also means that you can access this app on any device on the network, so if its a shared network I would probably change the configuration a bit and/or add a password/login.
 
 Without Docker:
 
