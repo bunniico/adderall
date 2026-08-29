@@ -43,6 +43,7 @@ function applyState(newState) {
   render();
   maybeShowThankless();
   scheduleTransitionAlarms();
+  syncFocusWithState();
 }
 
 function flatten(tasks) {
@@ -99,6 +100,39 @@ function sortActive(tasks) {
   });
 }
 
+/* Progress, in time rather than in item counts: how much of a task's
+ * buffered subtree estimate is already finished, and how much is still
+ * ahead. Shown under any task that contains subtasks. */
+function progressBar(task) {
+  const total = task.rollup_estimate || 0;
+  const done = Math.min(task.rollup_done || 0, total);
+  const left = Math.max(0, total - done);
+  const pct = total ? Math.round((done / total) * 100) : 0;
+
+  const wrap = document.createElement("div");
+  wrap.className = "progress-wrap";
+  wrap.title = `${fmtMinutes(done)} of ${fmtMinutes(total)} of subtask time done`;
+
+  const bar = document.createElement("div");
+  bar.className = "progress";
+  const fill = document.createElement("div");
+  fill.className = "progress-fill";
+  fill.style.width = pct + "%";
+  if (pct >= 100) fill.classList.add("complete");
+  bar.appendChild(fill);
+
+  const legend = document.createElement("div");
+  legend.className = "progress-legend";
+  const left_ = document.createElement("span");
+  left_.textContent = `${fmtMinutes(done)} done`;
+  const right_ = document.createElement("span");
+  right_.textContent = `${fmtMinutes(left)} left · ${pct}%`;
+  legend.append(left_, right_);
+
+  wrap.append(bar, legend);
+  return wrap;
+}
+
 function taskNode(task, isSub) {
   const el = document.createElement("div");
   const active = task.status === "todo" || task.status === "in_progress";
@@ -147,14 +181,23 @@ function taskNode(task, isSub) {
       b.className = "badge " + cls;
       b.textContent = text;
       badges.appendChild(b);
+      return b;
     };
     if (task.id === state.next_task_id) add("next up", "next-badge");
-    if (task.buffered_estimate != null)
-      add(`~${fmtMinutes(task.buffered_estimate)}`, "");
-    const dl = fmtDeadline(task.deadline);
-    if (dl) add(dl.label + (task.deadline_source === "auto" ? " (auto)" : ""), dl.cls);
+    // A task that contains subtasks is worth what it holds: the estimate is
+    // the sum of everything underneath, the deadline the furthest one inside.
+    const est = task.has_subtasks ? task.rollup_estimate : task.buffered_estimate;
+    const dlIso = task.has_subtasks ? task.rollup_deadline : task.deadline;
+    const dlSrc = task.has_subtasks ? task.rollup_deadline_source : task.deadline_source;
+    if (est != null) {
+      const b = add(`~${fmtMinutes(est)}`, "");
+      if (task.has_subtasks) b.title = "Total of all subtasks";
+    }
+    const dl = fmtDeadline(dlIso);
+    if (dl) add(dl.label + (dlSrc === "auto" ? " (auto)" : ""), dl.cls);
     if (task.quadrant) add(QUAD_LABEL[task.quadrant], "quad-" + task.quadrant);
     if (badges.children.length) el.appendChild(badges);
+    if (task.has_subtasks) el.appendChild(progressBar(task));
   }
 
   const subs = (task.subtasks || []).filter(
@@ -490,74 +533,263 @@ function notify(text) {
 
 setInterval(checkTransitionAlarms, 30000);
 
-/* ---------------- Taskmaster focus mode ---------------- */
+/* ---------------- Taskmaster focus mode ----------------
+ * A focus session outlives the overlay. Closing the overlay only minimizes
+ * it: the timer keeps running in the background, so you can duck out to add
+ * a task and come back to the same countdown — or reset it deliberately.
+ * The session is mirrored into localStorage, so a reload or a crash resumes
+ * it too. Remaining time is derived from wall-clock stamps rather than a
+ * decrementing counter, so a throttled background tab cannot lose minutes.
+ *
+ * Within a session the task tree is walked depth-first (see
+ * logic.focus_queue): the subtasks of a task come before the task itself,
+ * so a session drills down to the smallest first step and surfaces back up.
+ */
+
+const FOCUS_KEY = "adderall.focus.v1";
+const FOCUS_PERSIST = [
+  "active", "rootId", "rootTitle", "taskId", "taskTitle", "path", "stepsLeft",
+  "estimateMin", "totalSec", "startedAt", "pausedAccum", "pauseStart", "paused",
+  "skipped", "cuesFired",
+];
 
 const focus = {
+  active: false,      // a session exists — running even while the overlay is closed
+  open: false,        // overlay visible
+  advancing: false,   // guards against re-entrant queue walks
+  rootId: null,
+  rootTitle: "",
   taskId: null,
+  taskTitle: "",
+  path: [],
+  stepsLeft: 0,
+  nextTitle: "",
+  estimateMin: null,
   totalSec: 0,
-  remainingSec: 0,
+  startedAt: 0,       // epoch ms this task's timer started
+  pausedAccum: 0,     // ms spent paused
+  pauseStart: 0,
   paused: false,
+  skipped: [],
+  cuesFired: [],
   timer: null,
-  startedAt: null,
-  pausedAccum: 0,
-  cuesFired: new Set(),
 };
 
-async function startFocus(taskId) {
-  let task = taskId ? findTask(taskId) : null;
-  if (!task) {
-    try {
-      const res = await api("/next");
-      task = res.task;
-    } catch (e) { toast(e.message, true); return; }
-  }
-  if (!task) { toast("Nothing to focus on — add a task first."); return; }
+function saveFocus() {
+  try {
+    if (!focus.active) localStorage.removeItem(FOCUS_KEY);
+    else localStorage.setItem(FOCUS_KEY, JSON.stringify(
+      Object.fromEntries(FOCUS_PERSIST.map((k) => [k, focus[k]]))));
+  } catch {}
+}
 
-  focus.taskId = task.id;
-  focus.totalSec = Math.max(60, (task.buffered_estimate ?? 25) * 60);
-  focus.remainingSec = focus.totalSec;
-  focus.paused = false;
+function restoreFocus() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(FOCUS_KEY) || "null"); } catch {}
+  if (!saved || !saved.active || !saved.taskId) return;
+  Object.assign(focus, saved);
+  focus.open = false;
+  focus.advancing = false;
+  ensureFocusTimer();
+  renderFocusTask();
+  renderFocusPill();
+}
+
+/* Elapsed/remaining come from timestamps, never from a tick counter, so the
+ * clock stays honest across minimized overlays, hidden tabs and reloads. */
+function focusElapsedSec() {
+  if (!focus.startedAt) return 0;
+  let paused = focus.pausedAccum;
+  if (focus.paused && focus.pauseStart) paused += Date.now() - focus.pauseStart;
+  return Math.max(0, (Date.now() - focus.startedAt - paused) / 1000);
+}
+
+function focusRemainingSec() {
+  return focus.totalSec - focusElapsedSec();
+}
+
+function ensureFocusTimer() {
+  if (!focus.timer) focus.timer = setInterval(focusTick, 1000);
+}
+
+/* ---- session lifecycle ---- */
+
+async function startFocus(taskId) {
+  let data;
+  try {
+    data = await api("/focus" + (taskId ? `?root=${encodeURIComponent(taskId)}` : ""));
+  } catch (e) { toast(e.message, true); return; }
+  if (!data.queue.length) { toast("Nothing to focus on — add a task first."); return; }
+  focus.active = true;
+  focus.rootId = data.root_id;
+  focus.rootTitle = data.root_title || "";
+  focus.skipped = [];
+  focusOn(data.queue[0], data, true);
+  openFocusOverlay();
+}
+
+/* Move to the next step of the walk. The queue is re-fetched every time, so
+ * subtasks added mid-session slot straight into the traversal. */
+async function advanceFocus() {
+  if (focus.advancing) return false;
+  focus.advancing = true;
+  try {
+    let data = focus.rootId
+      ? await api(`/focus?root=${encodeURIComponent(focus.rootId)}`).catch(() => null)
+      : null;
+    let item = pickFromQueue(data);
+    if (!item) {
+      // This tree is finished (or entirely skipped) — roll into the next one.
+      data = await api("/focus").catch(() => null);
+      if (data && data.root_id && data.root_id !== focus.rootId) {
+        focus.rootId = data.root_id;
+        focus.rootTitle = data.root_title || "";
+        focus.skipped = [];
+      }
+      item = pickFromQueue(data);
+    }
+    if (!item) {
+      const wasOpen = focus.open;
+      endFocus();
+      if (wasOpen) toast("Nothing left to focus on — that's the lot ✓");
+      return false;
+    }
+    focusOn(item, data, true);
+    return true;
+  } finally {
+    focus.advancing = false;
+  }
+}
+
+function pickFromQueue(data) {
+  if (!data || !data.queue || !data.queue.length) return null;
+  return data.queue.find((t) => !focus.skipped.includes(t.id)) || null;
+}
+
+function focusOn(item, data, resetTimer) {
+  const queue = (data && data.queue) || [];
+  const idx = queue.findIndex((t) => t.id === item.id);
+  focus.taskId = item.id;
+  focus.taskTitle = item.title;
+  focus.path = item.path || [];
+  focus.stepsLeft = queue.length - (idx < 0 ? 0 : idx);
+  focus.nextTitle = idx >= 0 && queue[idx + 1] ? queue[idx + 1].title : "";
+  focus.estimateMin = item.buffered_estimate ?? null;
+  if (resetTimer) resetFocusTimer();
+  renderFocusTask();
+  ensureFocusTimer();
+  saveFocus();
+  api(`/tasks/${item.id}/start`, { method: "POST" }).then(applyState).catch(() => {});
+}
+
+function resetFocusTimer() {
+  focus.totalSec = Math.max(60, (focus.estimateMin ?? 25) * 60);
   focus.startedAt = Date.now();
   focus.pausedAccum = 0;
-  focus.cuesFired = new Set();
-
-  $("f-title").textContent = task.title;
-  $("f-description").textContent = task.description || "";
-  $("f-stage").textContent = "";
+  focus.pauseStart = 0;
+  focus.paused = false;
+  focus.cuesFired = [];
   $("f-pause").textContent = "⏸ Pause";
+  $("f-stage").textContent = "";
+  drawFocusTimers();
+  renderFocusPill();
+  saveFocus();
+}
+
+function openFocusOverlay() {
+  if (!focus.active) return;
+  focus.open = true;
   const style = settings?.timer_style || "both";
   $("f-dial").style.display = style === "block" ? "none" : "";
   $("f-block").parentElement.style.display = style === "analog" ? "none" : "";
+  $("f-pause").textContent = focus.paused ? "▶ Resume" : "⏸ Pause";
   $("focus-overlay").hidden = false;
-
-  api(`/tasks/${task.id}/start`, { method: "POST" }).then(applyState).catch(() => {});
-  updateNextHint();
-
-  clearInterval(focus.timer);
-  focus.timer = setInterval(focusTick, 1000);
-  focusTick();
+  renderFocusTask();
+  drawFocusTimers();
+  renderFocusPill();
 }
 
-async function updateNextHint() {
-  try {
-    const res = await api("/next");
-    $("f-next-hint").textContent =
-      res.task && res.task.id !== focus.taskId ? `after this: ${res.task.title}` : "";
-  } catch { $("f-next-hint").textContent = ""; }
+/* Close the overlay, keep the session: the whole point is that stepping out
+ * to jot down a task doesn't cost you the timer. */
+function minimizeFocus() {
+  if (!focus.active) return;
+  focus.open = false;
+  $("focus-overlay").hidden = true;
+  renderFocusPill();
+  saveFocus();
+  toast("Still running in the background — tap the ▶ pill to come back.");
+}
+
+function endFocus() {
+  clearInterval(focus.timer);
+  focus.timer = null;
+  focus.active = false;
+  focus.open = false;
+  focus.taskId = null;
+  focus.rootId = null;
+  focus.skipped = [];
+  $("focus-overlay").hidden = true;
+  renderFocusPill();
+  saveFocus();
+}
+
+/* If the current task gets completed or deleted from the list while the
+ * overlay is closed, the session walks on by itself. */
+function syncFocusWithState() {
+  if (!focus.active || focus.advancing) return;
+  const task = focus.taskId ? findTask(focus.taskId) : null;
+  if (!task || !(task.status === "todo" || task.status === "in_progress")) {
+    advanceFocus();
+    return;
+  }
+  if (task.title !== focus.taskTitle) {
+    focus.taskTitle = task.title;
+    renderFocusTask();
+  }
+  renderFocusPill();
+}
+
+/* ---- rendering ---- */
+
+function renderFocusTask() {
+  const task = focus.taskId ? findTask(focus.taskId) : null;
+  $("f-title").textContent = focus.taskTitle || "";
+  $("f-description").textContent = task?.description || "";
+  $("f-path").textContent = focus.path.length ? focus.path.join(" › ") : "";
+  const scope = focus.rootTitle && focus.path.length ? ` in “${focus.rootTitle}”` : "";
+  $("f-progress").textContent = focus.stepsLeft > 1
+    ? `${focus.stepsLeft} steps left${scope}`
+    : focus.stepsLeft === 1 ? `last step${scope}` : "";
+  $("f-next-hint").textContent = focus.nextTitle ? `after this: ${focus.nextTitle}` : "";
+}
+
+function renderFocusPill() {
+  const pill = $("focus-pill");
+  if (!pill) return;
+  if (!focus.active || focus.open) { pill.hidden = true; return; }
+  const rem = focusRemainingSec();
+  $("focus-pill-time").textContent = focus.paused
+    ? "paused"
+    : rem < 0 ? "+" + fmtMinutes(Math.ceil(-rem / 60)) + " over"
+              : fmtMinutes(Math.ceil(rem / 60)) + " left";
+  $("focus-pill-title").textContent = focus.taskTitle || "";
+  pill.classList.toggle("over", rem < 0 && !focus.paused);
+  pill.hidden = false;
 }
 
 function focusTick() {
-  if (focus.paused) return;
-  focus.remainingSec = Math.max(-3600, focus.remainingSec - 1);
-  drawFocusTimers();
-  fireFocusCues();
+  if (!focus.active) return;
+  if (!focus.paused) fireFocusCues();
+  if (focus.open) drawFocusTimers();
+  else renderFocusPill();
 }
 
 function drawFocusTimers() {
-  const total = focus.totalSec;
-  const remaining = Math.max(0, focus.remainingSec);
-  const elapsed = total - Math.max(0, focus.remainingSec);
-  const frac = remaining / total;
+  const total = focus.totalSec || 1;
+  const remainingSec = focusRemainingSec();
+  const remaining = Math.max(0, remainingSec);
+  const elapsed = Math.min(total, focusElapsedSec());
+  const frac = Math.max(0, Math.min(1, remaining / total));
 
   // Depleting color block
   const fill = $("f-block-fill");
@@ -565,16 +797,17 @@ function drawFocusTimers() {
   fill.style.background = frac > 0.4 ? "var(--good)" : frac > 0.15 ? "var(--warn)" : "var(--bad)";
 
   $("f-elapsed").textContent = fmtMinutes(Math.floor(elapsed / 60));
-  $("f-remaining").textContent = focus.remainingSec < 0
-    ? "-" + fmtMinutes(Math.ceil(-focus.remainingSec / 60))
+  $("f-remaining").textContent = remainingSec < 0
+    ? "-" + fmtMinutes(Math.ceil(-remainingSec / 60))
     : fmtMinutes(Math.ceil(remaining / 60));
 
-  drawDial(frac, remaining);
+  drawDial(frac, remaining, remainingSec < 0);
+  renderFocusPill();
 }
 
 /* Analog dial: outer Time-Timer-style depleting wedge + a real analog clock
  * with moving hands in the center, so time reads as position and distance. */
-function drawDial(frac, remainingSec) {
+function drawDial(frac, remainingSec, overTime) {
   const canvas = $("f-dial");
   const ctx = canvas.getContext("2d");
   const W = canvas.width, H = canvas.height;
@@ -651,14 +884,14 @@ function drawDial(frac, remainingSec) {
   ctx.font = "600 15px system-ui";
   ctx.textAlign = "center";
   const mins = Math.ceil(Math.max(0, remainingSec) / 60);
-  ctx.fillText(focus.remainingSec < 0 ? "over time" : `${mins} min left`, cx, cy + R * 0.72);
+  ctx.fillText(overTime ? "over time" : `${mins} min left`, cx, cy + R * 0.72);
 }
 
 /* Staged cues inside a focus session: wrap-up near the end, then time-up. */
 function fireFocusCues() {
   const alarms = settings?.alarms || {};
   if (alarms.enabled === false) return;
-  const remainingMin = focus.remainingSec / 60;
+  const remainingMin = focusRemainingSec() / 60;
   const cues = [
     { key: "wrap", at: Math.min(alarms.stop_lead ?? 30, focus.totalSec / 60 * 0.2),
       label: "🌗 Start wrapping up", sound: SOUNDS.wrap },
@@ -667,35 +900,33 @@ function fireFocusCues() {
     { key: "go", at: 0, label: "⏰ Time — transition now", sound: SOUNDS.go },
   ];
   for (const cue of cues) {
-    if (remainingMin <= cue.at && !focus.cuesFired.has(cue.key)) {
-      focus.cuesFired.add(cue.key);
+    if (remainingMin <= cue.at && !focus.cuesFired.includes(cue.key)) {
+      focus.cuesFired.push(cue.key);
+      saveFocus();
       cue.sound();
       $("f-stage").textContent = cue.label;
-      notify(cue.label + " — " + $("f-title").textContent);
+      notify(cue.label + " — " + focus.taskTitle);
     }
   }
 }
 
-function closeFocus() {
-  clearInterval(focus.timer);
-  focus.timer = null;
-  focus.taskId = null;
-  $("focus-overlay").hidden = true;
-}
-
 async function finishFocus() {
   const id = focus.taskId;
-  const actual = Math.max(1, Math.round((Date.now() - focus.startedAt) / 60000) - Math.round(focus.pausedAccum / 60000));
-  closeFocus();
-  await completeTask(id, actual);
-  // Roll straight into the next task if there is one — keep the momentum.
-  try {
-    const res = await api("/next");
-    if (res.task) {
-      $("f-next-hint").textContent = "";
-      startFocus(res.task.id);
-    }
-  } catch {}
+  if (!id) return;
+  const actual = Math.max(1, Math.round(focusElapsedSec() / 60));
+  focus.advancing = true;          // completing re-renders state; don't double-walk
+  try { await completeTask(id, actual); } finally { focus.advancing = false; }
+  // Roll straight into the next step of the walk — keep the momentum.
+  await advanceFocus();
+}
+
+async function skipFocus() {
+  const skipped = focus.taskId;
+  if (skipped) {
+    focus.skipped.push(skipped);
+    await patchTask(skipped, { status: "todo" });
+  }
+  if (!(await advanceFocus()) && skipped) toast("That was the only task left.");
 }
 
 /* ---------------- wiring ---------------- */
@@ -770,30 +1001,46 @@ function wire() {
     openDetail(id);
   });
 
-  // focus overlay
-  $("f-close").addEventListener("click", closeFocus);
-  $("f-done").addEventListener("click", finishFocus);
-  $("f-skip").addEventListener("click", async () => {
-    const skipped = focus.taskId;
-    closeFocus();
-    if (skipped) await patchTask(skipped, { status: "todo" });
-    const res = await api("/next").catch(() => null);
-    if (res?.task && res.task.id !== skipped) startFocus(res.task.id);
-    else toast("That was the only task left.");
+  // focus overlay — ✕ only minimizes; the session keeps running
+  $("f-min").addEventListener("click", minimizeFocus);
+  $("f-close").addEventListener("click", minimizeFocus);
+  $("f-end").addEventListener("click", () => {
+    endFocus();
+    toast("Focus session ended.");
   });
+  $("f-done").addEventListener("click", finishFocus);
+  $("f-skip").addEventListener("click", skipFocus);
   $("f-pause").addEventListener("click", () => {
     focus.paused = !focus.paused;
     $("f-pause").textContent = focus.paused ? "▶ Resume" : "⏸ Pause";
     if (focus.paused) focus.pauseStart = Date.now();
-    else focus.pausedAccum += Date.now() - focus.pauseStart;
+    else { focus.pausedAccum += Date.now() - focus.pauseStart; focus.pauseStart = 0; }
+    drawFocusTimers();
+    saveFocus();
+  });
+  $("f-reset").addEventListener("click", () => {
+    resetFocusTimer();
+    toast("Timer reset to the full estimate.");
   });
   $("f-extend").addEventListener("click", () => {
-    focus.remainingSec += 300;
     focus.totalSec += 300;
-    focus.cuesFired.delete("go");
-    focus.cuesFired.delete("ready");
+    focus.cuesFired = focus.cuesFired.filter((k) => k !== "go" && k !== "ready");
     $("f-stage").textContent = "";
     drawFocusTimers();
+    saveFocus();
+  });
+
+  // minimized session pill
+  $("focus-pill").addEventListener("click", openFocusOverlay);
+  $("focus-pill-end").addEventListener("click", (e) => {
+    e.stopPropagation();
+    endFocus();
+    toast("Focus session ended.");
+  });
+
+  // Escape out of the overlay leaves the timer running, like ✕ does.
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && focus.open) { e.preventDefault(); minimizeFocus(); }
   });
 
   document.querySelectorAll("[data-close]").forEach((btn) =>
@@ -808,6 +1055,7 @@ function wire() {
 
 async function boot() {
   wire();
+  restoreFocus();  // a session survives reloads — pick it back up
   try {
     settings = await api("/settings");
     $("add-granularity").value = settings.granularity;

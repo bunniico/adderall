@@ -57,6 +57,12 @@ set `ANTHROPIC_WORKSPACE_ID`. You can find the ID in the Claude Console URL:
   buffer (default 30%), because the planning fallacy means raw estimates are
   systematically wrong. Optionally the buffer adapts to your own recorded
   actual-vs-estimated history (it only ever raises, never lowers).
+- **Rolled-up totals** — a task that contains subtasks is worth what it
+  holds: its badge shows the summed buffered estimate of the whole subtree
+  (a "~20m" parent with 46m of steps under it reads ~46m) and the furthest
+  deadline anywhere inside it. Under it sits a **progress bar in time** —
+  how many minutes of the subtree are done and how many are still ahead,
+  not how many checkboxes are ticked.
 - **Compiler** — 🧠 Braindump: dump everything in your head into one box;
   a single deep-model call with extended thinking turns it into discrete
   tasks.
@@ -64,7 +70,14 @@ set `ANTHROPIC_WORKSPACE_ID`. You can find the ID in the Claude Console URL:
   Time-Timer-style depleting dial (with a real analog clock in the middle),
   a shrinking color block, elapsed **and** remaining time, and staged
   transition cues (wrap up → find a stopping point → time) with distinct
-  sounds. When you finish, it rolls straight into the next task.
+  sounds. It **walks the task tree depth-first**: the subtasks of a task
+  come before the task itself, so a session drills down to the smallest
+  first step and surfaces back up, showing you where you are in the tree.
+  Closing the overlay only **minimizes** the session — the timer keeps
+  running in the background (duck out, add the task you just remembered,
+  tap the ▶ pill in the header to come back to the same countdown), and it
+  survives reloads. ↺ resets the timer when you'd rather start the block
+  over; ⏹ ends the session for good.
 - **Prioritization** — every task carries impact/effort scores (0–10) placed
   on an action-priority matrix: ⚡ quick wins, 🏔 major projects, fill-ins,
   and 😮‍💨 **thankless tasks** — which trigger a gentle "this is high effort,
@@ -87,9 +100,9 @@ set `ANTHROPIC_WORKSPACE_ID`. You can find the ID in the Claude Console URL:
 3. **Time is visual and honest.** Buffered by default, analog + depleting
    color, elapsed and remaining both shown, staged alarms instead of one.
 4. **Deterministic where possible, AI only where needed.** All scheduling,
-   buffering, urgency, and matrix math is local code (`app/logic.py`,
-   fully unit-tested). The AI only does language work and returns minimal
-   structured JSON.
+   buffering, urgency, rollups, focus traversal, and matrix math is local
+   code (`app/logic.py`, fully unit-tested). The AI only does language work
+   and returns minimal structured JSON.
 5. **Low friction.** No accounts, one command, zero configuration required.
 
 ## AI model routing
@@ -113,8 +126,8 @@ pytest
 ```
 
 `tests/test_logic.py` covers the deterministic core (buffering, quadrants,
-urgency, backward scheduling, next-task ordering); `tests/test_api.py` covers
-the API with the AI stubbed out.
+urgency, backward scheduling, subtree rollups, focus traversal, next-task
+ordering); `tests/test_api.py` covers the API with the AI stubbed out.
 
 ## Layout
 

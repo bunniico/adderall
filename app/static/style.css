@@ -91,6 +91,22 @@ textarea { resize: vertical; }
   padding: 3px 9px; font-size: 13px; border-radius: 7px; flex: none;
 }
 .subtasks { margin: 8px 0 0 26px; display: flex; flex-direction: column; gap: 6px; }
+
+/* ---- subtree time progress (tasks that contain subtasks) ---- */
+.progress-wrap { margin: 8px 0 0 30px; }
+.progress {
+  height: 7px; background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 20px; overflow: hidden;
+}
+.progress-fill {
+  height: 100%; width: 0; background: var(--accent);
+  border-radius: 20px; transition: width .3s ease;
+}
+.progress-fill.complete { background: var(--good); }
+.progress-legend {
+  display: flex; justify-content: space-between; gap: 8px;
+  font-size: 11px; color: var(--muted); margin-top: 3px;
+}
 .empty-hint { color: var(--muted); text-align: center; margin-top: 40px; }
 .done-section { margin-top: 24px; color: var(--muted); }
 .done-section summary { cursor: pointer; }
@@ -125,7 +141,34 @@ output { color: var(--text); font-weight: 600; }
   padding: 20px; text-align: center; gap: 10px;
 }
 .focus-overlay[hidden] { display: none; }
-.focus-close { position: absolute; top: 14px; right: 16px; }
+.focus-corner {
+  position: absolute; top: 14px; right: 16px; display: flex; gap: 8px;
+  align-items: center; flex-wrap: wrap; justify-content: flex-end;
+}
+.focus-path {
+  color: var(--muted); font-size: 13px; margin: 0; max-width: 700px;
+  overflow-wrap: anywhere;
+}
+.focus-path:empty { display: none; }
+
+/* ---- minimized focus session pill ---- */
+.focus-pill[hidden] { display: none; }
+.focus-pill {
+  display: flex; align-items: center; gap: 7px; max-width: 320px;
+  padding: 5px 10px; border-radius: 20px;
+  border: 1px solid var(--accent); background: transparent; color: var(--accent);
+  font-size: 13px; animation: pill-pulse 2.4s ease-in-out infinite;
+}
+.focus-pill.over { border-color: var(--bad); color: var(--bad); }
+.focus-pill-dot { font-size: 10px; }
+.focus-pill-time { font-weight: 600; white-space: nowrap; }
+.focus-pill-title {
+  color: var(--muted); overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; max-width: 170px;
+}
+.focus-pill-end { color: var(--muted); padding: 0 2px; }
+.focus-pill-end:hover { color: var(--text); }
+@keyframes pill-pulse { 50% { opacity: .72; } }
 .focus-label { letter-spacing: 3px; font-size: 12px; color: var(--muted); margin: 0; }
 .focus-overlay h2 { font-size: clamp(22px, 4vw, 34px); margin: 0; max-width: 700px; }
 .focus-timers {
@@ -174,4 +217,6 @@ output { color: var(--text); font-weight: 600; }
 @media (max-width: 560px) {
   .grid2, .grid3 { grid-template-columns: 1fr; }
   .granularity { display: none; }
+  .focus-pill-title { display: none; }
+  .focus-pill { max-width: 130px; }
 }

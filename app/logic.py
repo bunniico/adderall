@@ -146,12 +146,23 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
 
     walk(None, None)
 
+    # Roll subtree totals up: a parent's real cost is the sum of everything
+    # underneath it, and its real deadline is the furthest one inside it.
+    for t in tasks:
+        if t["parent_id"] not in by_id:
+            _rollup(t, children, derived)
+
     for t in tasks:
         d = derived[t["id"]]
         open_children = [
             c for c in children.get(t["id"], []) if c["status"] in ACTIVE_STATUSES
         ]
         d["actionable"] = t["status"] in ACTIVE_STATUSES and not open_children
+        # Containers are judged on the work they still hold, not their own
+        # (usually meaningless) estimate and deadline.
+        if d["has_subtasks"] and t["status"] in ACTIVE_STATUSES:
+            d["urgency"] = urgency(parse_dt(d["rollup_deadline"]),
+                                   d["rollup_remaining"], now)
         d["sort_key"] = [
             -d["urgency"],
             QUADRANT_RANK.get(d["quadrant"], 2),
@@ -169,3 +180,132 @@ def next_task(tasks: list[dict], derived: dict[str, dict]) -> dict | None:
         return None
     candidates.sort(key=lambda t: derived[t["id"]]["sort_key"])
     return candidates[0]
+
+
+def _rollup(task: dict, children: dict, derived: dict) -> None:
+    """Fill rollup_* on a task and, depth-first, everything under it.
+
+    A task that contains subtasks is a container: the number that matters is
+    the sum of what it holds, not the estimate someone put on the container
+    itself. `rollup_estimate` is the whole subtree, `rollup_done` the part
+    already finished, `rollup_remaining` what is actually left to do.
+    Discarded branches drop out of the plan entirely.
+    """
+    # Recurse into every child so all of them get rollup fields, then count
+    # only the ones still in the plan.
+    for kid in children.get(task["id"], []):
+        _rollup(kid, children, derived)
+    kids = [c for c in children.get(task["id"], []) if c["status"] != "discarded"]
+    d = derived[task["id"]]
+    d["has_subtasks"] = bool(kids)
+
+    own = d["buffered_estimate"]
+    own_dl, own_src = d.get("deadline"), d.get("deadline_source", "none")
+
+    if not kids:
+        total = own
+        d["rollup_estimate"] = total
+        d["rollup_done"] = total if (total and task["status"] == "done") else 0
+        d["rollup_remaining"] = 0 if task["status"] not in ACTIVE_STATUSES else (total or 0)
+        d["rollup_deadline"] = own_dl
+        d["rollup_deadline_source"] = own_src
+        return
+
+    total = 0
+    known = False
+    done = 0
+    for kid in kids:
+        kd = derived[kid["id"]]
+        if kd["rollup_estimate"] is not None:
+            total += kd["rollup_estimate"]
+            known = True
+        done += kd["rollup_done"]
+    if not known:
+        # Nothing underneath has an estimate yet — fall back to the container's.
+        total = own
+        done = total if (total and task["status"] == "done") else 0
+    elif task["status"] == "done":
+        done = total
+
+    d["rollup_estimate"] = total
+    d["rollup_done"] = min(done, total) if total is not None else 0
+    d["rollup_remaining"] = max(0, (total or 0) - d["rollup_done"])
+
+    # Furthest deadline anywhere in the subtree, the container's own included.
+    best_dl, best_src = own_dl, own_src
+    for kid in kids:
+        kd = derived[kid["id"]]
+        cand, cand_src = kd.get("rollup_deadline"), kd.get("rollup_deadline_source", "none")
+        if cand and (best_dl is None or parse_dt(cand) > parse_dt(best_dl)):
+            best_dl, best_src = cand, cand_src
+    d["rollup_deadline"] = best_dl
+    d["rollup_deadline_source"] = best_src
+
+
+def _children_map(tasks: list[dict]) -> dict[str | None, list[dict]]:
+    children: dict[str | None, list[dict]] = {}
+    for t in tasks:
+        children.setdefault(t["parent_id"], []).append(t)
+    for sibs in children.values():
+        sibs.sort(key=lambda t: (t["order_index"], t["created_at"]))
+    return children
+
+
+def focus_queue(tasks: list[dict], root_id: str) -> list[dict]:
+    """The order Taskmaster walks a task tree: depth-first, children before
+    their parent.
+
+    You cannot finish a parent before the things it is made of, so the queue
+    descends to the deepest first step, works along that level, then surfaces
+    to the parent as its wrap-up step, and so on up to the root.
+    """
+    children = _children_map(tasks)
+    by_id = {t["id"]: t for t in tasks}
+    root = by_id.get(root_id)
+    if not root:
+        return []
+
+    out: list[dict] = []
+
+    def visit(task: dict) -> None:
+        if task["status"] not in ACTIVE_STATUSES:
+            return  # done/discarded branches are behind us
+        for kid in children.get(task["id"], []):
+            visit(kid)
+        out.append(task)
+
+    visit(root)
+    return out
+
+
+def focus_root_id(tasks: list[dict], derived: dict[str, dict]) -> str | None:
+    """Which tree to work on next: the top-level task that owns the most
+    urgent actionable step. Urgency picks the project; tree order (see
+    `focus_queue`) picks the step inside it."""
+    nxt = next_task(tasks, derived)
+    if not nxt:
+        return None
+    by_id = {t["id"]: t for t in tasks}
+    cursor = nxt
+    seen = set()
+    while cursor.get("parent_id") and cursor["parent_id"] in by_id:
+        if cursor["id"] in seen:
+            break
+        seen.add(cursor["id"])
+        cursor = by_id[cursor["parent_id"]]
+    return cursor["id"]
+
+
+def ancestor_titles(tasks: list[dict], task: dict) -> list[str]:
+    """Titles from the top-level ancestor down to (but excluding) the task."""
+    by_id = {t["id"]: t for t in tasks}
+    path: list[str] = []
+    cursor = task
+    seen = set()
+    while cursor.get("parent_id") and cursor["parent_id"] in by_id:
+        if cursor["id"] in seen:
+            break
+        seen.add(cursor["id"])
+        cursor = by_id[cursor["parent_id"]]
+        path.insert(0, cursor["title"])
+    return path
