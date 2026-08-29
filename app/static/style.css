@@ -92,6 +92,30 @@ textarea { resize: vertical; }
 }
 .subtasks { margin: 8px 0 0 26px; display: flex; flex-direction: column; gap: 6px; }
 
+/* ---- manual ordering & nesting ---- */
+.drag-handle {
+  flex: none; padding: 2px 4px; line-height: 1; font-size: 15px;
+  background: transparent; border: none; color: var(--muted);
+  cursor: grab; border-radius: 6px; touch-action: none;
+}
+.drag-handle:hover, .drag-handle:focus-visible { color: var(--accent); background: var(--panel-2); }
+.drag-handle:active { cursor: grabbing; }
+.task.dragging { opacity: .45; }
+/* Where the drop lands: a line above/below for "next to this one", a full
+ * outline for "inside this one". Green, not accent — the accent border
+ * already means "next up", and the two must not be mistaken for each other. */
+.task.drop-before { box-shadow: inset 0 3px 0 var(--good); }
+.task.drop-after { box-shadow: inset 0 -3px 0 var(--good); }
+.task.drop-into { box-shadow: 0 0 0 2px var(--good); background: var(--panel-2); }
+.task-list.drop-root { outline: 2px dashed var(--good); outline-offset: 4px; border-radius: var(--radius); }
+/* Bare list below the last task: the strip you drag a subtask onto to pull it
+ * back out to the top level. */
+.task-list { min-height: 60px; padding-bottom: 20px; }
+
+.subtask-composer { display: flex; gap: 6px; align-items: center; }
+.subtask-composer input { flex: 1; padding: 6px 10px; }
+.list-hint { color: var(--muted); font-size: 12px; text-align: center; margin: 14px 0 0; }
+
 /* ---- subtree time progress (tasks that contain subtasks) ---- */
 .progress-wrap { margin: 8px 0 0 30px; }
 .progress {

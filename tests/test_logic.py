@@ -174,6 +174,57 @@ def test_next_task_none_when_empty():
     assert logic.next_task([], {}) is None
 
 
+# ---- manual ordering ----
+
+MANUAL = {**SETTINGS, "manual_order": True}
+
+
+def test_order_path_locates_each_task_in_the_tree():
+    p = make_task("p", order_index=0)
+    c1 = make_task("c1", parent_id="p", order_index=0)
+    c2 = make_task("c2", parent_id="p", order_index=1)
+    other = make_task("other", order_index=1)
+    derived = logic.compute([p, c1, c2, other], SETTINGS, now=NOW)
+    assert derived["p"]["order_path"] == [0]
+    assert derived["c1"]["order_path"] == [0, 0]
+    assert derived["c2"]["order_path"] == [0, 1]
+    assert derived["other"]["order_path"] == [1]
+
+
+def test_manual_order_sorts_by_position_not_urgency():
+    urgent = make_task("urgent", order_index=1, estimated_time=60,
+                       deadline=(NOW + timedelta(minutes=70)).isoformat())
+    calm = make_task("calm", order_index=0, impact=8, effort=2, estimated_time=10)
+    tasks = [urgent, calm]
+    auto = logic.compute(tasks, SETTINGS, now=NOW)
+    assert sorted(tasks, key=lambda t: auto[t["id"]]["sort_key"])[0]["id"] == "urgent"
+    manual = logic.compute(tasks, MANUAL, now=NOW)
+    assert sorted(tasks, key=lambda t: manual[t["id"]]["sort_key"])[0]["id"] == "calm"
+    # ...and "what next" reads the list you arranged, top to bottom
+    assert logic.next_task(tasks, manual)["id"] == "calm"
+
+
+def test_manual_order_reaches_into_subtasks():
+    first = make_task("first", order_index=0)
+    step = make_task("step", parent_id="first", order_index=0)
+    second = make_task("second", order_index=1, estimated_time=10,
+                       deadline=(NOW + timedelta(minutes=11)).isoformat())
+    tasks = [first, step, second]
+    derived = logic.compute(tasks, MANUAL, now=NOW)
+    # "first" holds an open subtask, so the step under it is what's actionable
+    assert logic.next_task(tasks, derived)["id"] == "step"
+    assert logic.focus_root_id(tasks, derived) == "first"
+
+
+def test_manual_order_leaves_the_rest_of_the_derivations_alone():
+    t = make_task("a", estimated_time=60, impact=8, effort=2)
+    auto = logic.compute([t], SETTINGS, now=NOW)["a"]
+    manual = logic.compute([t], MANUAL, now=NOW)["a"]
+    for field in ("buffered_estimate", "quadrant", "urgency", "deadline",
+                  "deadline_source", "rollup_estimate", "actionable"):
+        assert auto[field] == manual[field]
+
+
 # ---- subtree rollups (a container is worth what it holds) ----
 
 def test_rollup_estimate_sums_subtasks():

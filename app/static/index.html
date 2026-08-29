@@ -40,6 +40,10 @@
   <p id="empty-hint" class="empty-hint" hidden>
     Nothing here yet. Add a task above, or hit <b>🧠 Braindump</b> and empty your head.
   </p>
+  <p id="list-hint" class="list-hint" hidden>
+    <b>+</b> adds a subtask by hand · drag <b>⠿</b> to reorder, or onto another
+    task to nest it (arrow keys work too)
+  </p>
   <details id="done-section" class="done-section" hidden>
     <summary>Done &amp; discarded</summary>
     <div id="done-list"></div>
@@ -165,6 +169,10 @@
 
     <label class="row"><input id="s-gamification" type="checkbox">
       Completion celebration</label>
+
+    <label class="row"><input id="s-manual-order" type="checkbox">
+      Manual order <span class="muted">— keep the list exactly as you drag it, instead of
+      auto-sorting by urgency. Turns itself on the first time you move a task.</span></label>
 
     <label>Anthropic API key <span id="s-key-status" class="tag"></span>
       <input id="s-api-key" type="password" placeholder="sk-ant-… (leave blank to keep current)">

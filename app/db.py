@@ -31,6 +31,7 @@ DEFAULT_SETTINGS = {
     "timer_style": "both",     # analog | block | both
     "granularity": 3,          # default breakdown spiciness 1-5
     "gamification": True,
+    "manual_order": False,     # you arrange the list yourself (set by dragging)
     "api_key": "",             # optional; falls back to ANTHROPIC_API_KEY env
     "workspace_id": "",        # required for identity-linked keys; falls back
                                # to ANTHROPIC_WORKSPACE_ID env
@@ -166,6 +167,54 @@ def delete_task(task_id: str) -> bool:
     with connect() as conn:
         cur = conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
         return cur.rowcount > 0
+
+
+def sibling_ids(parent_id: str | None, exclude: str | None = None) -> list[str]:
+    """Ids under `parent_id`, in their current manual order."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT id FROM tasks WHERE parent_id IS ? ORDER BY order_index, created_at",
+            (parent_id,),
+        ).fetchall()
+    return [r["id"] for r in rows if r["id"] != exclude]
+
+
+def reorder_siblings(parent_id: str | None, ordered_ids: list[str]) -> None:
+    """Write `ordered_ids` back as the order_index sequence under `parent_id`.
+
+    Ids not in the list keep their relative order and follow behind, so a
+    partial list (say, only the tasks currently on screen) is safe to pass.
+    """
+    tail = [tid for tid in sibling_ids(parent_id) if tid not in ordered_ids]
+    with connect() as conn:
+        for idx, tid in enumerate([*ordered_ids, *tail]):
+            conn.execute("UPDATE tasks SET order_index = ? WHERE id = ?", (idx, tid))
+
+
+def move_task(task_id: str, parent_id: str | None, position: int | None = None) -> dict | None:
+    """Reparent and/or reposition one task, renumbering its new siblings.
+
+    `position` is the index among the target siblings *after* the task has
+    been lifted out of wherever it was; None appends. Order indices are
+    rewritten as a dense 0..n-1 sequence so later inserts stay unambiguous.
+    """
+    siblings = sibling_ids(parent_id, exclude=task_id)
+    if position is None:
+        position = len(siblings)
+    position = max(0, min(position, len(siblings)))
+    siblings.insert(position, task_id)
+    ts = now_iso()
+    with connect() as conn:
+        for idx, tid in enumerate(siblings):
+            if tid == task_id:
+                conn.execute(
+                    "UPDATE tasks SET parent_id = ?, order_index = ?, updated_at = ? "
+                    "WHERE id = ?",
+                    (parent_id, idx, ts, tid),
+                )
+            else:
+                conn.execute("UPDATE tasks SET order_index = ? WHERE id = ?", (idx, tid))
+    return get_task(task_id)
 
 
 def descendant_ids(task_id: str) -> list[str]:
