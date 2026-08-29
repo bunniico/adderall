@@ -1,0 +1,193 @@
+"""Claude API broker.
+
+The AI handles only fuzzy language judgments and always returns minimal
+structured JSON; the app does all math and scheduling locally. Routing per
+the design doc:
+
+  - annotate (time estimate + impact/effort scores) → fast tier (Haiku),
+    batched: many tasks in one call.
+  - breakdown (Magic ToDo)                          → balanced tier (Sonnet),
+    interactive, low effort for speed.
+  - compile (braindump → task list)                 → deep tier (Opus),
+    one batched call with adaptive thinking.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+
+import anthropic
+
+SYSTEM = (
+    "You are the planning engine inside a task app for people with executive "
+    "dysfunction (ADHD, autism, AuDHD). Be concrete and literal. Subtasks must "
+    "be single physical or digital actions that can be started immediately, "
+    "phrased as imperatives ('Put detergent in the machine'), never vague "
+    "('Sort out laundry situation'). Time estimates are realistic working "
+    "minutes for a distractible adult, not best-case minutes. Impact and "
+    "effort are integers 0-10: impact = how much completing this improves the "
+    "person's life or unblocks other work; effort = energy, friction, and "
+    "executive load, not just duration. Return only the requested JSON."
+)
+
+GRANULARITY_HINTS = {
+    1: "2-3 broad subtasks",
+    2: "3-5 subtasks",
+    3: "4-7 concrete subtasks",
+    4: "6-10 small subtasks, each under 30 minutes",
+    5: "8-14 tiny subtasks, each a single trivially startable action of a few minutes",
+}
+
+
+class AIUnavailable(Exception):
+    """Raised when no API key is configured or the API call fails."""
+
+
+def _client(settings: dict) -> anthropic.Anthropic:
+    key = (settings.get("api_key") or "").strip() or os.environ.get("ANTHROPIC_API_KEY")
+    if key:
+        return anthropic.Anthropic(api_key=key)
+    # Fall back to the SDK's own resolution (auth token, ant profile, ...).
+    return anthropic.Anthropic()
+
+
+def _call(settings: dict, tier: str, prompt: str, schema: dict,
+          max_tokens: int = 4096, effort: str | None = None,
+          thinking: bool = False) -> dict:
+    model = settings.get("models", {}).get(tier) or "claude-haiku-4-5"
+    kwargs: dict = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "system": SYSTEM,
+        "cache_control": {"type": "ephemeral"},
+        "messages": [{"role": "user", "content": prompt}],
+        "output_config": {"format": {"type": "json_schema", "schema": schema}},
+    }
+    if effort:
+        kwargs["output_config"]["effort"] = effort
+    if thinking:
+        kwargs["thinking"] = {"type": "adaptive"}
+    try:
+        response = _client(settings).messages.create(**kwargs)
+    except anthropic.AuthenticationError as exc:
+        raise AIUnavailable(
+            "Anthropic API key missing or invalid. Set it in Settings or via "
+            "the ANTHROPIC_API_KEY environment variable."
+        ) from exc
+    except anthropic.APIStatusError as exc:
+        raise AIUnavailable(f"Claude API error ({exc.status_code}): {exc.message}") from exc
+    except anthropic.APIConnectionError as exc:
+        raise AIUnavailable("Could not reach the Claude API (network error).") from exc
+    if response.stop_reason == "refusal":
+        raise AIUnavailable("The model declined this request.")
+    text = next((b.text for b in response.content if b.type == "text"), None)
+    if text is None:
+        raise AIUnavailable("The model returned no usable output.")
+    return json.loads(text)
+
+
+def breakdown(settings: dict, title: str, description: str, granularity: int,
+              parent_titles: list[str] | None = None) -> list[str]:
+    """Magic ToDo: break one task into subtasks. Balanced tier, interactive."""
+    granularity = min(5, max(1, int(granularity)))
+    context = ""
+    if parent_titles:
+        context = f"This task is a subtask of: {' > '.join(parent_titles)}.\n"
+    if description:
+        context += f"Extra context from the user: {description}\n"
+    prompt = (
+        f"{context}Break this task into {GRANULARITY_HINTS[granularity]}, in the "
+        f"order they should be done:\n\nTASK: {title}"
+    )
+    schema = {
+        "type": "object",
+        "properties": {
+            "steps": {"type": "array", "items": {"type": "string"}, "maxItems": 16}
+        },
+        "required": ["steps"],
+        "additionalProperties": False,
+    }
+    data = _call(settings, "balanced", prompt, schema, effort="low")
+    return [s.strip() for s in data.get("steps", []) if s.strip()]
+
+
+def annotate(settings: dict, tasks: list[dict], want_scores: bool = True) -> dict[str, dict]:
+    """Estimator + matrix seeding: one fast-tier call for a whole batch of
+    tasks, returning {id: {minutes, impact?, effort?}}. Raw minutes only —
+    the time-tax buffer is applied locally, never by the model."""
+    if not tasks:
+        return {}
+    lines = []
+    for t in tasks:
+        desc = f" — {t['description']}" if t.get("description") else ""
+        lines.append(f"- id={t['id']}: {t['title']}{desc}")
+    fields = "estimated working minutes" + (
+        ", impact 0-10, effort 0-10" if want_scores else ""
+    )
+    prompt = (
+        f"For each task below, give {fields}. Estimate honestly; do not pad — "
+        f"a buffer is added separately.\n\n" + "\n".join(lines)
+    )
+    item_props: dict = {
+        "id": {"type": "string"},
+        "minutes": {"type": "integer", "minimum": 1},
+    }
+    required = ["id", "minutes"]
+    if want_scores:
+        item_props["impact"] = {"type": "integer", "minimum": 0, "maximum": 10}
+        item_props["effort"] = {"type": "integer", "minimum": 0, "maximum": 10}
+        required += ["impact", "effort"]
+    schema = {
+        "type": "object",
+        "properties": {
+            "tasks": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": item_props,
+                    "required": required,
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["tasks"],
+        "additionalProperties": False,
+    }
+    data = _call(settings, "fast", prompt, schema)
+    valid_ids = {t["id"] for t in tasks}
+    return {row["id"]: row for row in data.get("tasks", []) if row.get("id") in valid_ids}
+
+
+def compile_braindump(settings: dict, text: str) -> list[dict]:
+    """Compiler: one deep-tier call with adaptive thinking turns a messy
+    braindump into discrete tasks [{title, description}]."""
+    prompt = (
+        "Turn this braindump into a list of discrete, actionable tasks. Merge "
+        "duplicates, split compound items, drop non-task chatter. Keep titles "
+        "short and imperative; put any useful detail from the braindump into "
+        "the description.\n\nBRAINDUMP:\n" + text
+    )
+    schema = {
+        "type": "object",
+        "properties": {
+            "tasks": {
+                "type": "array",
+                "maxItems": 40,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "description": {"type": "string"},
+                    },
+                    "required": ["title", "description"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["tasks"],
+        "additionalProperties": False,
+    }
+    data = _call(settings, "deep", prompt, schema, max_tokens=16000,
+                 effort="high", thinking=True)
+    return [t for t in data.get("tasks", []) if t.get("title", "").strip()]

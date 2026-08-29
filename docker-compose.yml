@@ -1,0 +1,10 @@
+services:
+  adderall:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data   # the SQLite file lives here; nothing is ever lost
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    restart: unless-stopped
