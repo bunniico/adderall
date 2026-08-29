@@ -7,4 +7,6 @@ services:
       - ./data:/app/data   # the SQLite file lives here; nothing is ever lost
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # Only needed for identity-linked keys; can also be set in ⚙ Settings.
+      - ANTHROPIC_WORKSPACE_ID=${ANTHROPIC_WORKSPACE_ID:-}
     restart: unless-stopped

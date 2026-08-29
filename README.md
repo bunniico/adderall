@@ -28,6 +28,12 @@ AI features (breakdown, estimates, braindump compiling) need an Anthropic API
 key: set `ANTHROPIC_API_KEY` in the environment, or paste one into
 ⚙ Settings in the app. Everything else works without a key.
 
+If your key is **identity-linked**, the API also requires the workspace each
+request acts in, and calls fail with `anthropic-workspace-id is required`
+until you provide it. Put the workspace ID in ⚙ Settings → Workspace ID, or
+set `ANTHROPIC_WORKSPACE_ID`. You can find the ID in the Claude Console URL:
+`platform.claude.com/workspaces/<id>`. Ordinary keys don't need this.
+
 ## What it does
 
 - **Magic ToDo** — type a task, hit ⚡, get concrete subtasks. A 🌶

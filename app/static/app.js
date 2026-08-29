@@ -372,6 +372,8 @@ function openSettings() {
   $("s-gamification").checked = settings.gamification;
   $("s-api-key").value = "";
   $("s-key-status").textContent = settings.has_api_key ? "configured ✓" : "not set";
+  // Not a secret, unlike the key — safe to show so it can be edited/cleared.
+  $("s-workspace-id").value = settings.workspace_id || "";
   $("modal-settings").showModal();
 }
 
@@ -391,6 +393,7 @@ async function saveSettings() {
     timer_style: $("s-timer-style").value,
     granularity: Number($("s-granularity").value),
     gamification: $("s-gamification").checked,
+    workspace_id: $("s-workspace-id").value.trim(),
   };
   const key = $("s-api-key").value.trim();
   if (key) body.api_key = key;
