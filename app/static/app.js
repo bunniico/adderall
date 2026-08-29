@@ -12,6 +12,9 @@ let settings = null;
 let detailTaskId = null;
 const thanklessQueue = [];
 let thanklessShowing = null;
+let subtaskDraftFor = null;   // task whose inline "add a subtask" box is open
+let subtaskDraftText = "";
+let handleFocusFor = null;    // drag handle to re-focus after a keyboard move
 
 /* ---------------- API ---------------- */
 
@@ -143,6 +146,11 @@ function taskNode(task, isSub) {
   const row = document.createElement("div");
   row.className = "task-row";
 
+  if (active) {
+    row.appendChild(dragHandle(task, el));
+    wireDropTarget(el, task);
+  }
+
   const check = document.createElement("input");
   check.type = "checkbox";
   check.checked = task.status === "done";
@@ -157,6 +165,14 @@ function taskNode(task, isSub) {
   row.appendChild(title);
 
   if (active) {
+    const addSub = document.createElement("button");
+    addSub.className = "task-btn ghost";
+    addSub.textContent = "+";
+    addSub.title = "Add a subtask yourself";
+    addSub.setAttribute("aria-label", "Add a subtask to " + task.title);
+    addSub.addEventListener("click", () => openSubtaskComposer(task.id));
+    row.appendChild(addSub);
+
     const bd = document.createElement("button");
     bd.className = "task-btn ghost";
     bd.textContent = "⚡";
@@ -202,10 +218,12 @@ function taskNode(task, isSub) {
 
   const subs = (task.subtasks || []).filter(
     (s) => s.status === "todo" || s.status === "in_progress");
-  if (subs.length) {
+  const composing = active && subtaskDraftFor === task.id;
+  if (subs.length || composing) {
     const wrap = document.createElement("div");
     wrap.className = "subtasks";
     for (const sub of subs) wrap.appendChild(taskNode(sub, true));
+    if (composing) wrap.appendChild(subtaskComposer(task.id));
     el.appendChild(wrap);
   }
   return el;
@@ -218,6 +236,7 @@ function render() {
     (t) => t.status === "todo" || t.status === "in_progress");
   for (const t of sortActive(active)) list.appendChild(taskNode(t, false));
   $("empty-hint").hidden = active.length > 0;
+  $("list-hint").hidden = active.length === 0;
 
   const finished = state.tasks.filter(
     (t) => t.status === "done" || t.status === "discarded");
@@ -225,6 +244,91 @@ function render() {
   const doneList = $("done-list");
   doneList.replaceChildren();
   for (const t of finished) doneList.appendChild(taskNode(t, false));
+
+  restoreListFocus();
+}
+
+/* The list is rebuilt wholesale on every state change, so anything the user
+ * was typing in or steering with the keyboard has to be handed its focus
+ * back afterwards. */
+function restoreListFocus() {
+  if (subtaskDraftFor) {
+    const input = document.querySelector(
+      `.task[data-id="${cssEscape(subtaskDraftFor)}"] .subtask-composer input`);
+    if (input) {
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+      return;
+    }
+    subtaskDraftFor = null;  // parent vanished (completed, deleted, discarded)
+  }
+  if (handleFocusFor) {
+    const handle = document.querySelector(
+      `.task[data-id="${cssEscape(handleFocusFor)}"] > .task-row > .drag-handle`);
+    handleFocusFor = null;
+    if (handle) handle.focus();
+  }
+}
+
+function cssEscape(value) {
+  return window.CSS && CSS.escape ? CSS.escape(value) : value;
+}
+
+/* ---------------- manual subtasks ---------------- */
+
+function openSubtaskComposer(parentId) {
+  subtaskDraftFor = parentId;
+  subtaskDraftText = "";
+  render();
+}
+
+function closeSubtaskComposer() {
+  subtaskDraftFor = null;
+  subtaskDraftText = "";
+  render();
+}
+
+/* Stays open after each add: subtasks come out of your head in bursts, and
+ * re-opening the box for every one of them is exactly the kind of friction
+ * this app exists to remove. */
+function subtaskComposer(parentId) {
+  const form = document.createElement("form");
+  form.className = "subtask-composer";
+  form.autocomplete = "off";
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.maxLength = 500;
+  input.placeholder = "New subtask… (Enter adds, Esc closes)";
+  input.value = subtaskDraftText;
+  input.addEventListener("input", () => { subtaskDraftText = input.value; });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { e.stopPropagation(); closeSubtaskComposer(); }
+  });
+
+  const add = document.createElement("button");
+  add.type = "submit";
+  add.className = "accent task-btn";
+  add.textContent = "Add";
+
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "ghost task-btn";
+  cancel.textContent = "✕";
+  cancel.title = "Done adding subtasks";
+  cancel.addEventListener("click", closeSubtaskComposer);
+
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const title = input.value.trim();
+    if (!title) { closeSubtaskComposer(); return; }
+    subtaskDraftText = "";
+    input.value = "";
+    addTask(title, parentId);
+  });
+
+  form.append(input, add, cancel);
+  return form;
 }
 
 /* ---------------- toasts & celebration ---------------- */
@@ -258,11 +362,11 @@ function celebrate() {
 
 /* ---------------- task actions ---------------- */
 
-async function addTask(title) {
+async function addTask(title, parentId = null) {
   try {
     applyState(await api("/tasks", {
       method: "POST",
-      body: JSON.stringify({ title }),
+      body: JSON.stringify({ title, parent_id: parentId }),
     }));
   } catch (e) { toast(e.message, true); }
 }
@@ -294,6 +398,222 @@ async function patchTask(id, fields) {
       method: "PATCH", body: JSON.stringify(fields),
     }));
   } catch (e) { toast(e.message, true); }
+}
+
+/* ---------------- manual ordering & nesting ----------------
+ * Drag a task by its ⠿ handle: dropping on the top or bottom edge of another
+ * task places it above or below as a sibling, dropping on the middle nests it
+ * inside, and dropping on empty list space pulls it back out to the top level.
+ * The same moves are on the keyboard once the handle is focused, because
+ * drag-and-drop is unusable for plenty of the people this app is for.
+ *
+ * The server is told "before/after/inside that task" rather than an index, so
+ * a drop always means what it looked like on screen — the visible order and
+ * the stored order aren't the same thing until manual ordering kicks in. */
+
+let dragId = null;      // task being dragged
+let pendingDrop = null; // {targetId, mode} under the pointer right now
+
+async function moveTask(id, body) {
+  const wasAuto = settings && !settings.manual_order;
+  try {
+    applyState(await api(`/tasks/${id}/move`, {
+      method: "POST", body: JSON.stringify(body),
+    }));
+  } catch (e) { toast(e.message, true); return; }
+  // The first move takes the list off auto-sort; say so once, then stop.
+  if (wasAuto) {
+    try { settings = await api("/settings"); } catch {}
+    if (settings?.manual_order)
+      toast("Manual order on — the list stays exactly as you arrange it. " +
+            "Turn it off in ⚙ Settings to go back to auto-sort.");
+  }
+}
+
+function dragHandle(task, el) {
+  const handle = document.createElement("button");
+  handle.type = "button";
+  handle.className = "drag-handle";
+  handle.textContent = "⠿";
+  handle.title = "Drag to reorder or nest — or use the arrow keys";
+  handle.setAttribute("aria-label", "Reorder " + task.title);
+  // The task itself carries the drag, but only once you grab the handle:
+  // otherwise selecting text or hitting a button turns into a drag.
+  handle.addEventListener("mousedown", () => { el.draggable = true; });
+  handle.addEventListener("mouseup", () => { el.draggable = false; });
+  handle.addEventListener("keydown", (e) => {
+    const dir = { ArrowUp: "up", ArrowDown: "down",
+                  ArrowLeft: "out", ArrowRight: "in" }[e.key];
+    if (!dir) return;
+    e.preventDefault();
+    nudgeTask(task, dir);
+  });
+
+  el.addEventListener("dragstart", (e) => {
+    e.stopPropagation();
+    dragId = task.id;
+    pendingDrop = null;
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", task.id);
+    el.classList.add("dragging");
+  });
+  el.addEventListener("dragend", () => {
+    el.draggable = false;
+    el.classList.remove("dragging");
+    dragId = null;
+    pendingDrop = null;
+    clearDropMarks();
+  });
+
+  wireTouchDrag(handle, task, el);
+  return handle;
+}
+
+/* Phones don't get HTML5 drag-and-drop at all, and this app is meant to be
+ * open on one. Same gesture, driven off the touch stream: hold the handle,
+ * slide over the task you want to be next to or inside, let go. */
+function wireTouchDrag(handle, task, el) {
+  let moving = false;
+
+  handle.addEventListener("touchstart", (e) => {
+    e.preventDefault();  // the finger is dragging a task, not scrolling
+    moving = true;
+    dragId = task.id;
+    pendingDrop = null;
+    el.classList.add("dragging");
+  }, { passive: false });
+
+  handle.addEventListener("touchmove", (e) => {
+    if (!moving) return;
+    e.preventDefault();
+    const touch = e.touches[0];
+    const under = document.elementFromPoint(touch.clientX, touch.clientY);
+    const targetEl = under && under.closest(".task");
+    clearDropMarks();
+    pendingDrop = null;
+    // Only active tasks carry a handle, and only they can be dropped onto.
+    if (targetEl && targetEl.dataset.id !== dragId &&
+        targetEl.querySelector(":scope > .task-row > .drag-handle") &&
+        !inSubtree(dragId, targetEl.dataset.id)) {
+      const mode = dropMode(targetEl, touch.clientY);
+      pendingDrop = { targetId: targetEl.dataset.id, mode };
+      targetEl.classList.add("drop-" + mode);
+    } else if (under === $("task-list")) {
+      $("task-list").classList.add("drop-root");
+    }
+  }, { passive: false });
+
+  const finish = () => {
+    if (!moving) return;
+    moving = false;
+    el.classList.remove("dragging");
+    const id = dragId, drop = pendingDrop;
+    const toRoot = $("task-list").classList.contains("drop-root");
+    dragId = null;
+    pendingDrop = null;
+    clearDropMarks();
+    if (!id) return;
+    if (drop) moveTask(id, { target_id: drop.targetId, mode: drop.mode });
+    else if (toRoot) moveTask(id, { parent_id: null, position: null });
+  };
+  handle.addEventListener("touchend", finish);
+  handle.addEventListener("touchcancel", finish);
+}
+
+function wireDropTarget(el, task) {
+  el.addEventListener("dragover", (e) => {
+    if (!dragId || dragId === task.id || inSubtree(dragId, task.id)) return;
+    e.preventDefault();
+    e.stopPropagation();  // the innermost task under the pointer wins
+    e.dataTransfer.dropEffect = "move";
+    const mode = dropMode(el, e.clientY);
+    pendingDrop = { targetId: task.id, mode };
+    clearDropMarks();
+    el.classList.add("drop-" + mode);
+  });
+  el.addEventListener("drop", (e) => {
+    if (!pendingDrop) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const id = dragId, drop = pendingDrop;
+    clearDropMarks();
+    if (id) moveTask(id, { target_id: drop.targetId, mode: drop.mode });
+  });
+}
+
+/* Edges of the title row mean "next to this one"; anywhere else on the card —
+ * middle, badges, the gap its subtasks live in — means "inside this one". */
+function dropMode(el, y) {
+  const row = el.querySelector(":scope > .task-row");
+  if (!row) return "into";
+  const r = row.getBoundingClientRect();
+  const edge = Math.max(6, r.height * 0.35);
+  if (y < r.top + edge) return "before";
+  if (y <= r.bottom && y > r.bottom - edge) return "after";
+  return "into";
+}
+
+function clearDropMarks() {
+  document.querySelectorAll(".drop-before, .drop-after, .drop-into, .drop-root")
+    .forEach((el) => el.classList.remove(
+      "drop-before", "drop-after", "drop-into", "drop-root"));
+}
+
+function inSubtree(rootId, id) {
+  const root = findTask(rootId);
+  return !!root && flatten([root]).some((t) => t.id === id);
+}
+
+/* Siblings as they are actually drawn: top-level tasks go through the sort,
+ * subtasks are already in their stored order, and finished ones aren't on
+ * screen to move around. */
+function renderedSiblings(task) {
+  const parent = task.parent_id ? findTask(task.parent_id) : null;
+  const list = parent ? (parent.subtasks || []) : state.tasks;
+  const active = list.filter(
+    (t) => t.status === "todo" || t.status === "in_progress");
+  return parent ? active : sortActive(active);
+}
+
+function nudgeTask(task, dir) {
+  const sibs = renderedSiblings(task);
+  const i = sibs.findIndex((t) => t.id === task.id);
+  if (i < 0) return;
+  const prev = sibs[i - 1], next = sibs[i + 1];
+  handleFocusFor = task.id;
+  if (dir === "up" && prev) moveTask(task.id, { target_id: prev.id, mode: "before" });
+  else if (dir === "down" && next) moveTask(task.id, { target_id: next.id, mode: "after" });
+  else if (dir === "in" && prev) moveTask(task.id, { target_id: prev.id, mode: "into" });
+  else if (dir === "out" && task.parent_id)
+    moveTask(task.id, { target_id: task.parent_id, mode: "after" });
+  else handleFocusFor = null;  // already as far that way as it goes
+}
+
+/* Empty space in the list is the way back out to the top level. */
+function wireListDropTarget() {
+  const list = $("task-list");
+  // Only the bare list counts. Events that bubble up from a task the drag
+  // can't legally land on (its own subtree) must stay refused, not quietly
+  // turn into "yank it out to the top level".
+  const onBackground = (e) => dragId && e.target === list;
+  list.addEventListener("dragover", (e) => {
+    if (!onBackground(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    pendingDrop = null;
+    clearDropMarks();
+    list.classList.add("drop-root");
+  });
+  list.addEventListener("dragleave", (e) => {
+    if (e.target === list) list.classList.remove("drop-root");
+  });
+  list.addEventListener("drop", (e) => {
+    if (!onBackground(e)) return;
+    e.preventDefault();
+    const id = dragId;
+    clearDropMarks();
+    if (id) moveTask(id, { parent_id: null, position: null });
+  });
 }
 
 /* ---------------- detail modal ---------------- */
@@ -413,6 +733,7 @@ function openSettings() {
   $("s-granularity").value = settings.granularity;
   $("s-granularity-val").textContent = settings.granularity;
   $("s-gamification").checked = settings.gamification;
+  $("s-manual-order").checked = settings.manual_order;
   $("s-api-key").value = "";
   $("s-key-status").textContent = settings.has_api_key ? "configured ✓" : "not set";
   // Not a secret, unlike the key — safe to show so it can be edited/cleared.
@@ -436,6 +757,7 @@ async function saveSettings() {
     timer_style: $("s-timer-style").value,
     granularity: Number($("s-granularity").value),
     gamification: $("s-gamification").checked,
+    manual_order: $("s-manual-order").checked,
     workspace_id: $("s-workspace-id").value.trim(),
   };
   const key = $("s-api-key").value.trim();
@@ -939,6 +1261,8 @@ function wire() {
     $("add-title").value = "";
     addTask(title);
   });
+
+  wireListDropTarget();
 
   $("btn-braindump").addEventListener("click", () => $("modal-braindump").showModal());
   $("b-compile").addEventListener("click", compileBraindump);

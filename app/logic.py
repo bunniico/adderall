@@ -88,13 +88,18 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
     """Compute all derived fields for a flat task list.
 
     Returns {task_id: {buffered_estimate, quadrant, urgency, deadline,
-    deadline_source, sort_key, actionable}}.
+    deadline_source, order_path, sort_key, actionable}}.
+
+    `sort_key` is the app's opinion of what comes first — urgency, then
+    quadrant — unless the `manual_order` setting is on, in which case it is
+    the position you dragged the task to and nothing else.
     """
     now = now or datetime.now(timezone.utc)
     ratios = ratios or []
     buf = effective_buffer(settings, ratios)
     threshold = int(settings.get("matrix_threshold", 5))
     auto_deadlines = bool(settings.get("auto_deadlines", True))
+    manual_order = bool(settings.get("manual_order", False))
 
     by_id = {t["id"]: t for t in tasks}
     children: dict[str | None, list[dict]] = {}
@@ -132,19 +137,24 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
         days = HORIZON_DAYS.get(derived[task["id"]]["quadrant"], 3)
         return created + timedelta(days=days), "auto"
 
-    def walk(parent_id: str | None, parent_deadline: datetime | None) -> None:
-        for task in children.get(parent_id, []):
+    def walk(parent_id: str | None, parent_deadline: datetime | None,
+             prefix: tuple[int, ...]) -> None:
+        for i, task in enumerate(children.get(parent_id, [])):
             dl, source = resolve_deadline(task, parent_deadline)
             d = derived[task["id"]]
             d["deadline"] = dl.isoformat(timespec="seconds") if dl else None
             d["deadline_source"] = source
+            # Where this task sits in the hand-arranged tree, top down. Two
+            # of these compare exactly the way the list reads: [0] < [0, 1]
+            # (a task before its own subtasks) < [1].
+            d["order_path"] = [*prefix, i]
             if task["status"] in ACTIVE_STATUSES:
                 d["urgency"] = urgency(dl, d["buffered_estimate"], now)
             else:
                 d["urgency"] = 0.0
-            walk(task["id"], dl)
+            walk(task["id"], dl, (*prefix, i))
 
-    walk(None, None)
+    walk(None, None, ())
 
     # Roll subtree totals up: a parent's real cost is the sum of everything
     # underneath it, and its real deadline is the furthest one inside it.
@@ -163,7 +173,9 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
         if d["has_subtasks"] and t["status"] in ACTIVE_STATUSES:
             d["urgency"] = urgency(parse_dt(d["rollup_deadline"]),
                                    d["rollup_remaining"], now)
-        d["sort_key"] = [
+        # Manual order means manual order: once you have arranged the list by
+        # hand, the app stops second-guessing you and reads it top to bottom.
+        d["sort_key"] = d.get("order_path", [t["order_index"]]) if manual_order else [
             -d["urgency"],
             QUADRANT_RANK.get(d["quadrant"], 2),
             t["order_index"],
@@ -174,7 +186,11 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
 
 def next_task(tasks: list[dict], derived: dict[str, dict]) -> dict | None:
     """The single task Taskmaster should surface next: highest urgency first,
-    quick wins break ties, thankless work sinks."""
+    quick wins break ties, thankless work sinks.
+
+    Under manual order the same call returns the first actionable task in the
+    order you arranged, because that is what the list now means.
+    """
     candidates = [t for t in tasks if derived[t["id"]]["actionable"]]
     if not candidates:
         return None

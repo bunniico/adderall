@@ -3,6 +3,7 @@
 import importlib
 import os
 import tempfile
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -111,6 +112,148 @@ def test_update_and_delete(client):
     res = client.delete(f"/api/tasks/{tid}")
     assert find(res.json(), "new name") is None
     assert client.delete(f"/api/tasks/{tid}").status_code == 404
+
+
+def test_manual_subtask_under_any_task(client):
+    state = create(client, title="parent")
+    parent = find(state, "parent")
+    state = create(client, title="by hand", parent_id=parent["id"])
+    parent = find(state, "parent")
+    assert [s["title"] for s in parent["subtasks"]] == ["by hand"]
+    assert parent["has_subtasks"] is True
+    # and a subtask of a subtask, to any depth
+    sub = find(state, "by hand")
+    state = create(client, title="deeper", parent_id=sub["id"])
+    assert [s["title"] for s in find(state, "by hand")["subtasks"]] == ["deeper"]
+
+
+def test_manual_subtask_appends_after_existing_ones(client):
+    state = create(client, title="parent")
+    tid = find(state, "parent")["id"]
+    client.post(f"/api/tasks/{tid}/breakdown", json={})
+    state = create(client, title="one more", parent_id=tid)
+    assert [s["title"] for s in find(state, "parent")["subtasks"]] == [
+        "step 1", "step 2", "step 3", "one more"]
+
+
+def test_subtask_under_unknown_parent_is_404(client):
+    assert client.post("/api/tasks", json={"title": "x", "parent_id": "nope"}
+                       ).status_code == 404
+
+
+def roots(state):
+    """Top-level titles in the order the page shows them (see sortActive)."""
+    return [t["title"] for t in sorted(state["tasks"], key=lambda t: t["sort_key"])]
+
+
+def test_move_reorders_top_level_tasks(client):
+    for title in ("a", "b", "c"):
+        state = create(client, title=title)
+    ids = {t["title"]: t["id"] for t in state["tasks"]}
+    state = client.post(f"/api/tasks/{ids['c']}/move",
+                        json={"target_id": ids["a"], "mode": "before"}).json()
+    assert roots(state) == ["c", "a", "b"]
+    state = client.post(f"/api/tasks/{ids['c']}/move",
+                        json={"target_id": ids["b"], "mode": "after"}).json()
+    assert roots(state) == ["a", "b", "c"]
+
+
+def test_move_nests_and_unnests(client):
+    state = create(client, title="a")
+    state = create(client, title="b")
+    ids = {t["title"]: t["id"] for t in state["tasks"]}
+    state = client.post(f"/api/tasks/{ids['b']}/move",
+                        json={"target_id": ids["a"], "mode": "into"}).json()
+    assert roots(state) == ["a"]
+    assert [s["title"] for s in find(state, "a")["subtasks"]] == ["b"]
+    # dropping on empty list space pulls it back out to the top level
+    state = client.post(f"/api/tasks/{ids['b']}/move",
+                        json={"parent_id": None, "position": None}).json()
+    assert roots(state) == ["a", "b"]
+    assert find(state, "a")["subtasks"] == []
+
+
+def test_move_out_places_task_after_its_old_parent(client):
+    state = create(client, title="project")
+    pid = find(state, "project")["id"]
+    state = client.post(f"/api/tasks/{pid}/breakdown", json={}).json()
+    step1 = find(state, "step 1")["id"]
+    state = client.post(f"/api/tasks/{step1}/move",
+                        json={"target_id": pid, "mode": "after"}).json()
+    assert roots(state) == ["project", "step 1"]
+    assert [s["title"] for s in find(state, "project")["subtasks"]] == ["step 2", "step 3"]
+
+
+def test_move_position_is_relative_to_the_list_without_the_moved_task(client):
+    state = create(client, title="parent")
+    pid = find(state, "parent")["id"]
+    state = client.post(f"/api/tasks/{pid}/breakdown", json={}).json()
+    subs = {s["title"]: s["id"] for s in find(state, "parent")["subtasks"]}
+    # move the first step down past the second — a naive index would no-op
+    state = client.post(f"/api/tasks/{subs['step 1']}/move",
+                        json={"target_id": subs["step 2"], "mode": "after"}).json()
+    assert [s["title"] for s in find(state, "parent")["subtasks"]] == [
+        "step 2", "step 1", "step 3"]
+
+
+def test_move_rejects_cycles_and_unknown_tasks(client):
+    state = create(client, title="parent")
+    pid = find(state, "parent")["id"]
+    state = client.post(f"/api/tasks/{pid}/breakdown", json={}).json()
+    step1 = find(state, "step 1")["id"]
+
+    res = client.post(f"/api/tasks/{pid}/move", json={"target_id": step1, "mode": "into"})
+    assert res.status_code == 400 and "own subtasks" in res.json()["detail"]
+    res = client.post(f"/api/tasks/{pid}/move", json={"target_id": pid, "mode": "into"})
+    assert res.status_code == 400
+    assert client.post(f"/api/tasks/{pid}/move",
+                       json={"parent_id": "nope"}).status_code == 404
+    assert client.post("/api/tasks/nope/move", json={}).status_code == 404
+    assert client.post(f"/api/tasks/{pid}/move",
+                       json={"target_id": step1}).status_code == 400  # mode missing
+    # nothing was moved by any of the rejections
+    assert [s["title"] for s in find(client.get("/api/state").json(), "parent")[
+        "subtasks"]] == ["step 1", "step 2", "step 3"]
+
+
+def test_first_move_freezes_the_order_you_were_looking_at(client):
+    # urgent sorts to the top under auto-sort, even though it was added last
+    create(client, title="calm one", impact=8, effort=2, estimated_time=10)
+    create(client, title="middling", impact=5, effort=5, estimated_time=10)
+    state = create(client, title="urgent", estimated_time=60,
+                   deadline=(datetime.now(timezone.utc) + timedelta(minutes=70)).isoformat())
+    assert roots(state) == ["urgent", "calm one", "middling"]
+    assert client.get("/api/settings").json()["manual_order"] is False
+
+    ids = {t["title"]: t["id"] for t in state["tasks"]}
+    state = client.post(f"/api/tasks/{ids['middling']}/move",
+                        json={"target_id": ids["urgent"], "mode": "before"}).json()
+    # manual order took over, and only the dragged task moved
+    assert client.get("/api/settings").json()["manual_order"] is True
+    assert roots(state) == ["middling", "urgent", "calm one"]
+    assert state["next_task_id"] == ids["middling"]
+
+
+def test_manual_order_can_be_switched_back_off(client):
+    create(client, title="calm one", impact=8, effort=2, estimated_time=10)
+    state = create(client, title="urgent", estimated_time=60,
+                   deadline=(datetime.now(timezone.utc) + timedelta(minutes=70)).isoformat())
+    ids = {t["title"]: t["id"] for t in state["tasks"]}
+    client.post(f"/api/tasks/{ids['calm one']}/move",
+                json={"target_id": ids["urgent"], "mode": "before"})
+    assert roots(client.get("/api/state").json()) == ["calm one", "urgent"]
+    client.put("/api/settings", json={"manual_order": False})
+    assert roots(client.get("/api/state").json()) == ["urgent", "calm one"]
+
+
+def test_manual_order_drives_focus_and_next(client):
+    state = create(client, title="second", impact=8, effort=2, estimated_time=10)
+    state = create(client, title="first", impact=2, effort=8, estimated_time=10)
+    ids = {t["title"]: t["id"] for t in state["tasks"]}
+    client.post(f"/api/tasks/{ids['first']}/move",
+                json={"target_id": ids["second"], "mode": "before"})
+    assert client.get("/api/next").json()["task"]["title"] == "first"
+    assert client.get("/api/focus").json()["root_title"] == "first"
 
 
 def test_compile_braindump(client):

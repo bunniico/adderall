@@ -113,7 +113,18 @@ set `ANTHROPIC_WORKSPACE_ID`. You can find the ID in the Claude Console URL:
 
 - **Magic ToDo** — type a task, hit ⚡, get concrete subtasks. A 🌶
   granularity slider controls how fine the breakdown is; any subtask can be
-  broken down further, recursively.
+  broken down further, recursively. The **+** on every task adds a subtask by
+  hand when you already know the step, at any depth, and the box stays open so
+  you can reel off several in a row.
+- **Your own order** — drag any task by its ⠿ handle: onto the top or bottom
+  edge of another task to sit above or below it, into the middle of one to
+  nest inside it, or onto empty list space to pull it back out to the top
+  level. Works with a mouse, on a touchscreen, and from the keyboard (focus a
+  handle and use ↑ ↓ to move, → to nest under the task above, ← to pop out).
+  The first move switches the list to **manual order**: it then stays exactly
+  as you arranged it — including which task is "next up" — instead of being
+  re-sorted by urgency. ⚙ Settings turns that back off, and everything else
+  (estimates, deadlines, rollups, alarms) carries on as before either way.
 - **Estimator** — every task gets a time estimate (AI-seeded, always
   overridable), and every estimate gets an automatic **time tax**: a 25–50%
   buffer (default 30%), because the planning fallacy means raw estimates are

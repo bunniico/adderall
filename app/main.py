@@ -46,6 +46,20 @@ class TaskUpdate(BaseModel):
     order_index: int | None = None
 
 
+class TaskMove(BaseModel):
+    """Where a task should land.
+
+    Either absolute (`parent_id` + `position`) or relative to another task
+    (`target_id` + `mode`). Relative is what the front end sends: it says
+    "put this one before/after/inside that one" and lets the server work out
+    the index, so a drop always means what it looked like on screen.
+    """
+    parent_id: str | None = None
+    position: int | None = Field(default=None, ge=0)
+    target_id: str | None = None
+    mode: str | None = Field(default=None, pattern="^(before|after|into)$")
+
+
 class BreakdownRequest(BaseModel):
     granularity: int | None = Field(default=None, ge=1, le=5)
 
@@ -122,6 +136,25 @@ def _require_task(task_id: str) -> dict:
     return task
 
 
+def _freeze_manual_order() -> None:
+    """Switch the list from auto-sort to hand-arranged, keeping what's on screen.
+
+    Top-level tasks are normally shown in urgency order rather than in stored
+    order, so the first drag writes the order you were looking at into
+    `order_index` before moving anything. Without that, everything else would
+    jump the moment manual order took effect.
+    """
+    settings = db.get_settings()
+    if settings.get("manual_order"):
+        return
+    tasks = db.list_tasks()
+    derived = logic.compute(tasks, settings, db.completion_ratios())
+    roots = [t for t in tasks if t["parent_id"] is None]
+    roots.sort(key=lambda t: derived[t["id"]]["sort_key"])
+    db.reorder_siblings(None, [t["id"] for t in roots])
+    db.update_settings({"manual_order": True})
+
+
 # ---------- routes ----------
 
 @app.get("/api/health")
@@ -167,6 +200,42 @@ def update_task(task_id: str, body: TaskUpdate):
 def delete_task(task_id: str):
     if not db.delete_task(task_id):
         raise HTTPException(404, "Task not found")
+    return _state()
+
+
+@app.post("/api/tasks/{task_id}/move")
+def move_task(task_id: str, body: TaskMove):
+    """Reorder or renest one task. Turns manual ordering on the first time."""
+    _require_task(task_id)
+
+    parent_id = body.parent_id
+    target = None
+    if body.target_id:
+        if not body.mode:
+            raise HTTPException(400, "mode is required when target_id is given")
+        if body.target_id == task_id:
+            raise HTTPException(400, "A task cannot be dropped onto itself")
+        target = _require_task(body.target_id)
+        parent_id = target["id"] if body.mode == "into" else target["parent_id"]
+
+    if parent_id:
+        if parent_id == task_id:
+            raise HTTPException(400, "A task cannot be its own parent")
+        _require_task(parent_id)
+        if parent_id in db.descendant_ids(task_id):
+            raise HTTPException(400, "A task cannot be moved inside its own subtasks")
+
+    _freeze_manual_order()
+
+    position = body.position
+    if target is not None and body.mode != "into":
+        siblings = db.sibling_ids(parent_id, exclude=task_id)
+        idx = siblings.index(target["id"])
+        position = idx if body.mode == "before" else idx + 1
+    elif target is not None:
+        position = None  # dropped onto a task: land at the end of its subtasks
+
+    db.move_task(task_id, parent_id, position)
     return _state()
 
 
