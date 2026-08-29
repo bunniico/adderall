@@ -12,6 +12,13 @@
 <header class="topbar">
   <h1>⏳ adderall</h1>
   <div class="topbar-actions">
+    <button id="focus-pill" class="focus-pill" hidden
+      title="Focus session still running — click to come back to it">
+      <span class="focus-pill-dot">▶</span>
+      <span id="focus-pill-time" class="focus-pill-time"></span>
+      <span id="focus-pill-title" class="focus-pill-title"></span>
+      <span id="focus-pill-end" class="focus-pill-end" title="End this focus session">✕</span>
+    </button>
     <button id="btn-braindump" class="ghost" title="Dump everything in your head; the Compiler turns it into tasks">🧠 Braindump</button>
     <button id="btn-focus" class="accent" title="One task at a time with a visual timer">▶ Focus</button>
     <button id="btn-settings" class="ghost" title="Settings">⚙</button>
@@ -175,10 +182,16 @@
 
 <!-- Taskmaster focus overlay -->
 <div id="focus-overlay" class="focus-overlay" hidden>
-  <button id="f-close" class="ghost close focus-close">✕</button>
+  <div class="focus-corner">
+    <button id="f-min" class="ghost" title="Close this view — the timer keeps running">— Minimize</button>
+    <button id="f-end" class="ghost" title="End the focus session for good">⏹ End session</button>
+    <button id="f-close" class="ghost close" title="Close this view — the timer keeps running">✕</button>
+  </div>
   <p class="focus-label">RIGHT NOW, JUST THIS:</p>
+  <p id="f-path" class="focus-path"></p>
   <h2 id="f-title"></h2>
   <p id="f-description" class="muted"></p>
+  <p id="f-progress" class="muted"></p>
   <div class="focus-timers">
     <canvas id="f-dial" width="260" height="260"></canvas>
     <div class="focus-block-wrap">
@@ -192,6 +205,7 @@
   </div>
   <div class="modal-actions focus-actions">
     <button id="f-pause" class="ghost">⏸ Pause</button>
+    <button id="f-reset" class="ghost" title="Start this task's timer over from its full estimate">↺ Reset timer</button>
     <button id="f-extend" class="ghost">+5 min</button>
     <button id="f-done" class="good">✓ Done</button>
     <button id="f-skip" class="ghost">Next task →</button>

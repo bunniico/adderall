@@ -127,6 +127,76 @@ def test_next_endpoint(client):
     assert res["task"]["title"] == "only task"
 
 
+def test_focus_endpoint_walks_the_tree_depth_first(client):
+    state = create(client, title="project")
+    project = find(state, "project")
+    state = client.post(f"/api/tasks/{project['id']}/breakdown", json={}).json()
+    step2 = find(state, "step 2")
+    # break the middle step down again -> grandchildren
+    client.post(f"/api/tasks/{step2['id']}/breakdown", json={})
+
+    data = client.get("/api/focus").json()
+    assert data["root_id"] == project["id"]
+    assert data["root_title"] == "project"
+    ids = [t["id"] for t in data["queue"]]
+    depths = [len(t["path"]) for t in data["queue"]]
+    # grandchildren, then the step that contains them, then the last sibling,
+    # and the project itself only once everything inside it is behind us
+    assert depths == [1, 2, 2, 2, 1, 1, 0]
+    assert ids[-1] == project["id"]
+    assert ids.index(step2["id"]) == 4
+    assert all(t["path"][:2] == ["project", "step 2"]
+               for t in data["queue"] if len(t["path"]) == 2)
+
+
+def test_focus_endpoint_scoped_to_a_root(client):
+    state = create(client, title="project")
+    project = find(state, "project")
+    state = client.post(f"/api/tasks/{project['id']}/breakdown", json={}).json()
+    other = create(client, title="unrelated")
+    step1 = find(state, "step 1")
+
+    data = client.get(f"/api/focus?root={step1['id']}").json()
+    assert [t["title"] for t in data["queue"]] == ["step 1"]
+    assert find(other, "unrelated") is not None  # untouched
+
+
+def test_focus_endpoint_skips_finished_work(client):
+    state = create(client, title="project")
+    project = find(state, "project")
+    state = client.post(f"/api/tasks/{project['id']}/breakdown", json={}).json()
+    step1 = find(state, "step 1")
+    client.post(f"/api/tasks/{step1['id']}/complete", json={})
+
+    data = client.get(f"/api/focus?root={project['id']}").json()
+    assert "step 1" not in [t["title"] for t in data["queue"]]
+
+
+def test_focus_endpoint_empty_and_unknown_root(client):
+    assert client.get("/api/focus").json() == {
+        "root_id": None, "root_title": None, "queue": []}
+    assert client.get("/api/focus?root=nope").status_code == 404
+
+
+def test_state_exposes_subtree_rollups(client):
+    state = create(client, title="project")
+    project = find(state, "project")
+    state = client.post(f"/api/tasks/{project['id']}/breakdown", json={}).json()
+    project = find(state, "project")
+    assert project["has_subtasks"] is True
+    # the stub estimates every task at 30 raw minutes -> 39 buffered each
+    assert project["rollup_estimate"] == 39 * 3
+    assert project["rollup_done"] == 0
+    assert project["rollup_remaining"] == 39 * 3
+    assert project["rollup_deadline"] is not None
+
+    step1 = find(state, "step 1")
+    state = client.post(f"/api/tasks/{step1['id']}/complete", json={}).json()
+    project = find(state, "project")
+    assert project["rollup_done"] == 39
+    assert project["rollup_remaining"] == 39 * 2
+
+
 def test_settings_roundtrip_and_key_privacy(client):
     res = client.get("/api/settings").json()
     assert "api_key" not in res

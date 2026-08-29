@@ -271,6 +271,35 @@ def get_next():
     return {"task": {**nxt, **derived[nxt["id"]]}}
 
 
+@app.get("/api/focus")
+def get_focus(root: str | None = None):
+    """The ordered walk Taskmaster follows through a task tree.
+
+    `root` scopes the session to one task's subtree; without it the tree
+    owning the most urgent step is chosen. The queue is depth-first —
+    subtasks before the task that contains them — so a session drills down
+    to the smallest first step and works its way back up.
+    """
+    tasks = db.list_tasks()
+    settings = db.get_settings()
+    derived = logic.compute(tasks, settings, db.completion_ratios())
+    root_id = root or logic.focus_root_id(tasks, derived)
+    if not root_id:
+        return {"root_id": None, "root_title": None, "queue": []}
+    by_id = {t["id"]: t for t in tasks}
+    if root_id not in by_id:
+        raise HTTPException(404, "Task not found")
+    queue = [
+        {**t, **derived[t["id"]], "path": logic.ancestor_titles(tasks, t)}
+        for t in logic.focus_queue(tasks, root_id)
+    ]
+    return {
+        "root_id": root_id,
+        "root_title": by_id[root_id]["title"],
+        "queue": queue,
+    }
+
+
 @app.get("/api/settings")
 def get_settings():
     settings = db.get_settings()

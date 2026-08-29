@@ -172,3 +172,151 @@ def test_next_task_prefers_urgent_then_quick_wins():
 
 def test_next_task_none_when_empty():
     assert logic.next_task([], {}) is None
+
+
+# ---- subtree rollups (a container is worth what it holds) ----
+
+def test_rollup_estimate_sums_subtasks():
+    parent = make_task("p", estimated_time=15)          # own buffered: 20
+    kids = [make_task(f"c{i}", parent_id="p", order_index=i, estimated_time=m)
+            for i, m in enumerate([10, 20, 30])]        # buffered: 13 + 26 + 39
+    derived = logic.compute([parent, *kids], SETTINGS, now=NOW)
+    assert derived["p"]["buffered_estimate"] == 20      # own estimate is unchanged
+    assert derived["p"]["rollup_estimate"] == 13 + 26 + 39
+    assert derived["p"]["has_subtasks"] is True
+    assert derived["c0"]["rollup_estimate"] == 13
+    assert derived["c0"]["has_subtasks"] is False
+
+
+def test_rollup_is_recursive_through_grandchildren():
+    parent = make_task("p", estimated_time=15)
+    child = make_task("c", parent_id="p", estimated_time=99)
+    g1 = make_task("g1", parent_id="c", order_index=0, estimated_time=10)  # 13
+    g2 = make_task("g2", parent_id="c", order_index=1, estimated_time=20)  # 26
+    derived = logic.compute([parent, child, g1, g2], SETTINGS, now=NOW)
+    assert derived["c"]["rollup_estimate"] == 39
+    assert derived["p"]["rollup_estimate"] == 39  # the grandchildren, not the 99
+
+
+def test_rollup_falls_back_to_own_estimate_when_subtasks_have_none():
+    parent = make_task("p", estimated_time=60)
+    child = make_task("c", parent_id="p")
+    derived = logic.compute([parent, child], SETTINGS, now=NOW)
+    assert derived["p"]["rollup_estimate"] == 78
+
+
+def test_rollup_tracks_done_and_remaining_time():
+    parent = make_task("p")
+    c1 = make_task("c1", parent_id="p", order_index=0, estimated_time=10, status="done")
+    c2 = make_task("c2", parent_id="p", order_index=1, estimated_time=20)
+    derived = logic.compute([parent, c1, c2], SETTINGS, now=NOW)
+    assert derived["p"]["rollup_estimate"] == 13 + 26
+    assert derived["p"]["rollup_done"] == 13
+    assert derived["p"]["rollup_remaining"] == 26
+
+
+def test_rollup_excludes_discarded_branches():
+    parent = make_task("p")
+    c1 = make_task("c1", parent_id="p", order_index=0, estimated_time=10)
+    c2 = make_task("c2", parent_id="p", order_index=1, estimated_time=20,
+                   status="discarded")
+    derived = logic.compute([parent, c1, c2], SETTINGS, now=NOW)
+    assert derived["p"]["rollup_estimate"] == 13  # the discarded branch is gone
+
+
+def test_done_parent_counts_as_fully_done():
+    parent = make_task("p", status="done")
+    c1 = make_task("c1", parent_id="p", estimated_time=10, status="done")
+    derived = logic.compute([parent, c1], SETTINGS, now=NOW)
+    assert derived["p"]["rollup_done"] == derived["p"]["rollup_estimate"] == 13
+    assert derived["p"]["rollup_remaining"] == 0
+
+
+def test_rollup_deadline_is_the_furthest_inside():
+    parent = make_task("p", deadline=(NOW + timedelta(hours=2)).isoformat())
+    early = make_task("c1", parent_id="p", order_index=0, estimated_time=10)
+    late = make_task("c2", parent_id="p", order_index=1,
+                     deadline=(NOW + timedelta(days=3)).isoformat())
+    derived = logic.compute([parent, early, late], SETTINGS, now=NOW)
+    assert derived["p"]["rollup_deadline"] == \
+        (NOW + timedelta(days=3)).isoformat(timespec="seconds")
+    assert derived["p"]["rollup_deadline_source"] == "user"
+    # the container's own deadline is left alone for scheduling
+    assert derived["p"]["deadline"] == (NOW + timedelta(hours=2)).isoformat(timespec="seconds")
+
+
+def test_backward_scheduled_children_end_at_the_parent_deadline():
+    parent_dl = NOW + timedelta(hours=10)
+    parent = make_task("p", deadline=parent_dl.isoformat())
+    c1 = make_task("c1", parent_id="p", order_index=0, estimated_time=60)
+    c2 = make_task("c2", parent_id="p", order_index=1, estimated_time=30)
+    derived = logic.compute([parent, c1, c2], SETTINGS, now=NOW)
+    # nothing inside runs past the container, so the rollup matches it
+    assert derived["p"]["rollup_deadline"] == parent_dl.isoformat(timespec="seconds")
+
+
+def test_container_urgency_uses_remaining_subtree_work():
+    parent = make_task("p", deadline=(NOW + timedelta(hours=2)).isoformat())
+    child = make_task("c", parent_id="p", estimated_time=90)  # buffered 117 > 120 slack
+    derived = logic.compute([parent, child], SETTINGS, now=NOW)
+    assert derived["p"]["urgency"] > logic.urgency(
+        NOW + timedelta(hours=2), logic.DEFAULT_ESTIMATE_MIN, NOW)
+
+
+# ---- focus traversal ----
+
+def test_focus_queue_is_depth_first_children_before_parent():
+    p = make_task("p")
+    c1 = make_task("c1", parent_id="p", order_index=0)
+    c2 = make_task("c2", parent_id="p", order_index=1)
+    g1 = make_task("g1", parent_id="c1", order_index=0)
+    g2 = make_task("g2", parent_id="c1", order_index=1)
+    queue = logic.focus_queue([p, c1, c2, g1, g2], "p")
+    assert [t["id"] for t in queue] == ["g1", "g2", "c1", "c2", "p"]
+
+
+def test_focus_queue_skips_finished_branches():
+    p = make_task("p")
+    c1 = make_task("c1", parent_id="p", order_index=0, status="done")
+    g1 = make_task("g1", parent_id="c1", order_index=0)  # under a done parent
+    c2 = make_task("c2", parent_id="p", order_index=1, status="discarded")
+    c3 = make_task("c3", parent_id="p", order_index=2)
+    queue = logic.focus_queue([p, c1, g1, c2, c3], "p")
+    assert [t["id"] for t in queue] == ["c3", "p"]
+
+
+def test_focus_queue_scoped_to_a_subtree():
+    p = make_task("p")
+    c1 = make_task("c1", parent_id="p", order_index=0)
+    g1 = make_task("g1", parent_id="c1", order_index=0)
+    other = make_task("other")
+    queue = logic.focus_queue([p, c1, g1, other], "c1")
+    assert [t["id"] for t in queue] == ["g1", "c1"]
+
+
+def test_focus_queue_unknown_root_is_empty():
+    assert logic.focus_queue([make_task("a")], "nope") == []
+
+
+def test_focus_root_is_the_tree_owning_the_most_urgent_step():
+    calm = make_task("calm", impact=8, effort=2, estimated_time=10)
+    project = make_task("project")
+    step = make_task("step", parent_id="project", estimated_time=60,
+                     deadline=(NOW + timedelta(minutes=70)).isoformat())
+    tasks = [calm, project, step]
+    derived = logic.compute(tasks, SETTINGS, now=NOW)
+    # the urgent step is nested; the session roots at its top-level ancestor
+    assert logic.next_task(tasks, derived)["id"] == "step"
+    assert logic.focus_root_id(tasks, derived) == "project"
+
+
+def test_focus_root_none_when_nothing_actionable():
+    assert logic.focus_root_id([], {}) is None
+
+
+def test_ancestor_titles():
+    p = make_task("p", title="Project")
+    c = make_task("c", parent_id="p", title="Chunk")
+    g = make_task("g", parent_id="c", title="Step")
+    assert logic.ancestor_titles([p, c, g], g) == ["Project", "Chunk"]
+    assert logic.ancestor_titles([p, c, g], p) == []
