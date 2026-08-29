@@ -20,7 +20,7 @@ The app automatically sets deadline and priority using a mix of the Eisenhower m
 ## Quick start
 
 ```bash
-git clone <repo url I need to fill in>
+git clone https://github.com/bunniico/adderall
 docker compose up
 ```
 
