@@ -40,6 +40,75 @@ GRANULARITY_HINTS = {
 }
 
 
+# Structured outputs support only a subset of JSON Schema: numeric bounds
+# (minimum/maximum) and array-length constraints are rejected with a 400.
+# Schemas below therefore carry types only, and every bound is enforced
+# locally after parsing — which is where the app does its validation anyway.
+MAX_STEPS = 16       # cap on subtasks from one breakdown
+MAX_COMPILED = 40    # cap on tasks from one braindump
+MAX_MINUTES = 60 * 24 * 30  # a month of minutes; anything larger is nonsense
+
+BREAKDOWN_SCHEMA = {
+    "type": "object",
+    "properties": {"steps": {"type": "array", "items": {"type": "string"}}},
+    "required": ["steps"],
+    "additionalProperties": False,
+}
+
+COMPILE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "tasks": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "description": {"type": "string"},
+                },
+                "required": ["title", "description"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["tasks"],
+    "additionalProperties": False,
+}
+
+
+def annotate_schema(want_scores: bool = True) -> dict:
+    props: dict = {"id": {"type": "string"}, "minutes": {"type": "integer"}}
+    required = ["id", "minutes"]
+    if want_scores:
+        props["impact"] = {"type": "integer"}
+        props["effort"] = {"type": "integer"}
+        required += ["impact", "effort"]
+    return {
+        "type": "object",
+        "properties": {
+            "tasks": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": props,
+                    "required": required,
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["tasks"],
+        "additionalProperties": False,
+    }
+
+
+def _clamp(value, low: int, high: int) -> int:
+    """Coerce a model-supplied number into range; fall back to the low bound."""
+    try:
+        return max(low, min(high, int(value)))
+    except (TypeError, ValueError):
+        return low
+
+
 class AIUnavailable(Exception):
     """Raised when no API key is configured or the API call fails."""
 
@@ -113,16 +182,9 @@ def breakdown(settings: dict, title: str, description: str, granularity: int,
         f"{context}Break this task into {GRANULARITY_HINTS[granularity]}, in the "
         f"order they should be done:\n\nTASK: {title}"
     )
-    schema = {
-        "type": "object",
-        "properties": {
-            "steps": {"type": "array", "items": {"type": "string"}, "maxItems": 16}
-        },
-        "required": ["steps"],
-        "additionalProperties": False,
-    }
-    data = _call(settings, "balanced", prompt, schema, effort="low")
-    return [s.strip() for s in data.get("steps", []) if s.strip()]
+    data = _call(settings, "balanced", prompt, BREAKDOWN_SCHEMA, effort="low")
+    steps = [s.strip() for s in data.get("steps", []) if s.strip()]
+    return steps[:MAX_STEPS]
 
 
 def annotate(settings: dict, tasks: list[dict], want_scores: bool = True) -> dict[str, dict]:
@@ -142,34 +204,21 @@ def annotate(settings: dict, tasks: list[dict], want_scores: bool = True) -> dic
         f"For each task below, give {fields}. Estimate honestly; do not pad — "
         f"a buffer is added separately.\n\n" + "\n".join(lines)
     )
-    item_props: dict = {
-        "id": {"type": "string"},
-        "minutes": {"type": "integer", "minimum": 1},
-    }
-    required = ["id", "minutes"]
-    if want_scores:
-        item_props["impact"] = {"type": "integer", "minimum": 0, "maximum": 10}
-        item_props["effort"] = {"type": "integer", "minimum": 0, "maximum": 10}
-        required += ["impact", "effort"]
-    schema = {
-        "type": "object",
-        "properties": {
-            "tasks": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": item_props,
-                    "required": required,
-                    "additionalProperties": False,
-                },
-            }
-        },
-        "required": ["tasks"],
-        "additionalProperties": False,
-    }
-    data = _call(settings, "fast", prompt, schema)
+    data = _call(settings, "fast", prompt, annotate_schema(want_scores))
     valid_ids = {t["id"] for t in tasks}
-    return {row["id"]: row for row in data.get("tasks", []) if row.get("id") in valid_ids}
+    results: dict[str, dict] = {}
+    for row in data.get("tasks", []):
+        if row.get("id") not in valid_ids:
+            continue
+        # Bounds are enforced here rather than in the schema: structured
+        # outputs reject numeric constraints, so the model can return
+        # anything and the app must not store an out-of-range score.
+        clean = {"id": row["id"], "minutes": _clamp(row.get("minutes"), 1, MAX_MINUTES)}
+        if want_scores:
+            clean["impact"] = _clamp(row.get("impact"), 0, 10)
+            clean["effort"] = _clamp(row.get("effort"), 0, 10)
+        results[row["id"]] = clean
+    return results
 
 
 def compile_braindump(settings: dict, text: str) -> list[dict]:
@@ -181,26 +230,7 @@ def compile_braindump(settings: dict, text: str) -> list[dict]:
         "short and imperative; put any useful detail from the braindump into "
         "the description.\n\nBRAINDUMP:\n" + text
     )
-    schema = {
-        "type": "object",
-        "properties": {
-            "tasks": {
-                "type": "array",
-                "maxItems": 40,
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "title": {"type": "string"},
-                        "description": {"type": "string"},
-                    },
-                    "required": ["title", "description"],
-                    "additionalProperties": False,
-                },
-            }
-        },
-        "required": ["tasks"],
-        "additionalProperties": False,
-    }
-    data = _call(settings, "deep", prompt, schema, max_tokens=16000,
+    data = _call(settings, "deep", prompt, COMPILE_SCHEMA, max_tokens=16000,
                  effort="high", thinking=True)
-    return [t for t in data.get("tasks", []) if t.get("title", "").strip()]
+    tasks = [t for t in data.get("tasks", []) if t.get("title", "").strip()]
+    return tasks[:MAX_COMPILED]
