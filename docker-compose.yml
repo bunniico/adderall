@@ -9,4 +9,14 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       # Only needed for identity-linked keys; can also be set in ⚙ Settings.
       - ANTHROPIC_WORKSPACE_ID=${ANTHROPIC_WORKSPACE_ID:-}
+    # Adderall is a small FastAPI app over SQLite; it never needs more than
+    # one core or half a gig, so cap it and leave the rest of the box alone.
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
     restart: unless-stopped
