@@ -2,14 +2,16 @@
 
 Everything in this module is pure local computation: the time-tax buffer,
 action-priority-matrix placement, urgency scoring, auto-deadlines with
-backward scheduling, and the "what next" ordering. No AI calls here — that
+backward scheduling, load-aware placement into days that have room, the
+learned daily cap, and the "what next" ordering. No AI calls here — that
 keeps recomputation instant, consistent, and testable.
 """
 
 from __future__ import annotations
 
 import math
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone, tzinfo
+from zoneinfo import ZoneInfo
 
 BUFFER_MIN = 0.25
 BUFFER_MAX = 0.50
@@ -22,6 +24,25 @@ QUADRANT_RANK = {"quick_win": 0, "major_project": 1, "fill_in": 2, "thankless": 
 HORIZON_DAYS = {"quick_win": 1, "fill_in": 3, "major_project": 7, "thankless": 14, None: 3}
 
 ACTIVE_STATUSES = {"todo", "in_progress"}
+
+# ---- how much a day is allowed to hold ----
+# Eight hours is a preference, not a law of physics: it is what the calendar
+# warns against overshooting and what auto-deadlines pack a day up to. It is
+# also the number most likely to be wrong for any particular person, so it
+# learns — see `capacity_plan`.
+DEFAULT_CAPACITY = 480          # the classic eight hours, in minutes
+CAPACITY_FLOOR = 60             # a learned cap never drops below an hour
+CAPACITY_CEILING = 960          # ...nor climbs past sixteen
+CAPACITY_MIN_DAYS = 5           # days of evidence before it says anything at all
+CAPACITY_COMFORT = (0.30, 0.75) # hit rates that mean the goal is doing its job
+CAPACITY_STEP = 0.5             # how far it moves toward the day you really have
+CAPACITY_ROUND = 15             # learned caps land on a readable quarter hour
+
+DEFAULT_DAY_START = 9           # local hour the working window opens
+# How far ahead the planner will look for a day with room before it gives up
+# and lets something double-book. Half a year is far past the point where the
+# answer is "you have too much on", not "the app picked the wrong Tuesday".
+PLACEMENT_SEARCH_DAYS = 180
 
 # Priority score weights. Urgency carries the Eisenhower half (how close the
 # deadline is relative to the work left), impact the importance half, and ease
@@ -102,6 +123,314 @@ def urgency(deadline: datetime | None, buffered_min: int | None, now: datetime) 
         return 10.0
     work = buffered_min if buffered_min and buffered_min > 0 else DEFAULT_ESTIMATE_MIN
     return round(min(10.0, max(0.5, 10.0 * work / remaining_min)), 1)
+
+
+# ---------------------------------------------------------------------------
+# Days: how long one holds, and where the next thing fits in it
+# ---------------------------------------------------------------------------
+# The server stores instants and has no timezone of its own, but a *day* is a
+# local idea and so is "eight hours of it". Everything in this section works in
+# local days and local minutes-past-midnight, and hands back UTC instants,
+# which is the only thing the rest of the app stores.
+
+
+def resolve_tz(name: str | None) -> tzinfo:
+    """The timezone days are measured in.
+
+    The page reports its own zone the first time it loads. Anything missing or
+    unrecognisable falls back to UTC rather than failing a request over a
+    scheduling nicety — a plan an hour out of place beats no plan at all.
+    """
+    name = (name or "").strip()
+    if not name:
+        return timezone.utc
+    try:
+        return ZoneInfo(name)
+    except Exception:
+        return timezone.utc
+
+
+def _median(values: list[float]) -> float:
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return float(ordered[mid])
+    return (ordered[mid - 1] + ordered[mid]) / 2.0
+
+
+def daily_totals(history: list[dict], tz: tzinfo = timezone.utc) -> dict[str, int]:
+    """Minutes of work finished per local day.
+
+    Only days you finished *something* on are counted. A weekend off is not
+    evidence that you can manage twenty minutes a day, and letting it count as
+    one would drag the cap down to nothing over a fortnight.
+    """
+    totals: dict[str, int] = {}
+    for row in history:
+        when = parse_dt(row.get("finished_at"))
+        minutes = row.get("minutes")
+        if when is None or not minutes:
+            continue
+        key = when.astimezone(tz).date().isoformat()
+        totals[key] = totals.get(key, 0) + int(minutes)
+    return totals
+
+
+def capacity_plan(settings: dict, history: list[dict] | None = None,
+                  tz: tzinfo | None = None) -> dict:
+    """How much work one day is allowed to hold, and how that number was reached.
+
+    The configured cap is the goal. Whether it is a *useful* goal shows in how
+    often it is actually reached: one you clear on nine days in ten is set too
+    low to mean anything, and one you have never once reached isn't a plan,
+    it's a daily notification that you failed — which is the exact failure mode
+    this app exists to avoid. So when the hit rate leaves the comfortable band,
+    the cap moves halfway toward the day you actually have, and the calendar's
+    warning moves with it.
+
+    Returns the workings, not just the answer: a cap that silently disagrees
+    with the one in Settings is worse than no cap at all, so the calendar can
+    say out loud which number it is using and why.
+    """
+    base = int(settings.get("day_capacity") or DEFAULT_CAPACITY)
+    base = max(CAPACITY_FLOOR, min(CAPACITY_CEILING, base))
+    plan = {
+        "minutes": base, "base": base, "typical": None, "hit_rate": None,
+        "days": 0, "learned": False,
+        "adaptive": bool(settings.get("adaptive_capacity", True)),
+    }
+    tz = tz or resolve_tz(settings.get("timezone"))
+    totals = sorted(daily_totals(history or [], tz).values())
+    plan["days"] = len(totals)
+    if not plan["adaptive"] or len(totals) < CAPACITY_MIN_DAYS:
+        return plan
+
+    hit_rate = sum(1 for t in totals if t >= base) / len(totals)
+    typical = _median(totals)
+    plan["hit_rate"] = round(hit_rate, 2)
+    plan["typical"] = int(round(typical))
+    if CAPACITY_COMFORT[0] <= hit_rate <= CAPACITY_COMFORT[1]:
+        return plan  # you reach it often enough for it to mean something
+
+    # Halfway, not all the way: one unusually good (or unusually flattened)
+    # fortnight shouldn't redefine what a day is.
+    moved = base + (typical - base) * CAPACITY_STEP
+    minutes = int(round(moved / CAPACITY_ROUND) * CAPACITY_ROUND)
+    plan["minutes"] = max(CAPACITY_FLOOR, min(CAPACITY_CEILING, minutes))
+    plan["learned"] = plan["minutes"] != base
+    return plan
+
+
+class DayPlanner:
+    """A book of what each day already holds, and where the next thing fits.
+
+    Auto-deadlines used to be a horizon and nothing else — created plus so
+    many days — so fifteen things braindumped in one minute came back as
+    fifteen blocks stacked on the same afternoon, at the same instant, on a
+    day that could never have held them. That is a plan you bounce off rather
+    than start.
+
+    This keeps the days themselves. Every commitment already made (a deadline
+    you set, a tree it has already placed) is booked against a local day, and
+    a new one is handed the first slot that fits inside a working window that
+    still has room under the cap. It only ever looks *forward* from the day
+    the horizon asked for: pulling work earlier would invent urgency nobody
+    asked for.
+    """
+
+    def __init__(self, capacity: int = DEFAULT_CAPACITY,
+                 day_start: int = DEFAULT_DAY_START,
+                 tz: tzinfo = timezone.utc,
+                 search_days: int = PLACEMENT_SEARCH_DAYS) -> None:
+        self.capacity = max(30, min(24 * 60, int(capacity or DEFAULT_CAPACITY)))
+        self.day_start = max(0, min(23, int(day_start))) * 60
+        self.tz = tz
+        self.search_days = max(1, int(search_days))
+        self._days: dict[date, list[list[int]]] = {}
+        self._placed: dict[str, datetime] = {}
+
+    # ---- local time <-> instants ----
+
+    def _local(self, when: datetime) -> datetime:
+        return when.astimezone(self.tz)
+
+    def _midnight(self, day: date) -> datetime:
+        return datetime.combine(day, time(0, 0), tzinfo=self.tz)
+
+    def _instant(self, day: date, minute: float) -> datetime:
+        return (self._midnight(day) + timedelta(minutes=minute)).astimezone(timezone.utc)
+
+    @property
+    def window_end(self) -> int:
+        """Last local minute of the working window — the cap, from day_start."""
+        return min(24 * 60, self.day_start + self.capacity)
+
+    # ---- the book ----
+
+    def book(self, start: datetime, end: datetime) -> None:
+        """Mark a span busy, split across every local day it touches."""
+        start, end = self._local(start), self._local(end)
+        if end <= start:
+            end = start + timedelta(minutes=1)
+        day, last = start.date(), end.date()
+        while day <= last:
+            base = self._midnight(day)
+            first = max(0.0, (start - base).total_seconds() / 60.0)
+            final = min(24 * 60.0, (end - base).total_seconds() / 60.0)
+            if final > first:
+                self._days.setdefault(day, []).append([int(first), math.ceil(final)])
+            day += timedelta(days=1)
+
+    def _merged(self, day: date) -> list[list[int]]:
+        merged: list[list[int]] = []
+        for start, end in sorted(self._days.get(day, [])):
+            if merged and start <= merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], end)
+            else:
+                merged.append([start, end])
+        return merged
+
+    def load(self, day: date) -> int:
+        """Minutes already committed on a local day, at whatever hour they sit."""
+        return sum(end - start for start, end in self._merged(day))
+
+    def _floor(self, day: date, not_before: datetime | None) -> int:
+        """Earliest local minute a new block may start on this day.
+
+        Only the day you are standing in is clamped: a slot at 9am is no use
+        at four in the afternoon. Days that are wholly in the past are left
+        alone, so work that is already overdue stays overdue instead of
+        quietly rescheduling itself out of the red.
+        """
+        if not_before is None:
+            return self.day_start
+        local = self._local(not_before)
+        if local.date() != day:
+            return self.day_start
+        into_day = (local - self._midnight(day)).total_seconds() / 60.0
+        return max(self.day_start, int(math.ceil(into_day)))
+
+    def _gaps(self, day: date, floor: int) -> list[tuple[int, int]]:
+        """Free stretches of the working window, in local minutes."""
+        end_of_window = self.window_end
+        free: list[tuple[int, int]] = []
+        cursor = max(self.day_start, floor)
+        for start, end in self._merged(day):
+            if end <= cursor or start >= end_of_window:
+                continue
+            start, end = max(start, cursor), min(end, end_of_window)
+            if start > cursor:
+                free.append((cursor, start))
+            cursor = max(cursor, end)
+        if cursor < end_of_window:
+            free.append((cursor, end_of_window))
+        return free
+
+    def _first_fit(self, day: date, length: int,
+                   not_before: datetime | None) -> tuple[date, int] | None:
+        """The first day from `day` onward with both room under the cap and a
+        gap long enough to hold the work in one piece."""
+        for _ in range(self.search_days + 1):
+            if self.capacity - self.load(day) >= length:
+                for start, end in self._gaps(day, self._floor(day, not_before)):
+                    if end - start >= length:
+                        return day, start
+            day += timedelta(days=1)
+        return None
+
+    def _first_clear(self, day: date) -> tuple[date, int] | None:
+        for _ in range(self.search_days + 1):
+            if not self.load(day):
+                return day, self.day_start
+            day += timedelta(days=1)
+        return None
+
+    # ---- what the scheduler calls ----
+
+    def reserve(self, key: str, deadline: datetime, length: int) -> datetime:
+        """Book something that already has a time: a deadline you set yourself.
+
+        Fixed points go in before anything is placed around them, so the app
+        schedules its own work in the space that is actually left.
+        """
+        if key in self._placed:
+            return self._placed[key]
+        length = max(1, int(length))
+        self.book(deadline - timedelta(minutes=length), deadline)
+        self._placed[key] = deadline
+        return deadline
+
+    def place(self, key: str, target: datetime, length: int,
+              not_before: datetime | None = None) -> datetime:
+        """The deadline for `length` minutes of work wanted around `target`.
+
+        Never earlier than the day the horizon asked for, and never onto a day
+        that is already full while a later one has room. Repeat calls for the
+        same task give the same answer, so a page reload doesn't reshuffle
+        your week.
+        """
+        if key in self._placed:
+            return self._placed[key]
+        length = max(1, int(length))
+        day = self._local(target).date()
+        slot = self._first_fit(day, length, not_before) if length <= self.capacity else None
+        if slot is None:
+            # More than a whole day's worth of work in one piece (or nothing
+            # free for half a year): give it the first day nothing else has
+            # claimed and let it run past the end of the window. A twelve-hour
+            # job is a twelve-hour job, and pretending otherwise helps nobody.
+            slot = self._first_clear(day) or (day, self.day_start)
+        chosen, start = slot
+        end = self._instant(chosen, start + length)
+        self.book(end - timedelta(minutes=length), end)
+        self._placed[key] = end
+        return end
+
+
+def day_planner(settings: dict, capacity: int | None = None) -> DayPlanner:
+    """A planner set up the way the settings say a day works."""
+    if capacity is None:
+        capacity = capacity_plan(settings)["minutes"]
+    return DayPlanner(capacity, settings.get("day_start", DEFAULT_DAY_START),
+                      resolve_tz(settings.get("timezone")))
+
+
+def _tree_minutes(task: dict, children: dict, lengths: dict) -> int:
+    """Minutes of real work in a task's subtree.
+
+    Leaves only: a container is worth exactly the steps it is made of, and
+    counting both it and them would book every plan twice over — which is the
+    difference between "you have four hours on Tuesday" and "you have eight".
+    """
+    kids = [c for c in children.get(task["id"], []) if c["status"] in ACTIVE_STATUSES]
+    if kids:
+        return sum(_tree_minutes(kid, children, lengths) for kid in kids)
+    if task["status"] not in ACTIVE_STATUSES:
+        return 0
+    return max(1, int(lengths.get(task["id"]) or DEFAULT_ESTIMATE_MIN))
+
+
+def reserve_fixed(planner: DayPlanner, tasks: list[dict], settings: dict,
+                  ratios: list[float] | None = None) -> None:
+    """Book every tree that already has a deadline you set.
+
+    Run over every project *before* any auto-deadline is placed, so work in
+    one tab is never dropped on top of a commitment in another: the calendar
+    spans every project, and so does the day it is spending.
+
+    A tree is booked as one span — the work its steps add up to, ending on its
+    deadline — which is exactly the shape the calendar draws it in.
+    """
+    buf = effective_buffer(settings, ratios or [])
+    children = _children_map(tasks)
+    lengths = {t["id"]: buffered_estimate(t["estimated_time"], buf) for t in tasks}
+    for task in children.get(None, []):
+        deadline = parse_dt(task["deadline"])
+        if deadline is None:
+            continue
+        minutes = _tree_minutes(task, children, lengths)
+        if minutes:
+            planner.reserve(task["id"], deadline, minutes)
 
 
 def block_length(derived: dict) -> int:
@@ -205,7 +534,8 @@ def list_sort_key(task: dict, d: dict, field: str, descending: bool) -> list:
 
 
 def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None,
-            now: datetime | None = None) -> dict[str, dict]:
+            now: datetime | None = None,
+            planner: DayPlanner | None = None) -> dict[str, dict]:
     """Compute all derived fields for a flat task list.
 
     Returns {task_id: {buffered_estimate, quadrant, urgency, deadline,
@@ -220,12 +550,19 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
     thing until you pick a field in the sorter. Keeping the two apart means
     reading your list by deadline for a minute doesn't change what Taskmaster
     hands you next.
+
+    `planner` is the book of what the days already hold. Pass one shared
+    across every project and auto-deadlines are spread over days that have
+    room instead of stacking; leave it out and one is made for this call,
+    which still spreads *this* list but knows nothing about the other tabs.
     """
     now = now or datetime.now(timezone.utc)
     ratios = ratios or []
     buf = effective_buffer(settings, ratios)
     threshold = int(settings.get("matrix_threshold", 5))
     auto_deadlines = bool(settings.get("auto_deadlines", True))
+    spread = bool(settings.get("spread_tasks", True))
+    planner = planner if planner is not None else day_planner(settings)
     sort_field, sort_desc = sort_mode(settings)
 
     by_id = {t["id"]: t for t in tasks}
@@ -242,6 +579,7 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
             "quadrant": quadrant(t["impact"], t["effort"], threshold),
             "buffer_applied": buf,
         }
+    lengths = {t["id"]: derived[t["id"]]["buffered_estimate"] for t in tasks}
 
     def resolve_deadline(task: dict, parent_deadline: datetime | None) -> tuple[datetime | None, str]:
         user_dl = parse_dt(task["deadline"])
@@ -262,12 +600,29 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
             return parent_deadline - timedelta(minutes=tail_min), "auto"
         created = parse_dt(task["created_at"]) or now
         days = HORIZON_DAYS.get(derived[task["id"]]["quadrant"], 3)
-        return created + timedelta(days=days), "auto"
+        target = created + timedelta(days=days)
+        if not spread:
+            return target, "auto"
+        # The horizon says which day this ought to land on. The planner says
+        # where in that day it actually fits — or, when the day is already
+        # spoken for, which of the following ones has room. The whole tree is
+        # placed as one span: its steps are backward-scheduled inside it just
+        # below, so the family occupies exactly the slot booked for it.
+        minutes = _tree_minutes(task, children, lengths)
+        if not minutes:
+            return target, "auto"  # nothing left to do in here, nothing to book
+        return planner.place(task["id"], target, minutes, not_before=now), "auto"
 
     def walk(parent_id: str | None, parent_deadline: datetime | None,
              prefix: tuple[int, ...]) -> None:
         for i, task in enumerate(children.get(parent_id, [])):
             dl, source = resolve_deadline(task, parent_deadline)
+            if spread and parent_id is None and source == "user" and dl:
+                # A deadline you set is a fixed point, and the day it lands on
+                # is that much fuller for everything placed around it after.
+                minutes = _tree_minutes(task, children, lengths)
+                if minutes:
+                    planner.reserve(task["id"], dl, minutes)
             d = derived[task["id"]]
             d["deadline"] = dl.isoformat(timespec="seconds") if dl else None
             d["deadline_source"] = source

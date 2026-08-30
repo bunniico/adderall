@@ -1329,11 +1329,68 @@ async function compileBraindump() {
 
 /* ---------------- settings ---------------- */
 
+/* The hours of the day, as options for "the working day starts at". Built
+ * rather than written out so they read in the reader's own locale — 9 AM or
+ * 09:00, whichever their clock uses. */
+function fillDayStarts() {
+  const select = $("s-day-start");
+  if (select.options.length) return;
+  for (let h = 0; h < 24; h++) {
+    const opt = document.createElement("option");
+    opt.value = String(h);
+    opt.textContent = new Date(2000, 0, 1, h)
+      .toLocaleTimeString(undefined, { hour: "numeric" });
+    select.appendChild(opt);
+  }
+}
+
+/* What the cap has actually learned to be, in a sentence. A setting that
+ * quietly overrides itself is worse than no setting, so the dialog says what
+ * the number has moved to and on what evidence. */
+function capacityLearned() {
+  const c = settings.capacity;
+  if (!c || !c.adaptive) return "";
+  if (c.days < 5) {
+    return `Nothing learned yet — ${c.days} day${c.days === 1 ? "" : "s"} of ` +
+      `finished work so far, and it wants five before it says anything.`;
+  }
+  const pct = Math.round((c.hit_rate ?? 0) * 100);
+  if (!c.learned) {
+    return `You reach ${fmtMinutes(c.base)} on ${pct}% of the ${c.days} days ` +
+      `you finished anything on, which is often enough for it to mean ` +
+      `something. Leaving it where you put it.`;
+  }
+  return `You reach ${fmtMinutes(c.base)} on ${pct}% of the ${c.days} days ` +
+    `you finished anything on (a typical one is ${fmtMinutes(c.typical)}), so ` +
+    `the app is working to ${fmtMinutes(c.minutes)} instead.`;
+}
+
+/* The server stores instants and has no timezone of its own, but "which day is
+ * this due on" and "eight hours of one" are both local questions. The page is
+ * the only side that knows the answer, so it says so once — and only when
+ * nothing is stored, so a zone set by hand is never overwritten. */
+async function reportTimezone() {
+  try {
+    if (settings.timezone) return;
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (!zone) return;
+    settings = await api("/settings",
+      { method: "PUT", body: JSON.stringify({ timezone: zone }) });
+  } catch { /* a plan an hour out of place beats no plan at all */ }
+}
+
 function openSettings() {
   $("s-auto-deadlines").checked = settings.auto_deadlines;
   $("s-buffer").value = Math.round(settings.buffer * 100);
   $("s-buffer-val").textContent = Math.round(settings.buffer * 100) + "%";
   $("s-adaptive").checked = settings.adaptive_buffer;
+  fillDayStarts();
+  $("s-capacity").value = (settings.day_capacity ?? 480) / 60;
+  $("s-capacity-val").textContent = fmtMinutes(settings.day_capacity ?? 480);
+  $("s-adaptive-capacity").checked = settings.adaptive_capacity !== false;
+  $("s-day-start").value = String(settings.day_start ?? 9);
+  $("s-spread").checked = settings.spread_tasks !== false;
+  $("s-capacity-note").textContent = capacityLearned();
   $("s-threshold").value = settings.matrix_threshold;
   $("s-threshold-val").textContent = settings.matrix_threshold;
   $("s-ai-scoring").checked = settings.ai_scoring;
@@ -1359,6 +1416,10 @@ async function saveSettings() {
     auto_deadlines: $("s-auto-deadlines").checked,
     buffer: Number($("s-buffer").value) / 100,
     adaptive_buffer: $("s-adaptive").checked,
+    day_capacity: Math.round(Number($("s-capacity").value) * 60),
+    adaptive_capacity: $("s-adaptive-capacity").checked,
+    day_start: Number($("s-day-start").value),
+    spread_tasks: $("s-spread").checked,
     matrix_threshold: Number($("s-threshold").value),
     ai_scoring: $("s-ai-scoring").checked,
     alarms: {
@@ -1938,6 +1999,9 @@ function wire() {
   $("s-save").addEventListener("click", saveSettings);
   $("s-buffer").addEventListener("input", () =>
     $("s-buffer-val").textContent = $("s-buffer").value + "%");
+  $("s-capacity").addEventListener("input", () =>
+    $("s-capacity-val").textContent =
+      fmtMinutes(Math.round(Number($("s-capacity").value) * 60)));
   $("s-threshold").addEventListener("input", () =>
     $("s-threshold-val").textContent = $("s-threshold").value);
   $("s-granularity").addEventListener("input", () =>
@@ -2048,6 +2112,9 @@ async function boot() {
   restoreFocus();  // a session survives reloads — pick it back up
   try {
     settings = await api("/settings");
+    // Before the first state read: which day a deadline lands on, and how full
+    // that day is, are worked out in this zone.
+    await reportTimezone();
     $("add-granularity").value = settings.granularity;
     applyState(await api("/state"));
     // wireCalendar() has already read back which view you were last in.

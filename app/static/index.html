@@ -220,6 +220,33 @@
     <label class="row"><input id="s-adaptive" type="checkbox">
       Adaptive buffer <span class="muted">— learn from your actual completion times (only raises, never lowers)</span></label>
 
+    <fieldset class="s-group">
+      <legend>How much a day holds</legend>
+
+      <label>A day's worth of work: <output id="s-capacity-val"></output>
+        <input id="s-capacity" type="range" min="1" max="16" step="0.5" value="8">
+        <span class="muted">The calendar warns when a day goes past this, and
+          new deadlines are packed up to it and no further.</span>
+      </label>
+
+      <label class="row"><input id="s-adaptive-capacity" type="checkbox">
+        Learn my real day <span class="muted">— if you almost never reach that
+        number (or clear it every single day), it moves to meet the days you
+        actually have. A goal you have never once hit isn't a plan.</span></label>
+      <p id="s-capacity-note" class="muted"></p>
+
+      <label>The working day starts at
+        <select id="s-day-start"></select>
+        <span class="muted">Work the app schedules itself is laid out from
+          here, in your own timezone.</span>
+      </label>
+
+      <label class="row"><input id="s-spread" type="checkbox">
+        Spread work out <span class="muted">— give each task a slot in a day
+        that still has room, instead of dropping everything the app schedules
+        onto the same afternoon.</span></label>
+    </fieldset>
+
     <label>Impact/effort threshold: <output id="s-threshold-val"></output>
       <input id="s-threshold" type="range" min="1" max="9" value="5">
     </label>

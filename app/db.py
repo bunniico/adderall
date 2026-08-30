@@ -12,7 +12,7 @@ import os
 import secrets
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 DB_PATH = os.environ.get("ADDERALL_DB", os.path.join("data", "adderall.db"))
 
@@ -21,6 +21,14 @@ DEFAULT_SETTINGS = {
     "buffer": 0.30,            # time-tax buffer, fraction of raw estimate
     "adaptive_buffer": False,  # learn from actual-vs-estimated history
     "matrix_threshold": 5,     # 0-10 split between low/high impact & effort
+    "day_capacity": 480,       # minutes of work a day should hold — the 8h cap
+    "adaptive_capacity": True, # let that cap learn from the days you actually
+                               # finish, so the warning means something
+    "day_start": 9,            # local hour the working window opens
+    "spread_tasks": True,      # place auto-deadlines in days that have room,
+                               # instead of stacking them all on one
+    "timezone": "",            # IANA name; the page reports its own on first
+                               # load. Days — and the day cap — are local ideas
     "ai_scoring": True,        # let the AI seed impact/effort scores
     "alarms": {
         "enabled": True,
@@ -438,6 +446,27 @@ def completion_ratios(limit: int = 20) -> list[float]:
             (limit,),
         ).fetchall()
     return [r["actual_time"] / r["estimated_time"] for r in rows]
+
+
+def completed_history(days: int = 45) -> list[dict]:
+    """When recent work was finished and how long it took.
+
+    The evidence the daily cap learns from (see `logic.capacity_plan`):
+    `actual_time` when the task was timed, the estimate when it wasn't,
+    because a task you ticked off without a timer still happened.
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(
+        timespec="seconds")
+    with connect() as conn:
+        rows = conn.execute(
+            """SELECT updated_at, actual_time, estimated_time FROM tasks
+               WHERE status = 'done' AND updated_at >= ?
+                 AND (actual_time IS NOT NULL OR estimated_time IS NOT NULL)
+               ORDER BY updated_at DESC LIMIT 1000""",
+            (cutoff,),
+        ).fetchall()
+    return [{"finished_at": r["updated_at"],
+             "minutes": r["actual_time"] or r["estimated_time"]} for r in rows]
 
 
 def get_settings() -> dict:

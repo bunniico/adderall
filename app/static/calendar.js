@@ -40,6 +40,7 @@ const cal = {
   stale: false,         // something changed while the calendar was off screen
   dayScroll: null,      // {key, top} — where you had scrolled the day grid
   renderedDay: null,    // the day the grid on screen was drawn for
+  capacity: null,       // the day cap and how it got there (see capacityNote)
   filters: { project: "", category: "", auto: true, done: false },
 };
 
@@ -130,6 +131,7 @@ async function loadCalendar() {
   try {
     const data = await api("/calendar");
     cal.events = data.events || [];
+    cal.capacity = data.capacity || null;
     cal.loaded = true;
     cal.stale = false;
   } catch (e) {
@@ -193,6 +195,35 @@ function groupByDay(events) {
 
 function isOverdue(e) {
   return e.status !== "done" && new Date(e.deadline) < new Date();
+}
+
+/* ---------------- how full a day is ----------------
+ * How much a day costs, and what it is allowed to cost. */
+
+/* Leaves only. A task with subtasks is drawn as a block spanning the work its
+ * steps add up to, and its steps are drawn inside it, so adding every block on
+ * screen together would charge the day twice for the same afternoon. */
+function dayLoad(events, field = "length_min") {
+  return events.reduce((n, e) => n + (e.has_subtasks ? 0 : e[field]), 0);
+}
+
+function capacityMinutes() {
+  return cal.capacity?.minutes || Number(settings?.day_capacity) || 8 * 60;
+}
+
+/* Why the warning uses the number it uses. A cap that quietly disagrees with
+ * the one in Settings is worse than no cap at all, so it says so out loud. */
+function capacityNote() {
+  const c = cal.capacity;
+  if (!c) return "";
+  if (!c.learned) {
+    return `Your day cap is ${fmtMinutes(c.base)}. Change it in ⚙ Settings.`;
+  }
+  return `You set ${fmtMinutes(c.base)}, but you reach that on ` +
+    `${Math.round((c.hit_rate ?? 0) * 100)}% of the ${c.days} days you ` +
+    `finished anything on — a typical one is ${fmtMinutes(c.typical)}. So the ` +
+    `warning has moved to ${fmtMinutes(c.minutes)}, and new deadlines are ` +
+    `packed to that. Turn this off with “learn my real day” in ⚙ Settings.`;
 }
 
 /* ---------------- mode switching ---------------- */
@@ -506,13 +537,14 @@ function dayScheduleSummary(events, day) {
   const wrap = document.createElement("div");
   wrap.className = "cal-summary";
   const open = events.filter((e) => e.status !== "done");
-  const total = open.reduce((n, e) => n + e.length_min, 0);
-  const raw = open.reduce((n, e) => n + e.raw_length_min, 0);
+  const total = dayLoad(open);
+  const raw = dayLoad(open, "raw_length_min");
   const buffer = Math.max(0, total - raw);
+  const cap = capacityMinutes();
 
   const bits = [
     `${events.length} task${events.length === 1 ? "" : "s"}`,
-    `${fmtMinutes(total)} booked`,
+    `${fmtMinutes(total)} booked of ${fmtMinutes(cap)}`,
   ];
   if (buffer > 0) bits.push(`${fmtMinutes(buffer)} of that is buffer`);
   const done = events.length - open.length;
@@ -522,12 +554,21 @@ function dayScheduleSummary(events, day) {
   line.textContent = bits.join(" · ");
   wrap.appendChild(line);
 
+  line.title = capacityNote();
+
   // Over-committing a day is the thing that makes a plan collapse, so say it
-  // out loud rather than leaving you to add the blocks up yourself.
-  if (total > 8 * 60) {
+  // out loud rather than leaving you to add the blocks up yourself. The number
+  // it measures against is the day you actually have, not a round eight hours
+  // nobody has ever hit — see capacityNote().
+  if (total > cap) {
     const warn = document.createElement("span");
     warn.className = "cal-warn";
-    warn.textContent = `⚠ that is more than 8 hours of work in one day`;
+    warn.textContent = cal.capacity?.learned
+      ? `⚠ ${fmtMinutes(total - cap)} over — and ${fmtMinutes(cap)} is what ` +
+        `your days actually hold, not the ${fmtMinutes(cal.capacity.base)} you set`
+      : `⚠ that is ${fmtMinutes(total - cap)} more than ${fmtMinutes(cap)} ` +
+        `of work in one day`;
+    warn.title = capacityNote();
     wrap.appendChild(warn);
   }
   return wrap;
@@ -717,10 +758,17 @@ function dayColumn(day, list) {
 
   const open = list.filter((e) => e.status !== "done");
   if (open.length) {
+    const total = dayLoad(open);
+    const cap = capacityMinutes();
+    const over = total > cap;
     const foot = document.createElement("div");
-    foot.className = "cal-col-foot muted";
-    foot.textContent = fmtMinutes(open.reduce((n, e) => n + e.length_min, 0));
-    foot.title = "Buffered work due on this day";
+    foot.className = "cal-col-foot" + (over ? " over" : " muted");
+    foot.textContent = (over ? "⚠ " : "") + fmtMinutes(total);
+    foot.title = over
+      ? `${fmtMinutes(total)} of buffered work — ${fmtMinutes(total - cap)} ` +
+        `more than this day holds. ${capacityNote()}`
+      : `${fmtMinutes(total)} of buffered work, of ${fmtMinutes(cap)}. ` +
+        capacityNote();
     col.appendChild(foot);
   }
   return col;

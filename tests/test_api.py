@@ -1111,3 +1111,111 @@ def test_state_carries_the_length_a_nudge_preserves(client):
     state = client.post("/api/nudge", json={
         "nudges": [{"task_id": task["id"], "deadline": target.isoformat()}]}).json()
     assert find(state, "overdue thing")["length_min"] == 78
+
+
+# ---- spreading auto-deadlines over days that have room ----
+
+def blocks(events):
+    """(start, end) of every open event's calendar block, in time order."""
+    out = []
+    for e in events:
+        if e["status"] == "done":
+            continue
+        end = datetime.fromisoformat(e["deadline"])
+        out.append((end - timedelta(minutes=e["length_min"]), end))
+    return sorted(out)
+
+
+def test_auto_deadlines_do_not_stack_on_one_instant(client):
+    """The braindump case, end to end: alike tasks, created in one breath."""
+    for i in range(4):
+        create(client, title=f"chunk {i}", estimated_time=120, impact=8, effort=2)
+    events = client.get("/api/calendar").json()["events"]
+    assert len({e["deadline"] for e in events}) == 4  # not one shared instant
+
+    placed = blocks(events)
+    for (_, first_end), (second_start, _) in zip(placed, placed[1:]):
+        assert second_start >= first_end          # nothing sits on anything else
+    # 156 buffered minutes each: three fill an eight-hour day and the fourth
+    # rolls onto the next one instead of overflowing it.
+    assert len({start.date() for start, _ in placed}) == 2
+
+
+def test_auto_deadlines_plan_around_deadlines_you_set(client):
+    create(client, title="dentist", estimated_time=240,
+           deadline=iso_in(days=1), impact=8, effort=2)
+    create(client, title="placed around it", estimated_time=120,
+           impact=8, effort=2)
+    payload = client.get("/api/calendar").json()
+    assert event(payload, "dentist")["deadline_source"] == "user"
+    # The commitment keeps its slot; the app's own work goes somewhere else.
+    placed = blocks(payload["events"])
+    for (_, first_end), (second_start, _) in zip(placed, placed[1:]):
+        assert second_start >= first_end
+
+
+def test_auto_deadlines_span_projects(client):
+    """One day, two tabs: the second tab plans around the first."""
+    create(client, title="work thing", estimated_time=300, impact=8, effort=2)
+    client.post("/api/projects", json={"name": "House"})
+    create(client, title="house thing", estimated_time=300, impact=8, effort=2)
+    placed = blocks(client.get("/api/calendar").json()["events"])
+    # 390 buffered minutes each — they cannot share an eight-hour day.
+    assert len(placed) == 2
+    assert placed[0][1] <= placed[1][0]
+    assert placed[0][0].date() != placed[1][0].date()
+
+
+def test_spreading_can_be_turned_off(client):
+    client.put("/api/settings", json={"spread_tasks": False})
+    for i in range(3):
+        create(client, title=f"chunk {i}", estimated_time=120, impact=8, effort=2)
+    events = client.get("/api/calendar").json()["events"]
+    # Back to the plain horizon: created plus a day, all on the same instant.
+    assert len({e["deadline"] for e in events}) == 1
+
+
+# ---- the daily cap ----
+
+def test_calendar_carries_the_day_cap(client):
+    cap = client.get("/api/calendar").json()["capacity"]
+    assert cap["minutes"] == 480      # eight hours until it learns otherwise
+    assert cap["base"] == 480
+    assert cap["learned"] is False
+    assert cap["days"] == 0
+
+
+def test_day_cap_learns_from_days_you_actually_finish(client):
+    """Six days of three-hour days: the eight-hour goal moves to meet you."""
+    from app import db
+    for day in range(1, 7):
+        task = db.create_task({"title": f"done {day}", "estimated_time": 180,
+                               "actual_time": 180, "status": "done",
+                               "project_id": db.list_projects()[0]["id"]})
+        db.update_task(task["id"], {"status": "done"})
+        with db.connect() as conn:
+            conn.execute("UPDATE tasks SET updated_at = ? WHERE id = ?",
+                         ((datetime.now(timezone.utc) - timedelta(days=day))
+                          .isoformat(timespec="seconds"), task["id"]))
+
+    cap = client.get("/api/calendar").json()["capacity"]
+    assert cap["days"] == 6
+    assert cap["typical"] == 180
+    assert cap["hit_rate"] == 0.0
+    assert cap["minutes"] == 330       # halfway from 480 to 180
+    assert cap["learned"] is True
+    # ...and the settings dialog is told the same story.
+    assert client.get("/api/settings").json()["capacity"]["minutes"] == 330
+
+
+def test_day_cap_settings_roundtrip(client):
+    res = client.put("/api/settings", json={
+        "day_capacity": 300, "adaptive_capacity": False,
+        "day_start": 7, "timezone": "America/New_York",
+        "capacity": {"minutes": 9999},   # derived: echoed back, never stored
+    }).json()
+    assert res["day_capacity"] == 300
+    assert res["adaptive_capacity"] is False
+    assert res["day_start"] == 7
+    assert res["timezone"] == "America/New_York"
+    assert res["capacity"]["minutes"] == 300

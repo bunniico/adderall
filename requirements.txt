@@ -1,3 +1,6 @@
 fastapi>=0.115
 uvicorn[standard]>=0.30
 anthropic>=1.0
+# zoneinfo's fallback database: days (and the day cap) are local ideas, and
+# the slim base image is not guaranteed to carry a system tz database.
+tzdata>=2024.1

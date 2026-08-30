@@ -95,7 +95,15 @@ def test_compute_basic_derivations():
     assert d["buffered_estimate"] == 78
     assert d["quadrant"] == "quick_win"
     assert d["deadline_source"] == "auto"
-    # quick win horizon = 1 day from creation
+    # quick win horizon = 1 day from creation, and inside that day it is put
+    # where the working day actually has room: 9am, plus its buffered hour.
+    assert d["deadline"] == "2026-08-30T10:18:00+00:00"
+
+
+def test_horizon_alone_when_spreading_is_off():
+    """With the planner off it is the plain horizon it always was."""
+    t = make_task("a", estimated_time=60, impact=8, effort=2)
+    d = logic.compute([t], {**SETTINGS, "spread_tasks": False}, now=NOW)["a"]
     assert d["deadline"] == (NOW + timedelta(days=1)).isoformat(timespec="seconds")
 
 
@@ -615,3 +623,229 @@ def test_length_falls_back_rather_than_collapsing_to_nothing():
     tasks = [make_task("a", deadline=(NOW + timedelta(days=1)).isoformat())]
     derived = logic.compute(tasks, SETTINGS, now=NOW)
     assert derived["a"]["length_min"] == logic.DEFAULT_ESTIMATE_MIN
+
+
+# ---- spreading work over the days that have room ----
+
+def spans(derived, ids):
+    """(start, end) of each task's calendar block, in order."""
+    out = []
+    for tid in ids:
+        end = logic.parse_dt(derived[tid]["deadline"])
+        out.append((end - timedelta(minutes=derived[tid]["length_min"]), end))
+    return out
+
+
+def test_same_shaped_tasks_spread_instead_of_stacking():
+    """The braindump case: everything created in one minute, all alike.
+
+    They used to land on the same instant of the same afternoon. Now they
+    queue up through the working day and roll onto the next one when the day
+    is full.
+    """
+    tasks = [make_task(f"t{i}", estimated_time=120, impact=8, effort=2)
+             for i in range(4)]
+    derived = logic.compute(tasks, SETTINGS, now=NOW)
+    blocks = spans(derived, [t["id"] for t in tasks])
+
+    # Nothing overlaps anything else.
+    for (_, first_end), (second_start, _) in zip(blocks, blocks[1:]):
+        assert second_start >= first_end
+
+    days = [start.date().isoformat() for start, _ in blocks]
+    # 3 × 156 buffered minutes fits inside an eight-hour day; the fourth does not.
+    assert days == ["2026-08-30"] * 3 + ["2026-08-31"]
+    assert blocks[0][0].isoformat() == "2026-08-30T09:00:00+00:00"
+
+
+def test_placement_respects_the_daily_cap():
+    """A smaller cap fills fewer tasks into a day, and says so."""
+    tasks = [make_task(f"t{i}", estimated_time=120, impact=8, effort=2)
+             for i in range(4)]
+    derived = logic.compute(tasks, {**SETTINGS, "day_capacity": 180}, now=NOW)
+    days = {t["id"]: logic.parse_dt(derived[t["id"]]["deadline"]).date().isoformat()
+            for t in tasks}
+    # 156 minutes each, three hours a day: one task per day, four days running.
+    assert sorted(days.values()) == ["2026-08-30", "2026-08-31",
+                                     "2026-09-01", "2026-09-02"]
+
+
+def test_a_deadline_you_set_takes_its_room_first():
+    """Auto-placed work fits around commitments, not on top of them."""
+    fixed = make_task("fixed", estimated_time=240,   # 312 buffered, ends 13:00
+                      deadline="2026-08-30T13:00:00+00:00")
+    auto = make_task("auto", estimated_time=60, impact=8, effort=2, order_index=1)
+    derived = logic.compute([fixed, auto], SETTINGS, now=NOW)
+    (_, fixed_end), (auto_start, _) = spans(derived, ["fixed", "auto"])
+    assert fixed_end.isoformat() == "2026-08-30T13:00:00+00:00"
+    assert auto_start >= fixed_end
+
+
+def test_placement_is_stable_across_recomputes():
+    """A reload must not reshuffle your week."""
+    tasks = [make_task(f"t{i}", estimated_time=90, impact=8, effort=2)
+             for i in range(5)]
+    first = logic.compute(tasks, SETTINGS, now=NOW)
+    second = logic.compute(tasks, SETTINGS, now=NOW)
+    assert {k: v["deadline"] for k, v in first.items()} == \
+           {k: v["deadline"] for k, v in second.items()}
+
+
+def test_a_tree_is_booked_once_not_once_per_step():
+    """A container and its steps are the same work, not twice the work."""
+    parent = make_task("p", impact=8, effort=2)
+    kids = [make_task(f"c{i}", parent_id="p", estimated_time=120, order_index=i)
+            for i in range(2)]
+    other = make_task("other", estimated_time=60, impact=8, effort=2, order_index=1)
+    derived = logic.compute([parent, *kids, other], SETTINGS, now=NOW)
+
+    # The tree is one span: its last step ends exactly on the parent's deadline
+    # and its first starts one subtree's worth of work earlier.
+    parent_end = logic.parse_dt(derived["p"]["deadline"])
+    assert logic.parse_dt(derived["c1"]["deadline"]) == parent_end
+    assert derived["p"]["length_min"] == 2 * 156
+    assert (parent_end - timedelta(minutes=2 * 156)).isoformat() == \
+        "2026-08-30T09:00:00+00:00"
+    # 312 minutes of tree plus 78 of the other task is inside the eight-hour
+    # cap, so both fit on the same day. Charging the day for the container as
+    # well as the steps it is made of would have come to 702 and pushed the
+    # second task into tomorrow for no reason.
+    assert logic.parse_dt(derived["other"]["deadline"]).date().isoformat() == \
+        "2026-08-30"
+
+
+def test_work_bigger_than_a_day_gets_a_day_to_itself():
+    small = make_task("small", estimated_time=60, impact=8, effort=2)
+    huge = make_task("huge", estimated_time=720, impact=8, effort=2, order_index=1)
+    derived = logic.compute([small, huge], SETTINGS, now=NOW)
+    # It cannot fit under the cap anywhere, so it takes the first day nothing
+    # else has claimed and runs past the end of the working window rather than
+    # being cut up or quietly hidden.
+    assert derived["huge"]["length_min"] == 936
+    start, _ = spans(derived, ["huge"])[0]
+    assert start.isoformat() == "2026-08-31T09:00:00+00:00"
+
+
+def test_today_is_never_scheduled_in_the_hours_already_gone():
+    """A slot at 9am is no use at noon."""
+    yesterday = (NOW - timedelta(days=1)).isoformat()
+    t = make_task("a", estimated_time=60, impact=8, effort=2, created_at=yesterday)
+    derived = logic.compute([t], SETTINGS, now=NOW)
+    start, _ = spans(derived, ["a"])[0]
+    assert start >= NOW
+
+
+def test_overdue_work_stays_overdue():
+    """Spreading must not quietly reschedule the past into the future."""
+    long_ago = (NOW - timedelta(days=10)).isoformat()
+    t = make_task("a", estimated_time=60, impact=8, effort=2, created_at=long_ago)
+    derived = logic.compute([t], SETTINGS, now=NOW)
+    assert logic.parse_dt(derived["a"]["deadline"]) < NOW
+    assert derived["a"]["urgency"] == 10.0
+
+
+def test_planner_shared_across_projects_keeps_them_off_each_other():
+    """Two tabs, one day: the second project plans around the first."""
+    planner = logic.day_planner(SETTINGS)
+    work = [make_task("w", estimated_time=300, impact=8, effort=2)]
+    house = [make_task("h", estimated_time=300, impact=8, effort=2)]
+    first = logic.compute(work, SETTINGS, now=NOW, planner=planner)
+    second = logic.compute(house, SETTINGS, now=NOW, planner=planner)
+    assert logic.parse_dt(first["w"]["deadline"]).date().isoformat() == "2026-08-30"
+    # 390 buffered minutes each: the second one cannot also fit in eight hours.
+    assert logic.parse_dt(second["h"]["deadline"]).date().isoformat() == "2026-08-31"
+
+
+def test_reserve_fixed_books_commitments_before_anything_is_placed():
+    planner = logic.day_planner(SETTINGS)
+    pinned = [make_task("p", estimated_time=300,
+                        deadline="2026-08-30T16:00:00+00:00")]
+    logic.reserve_fixed(planner, pinned, SETTINGS)
+    auto = [make_task("a", estimated_time=300, impact=8, effort=2)]
+    derived = logic.compute(auto, SETTINGS, now=NOW, planner=planner)
+    # The pinned task ate most of the 30th, so the placed one moves on.
+    assert logic.parse_dt(derived["a"]["deadline"]).date().isoformat() == "2026-08-31"
+
+
+# ---- the daily cap, and what it learns ----
+
+def day_history(pairs):
+    """[(days ago, minutes), ...] as completion history rows."""
+    return [{"finished_at": (NOW - timedelta(days=d)).isoformat(), "minutes": m}
+            for d, m in pairs]
+
+
+def test_daily_totals_add_up_per_local_day():
+    history = day_history([(1, 120), (1, 60), (2, 200)])
+    totals = logic.daily_totals(history)
+    assert sorted(totals.values()) == [180, 200]
+
+
+def test_daily_totals_are_local_days():
+    """A task finished at 11pm belongs to the day it read as on your wall."""
+    history = [{"finished_at": "2026-08-30T02:00:00+00:00", "minutes": 60}]
+    ny = logic.resolve_tz("America/New_York")
+    assert list(logic.daily_totals(history, ny)) == ["2026-08-29"]
+    assert list(logic.daily_totals(history)) == ["2026-08-30"]
+
+
+def test_capacity_is_the_configured_cap_without_evidence():
+    plan = logic.capacity_plan({"day_capacity": 480}, day_history([(1, 60)]))
+    assert plan["minutes"] == 480
+    assert plan["learned"] is False
+    assert plan["days"] == 1  # not enough days to say anything yet
+
+
+def test_capacity_falls_toward_the_day_you_actually_have():
+    """A goal you never reach is not a plan, it is a daily notification."""
+    history = day_history([(d, 180) for d in range(1, 9)])
+    plan = logic.capacity_plan({"day_capacity": 480}, history)
+    assert plan["hit_rate"] == 0.0
+    assert plan["typical"] == 180
+    assert plan["minutes"] == 330      # halfway from 480 to 180
+    assert plan["learned"] is True
+
+
+def test_capacity_rises_when_the_goal_is_cleared_every_day():
+    history = day_history([(d, 600) for d in range(1, 9)])
+    plan = logic.capacity_plan({"day_capacity": 480}, history)
+    assert plan["hit_rate"] == 1.0
+    assert plan["minutes"] == 540      # halfway from 480 to 600
+
+
+def test_capacity_left_alone_while_the_goal_still_means_something():
+    history = day_history([(1, 500), (2, 200), (3, 520), (4, 180),
+                           (5, 300), (6, 490)])
+    plan = logic.capacity_plan({"day_capacity": 480}, history)
+    assert 0.30 <= plan["hit_rate"] <= 0.75
+    assert plan["minutes"] == 480
+    assert plan["learned"] is False
+
+
+def test_capacity_learning_can_be_turned_off():
+    history = day_history([(d, 120) for d in range(1, 9)])
+    plan = logic.capacity_plan(
+        {"day_capacity": 480, "adaptive_capacity": False}, history)
+    assert plan["minutes"] == 480
+    assert plan["adaptive"] is False
+
+
+def test_capacity_stays_within_its_bounds():
+    tiny = logic.capacity_plan({"day_capacity": 5}, [])
+    assert tiny["minutes"] == logic.CAPACITY_FLOOR
+    huge = logic.capacity_plan({"day_capacity": 5000}, [])
+    assert huge["minutes"] == logic.CAPACITY_CEILING
+
+
+def test_days_off_are_not_evidence_of_a_short_day():
+    """Only days you finished something on count."""
+    history = day_history([(1, 480), (3, 480), (5, 480), (9, 480), (12, 480)])
+    plan = logic.capacity_plan({"day_capacity": 480}, history)
+    assert plan["days"] == 5          # five days, not the fortnight between them
+    assert plan["typical"] == 480
+
+
+def test_unknown_timezone_falls_back_to_utc():
+    assert logic.resolve_tz("Mars/Olympus") is timezone.utc
+    assert logic.resolve_tz("") is timezone.utc
+    assert logic.resolve_tz(None) is timezone.utc
