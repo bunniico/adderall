@@ -145,9 +145,9 @@ set `ANTHROPIC_WORKSPACE_ID`. You can find the ID in the Claude Console URL:
   how long they are, and a line across the current time, above a running
   count of how much of the day is booked against how much it holds. **Week**
   and **Month**
-  are day-by-day lists ranked by **score** — deadline pressure, impact and how
-  cheap the task is, folded into one 0–100 number — so the top of each day is
-  what that day is actually about. Arrow keys page through, `T` goes to today,
+  are day-by-day lists ranked by **score** — deadline pressure, impact, effort
+  and how long it takes, folded into one 0–100 number — so the top of each day
+  is what that day is actually about. Arrow keys page through, `T` goes to today,
   `D`/`W`/`M` switch view, and clicking any task opens it wherever it lives.
 - **Nudge past-due work** — a deadline that has already gone by is the most
   demoralizing thing a list like this can show you, and re-typing a date for
@@ -231,6 +231,20 @@ set `ANTHROPIC_WORKSPACE_ID`. You can find the ID in the Claude Console URL:
   on an action-priority matrix: ⚡ quick wins, 🏔 major projects, fill-ins,
   and 😮‍💨 **thankless tasks** — which trigger a gentle "this is high effort,
   low impact; consider dropping it" suggestion.
+- **One score, four signals** — **urgency** (40%), **impact** (30%), **effort**
+  (15%) and **time cost** (15%) fold into a single 0–100 number. Effort and
+  time are counted separately because they are different costs: a form you
+  dread for ten minutes is cheap on the clock and dear in effort, three hours
+  of mindless data entry is the other way round. Time cost decays rather than
+  scaling flat — ten minutes scores 8.6, an hour 5, a whole day about 1 —
+  because shaving twenty minutes off a half-hour job changes whether you do it
+  now, and shaving twenty off a six-hour one changes nothing. A task nobody has
+  estimated or rated sits at neutral, never at zero.
+- **A parent is its parts** — a task with subtasks gets no score of its own.
+  It inherits the combined score of the work still underneath it, each step
+  weighing what it costs in minutes, all the way down the tree. Finished and
+  discarded steps stop counting, so a project is worth what is left of it —
+  and re-rating a container changes nothing, because the work is in the steps.
 - **Deadlines & urgency** — set deadlines yourself or let the app auto-assign
   them (toggleable). Subtasks are backward-scheduled from their parent's
   deadline using buffered estimates. Urgency rises as remaining time shrinks

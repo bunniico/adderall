@@ -426,8 +426,8 @@ function eventChip(e, opts = {}) {
   const score = document.createElement("span");
   score.className = "cal-score";
   score.textContent = Math.round(e.score ?? 0);
-  score.title = `Score ${Math.round(e.score ?? 0)}/100 — urgency, impact and ` +
-    `effort combined. Higher comes first.`;
+  score.title = `Score ${Math.round(e.score ?? 0)}/100 — urgency, impact, ` +
+    `effort and time cost combined. Higher comes first.`;
   open.appendChild(score);
 
   open.addEventListener("click", () => openDetail(e.id));

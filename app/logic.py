@@ -44,12 +44,24 @@ DEFAULT_DAY_START = 9           # local hour the working window opens
 # answer is "you have too much on", not "the app picked the wrong Tuesday".
 PLACEMENT_SEARCH_DAYS = 180
 
-# Priority score weights. Urgency carries the Eisenhower half (how close the
-# deadline is relative to the work left), impact the importance half, and ease
-# — a low effort score — breaks the ties in favour of quick wins. They sum to
-# 1.0, so the score lands on a 0-100 scale you can read at a glance.
-SCORE_WEIGHTS = {"urgency": 0.45, "impact": 0.35, "ease": 0.20}
+# Priority score weights, over the four things the app knows about a task.
+# Urgency carries the Eisenhower half (how close the deadline is relative to
+# the work left) and impact the importance half; the other two are the cost of
+# doing it, split because they are not the same cost. Ease is the inverse of
+# effort — how hard the task is to face — and brevity the inverse of time cost,
+# how long it will actually take. A form you dread for ten minutes is cheap on
+# the clock and dear in effort; three hours of mindless data entry is the other
+# way round, and a score built on effort alone calls them the same task.
+# They sum to 1.0, so the score lands on a 0-100 scale you can read at a glance.
+SCORE_WEIGHTS = {"urgency": 0.40, "impact": 0.30, "ease": 0.15, "brevity": 0.15}
 NEUTRAL_SCORE = 5  # stand-in for an impact/effort the AI hasn't filled in yet
+
+# Minutes at which time cost scores a middling 5 — an hour, which is also what
+# an un-estimated task is treated as being worth. The curve below is a decay
+# rather than a line on purpose: the gap between ten minutes and half an hour
+# is the difference between doing it now and scheduling it, while the gap
+# between six hours and eight is no difference at all — both are "not today".
+TIME_COST_HALFLIFE = 60
 
 # ---- how the list is sorted ----
 # "smart" is the app's own opinion (urgency, then quadrant); "manual" is the
@@ -449,14 +461,40 @@ def block_length(derived: dict) -> int:
     return max(1, int(length or DEFAULT_ESTIMATE_MIN))
 
 
-def priority_score(impact: int | None, effort: int | None, urgency_value: float) -> float:
+def brevity(minutes: int | None) -> float:
+    """0-10: how cheap a task is on the clock, from the time it will take.
+
+    The inverse of time cost, on the same 0-10 scale as impact and effort so
+    it can sit in the same weighted sum. It decays rather than falls in a
+    straight line — ten minutes scores 8.6, an hour 5, a whole day about 1 —
+    because that is how the choice actually feels: shaving twenty minutes off
+    a half-hour job changes whether you do it now, shaving twenty off a
+    six-hour one changes nothing.
+
+    An un-estimated task sits at neutral, the same way an unrated one does.
+    Guessing it is quick would reward never estimating anything.
+    """
+    if minutes is None or minutes <= 0:
+        return float(NEUTRAL_SCORE)
+    return 10.0 * TIME_COST_HALFLIFE / (TIME_COST_HALFLIFE + minutes)
+
+
+def priority_score(impact: int | None, effort: int | None, urgency_value: float,
+                   minutes: int | None = None) -> float:
     """0-100: one number for "what deserves the next hour".
 
     The week and month views put a whole day of tasks on screen at once, and
     a list in deadline order says nothing about which of them actually
-    matters. This folds the three signals the app already keeps — deadline
-    pressure (urgency), importance (impact) and cost (effort, counted as its
-    inverse so cheap wins float) — into a single comparable number.
+    matters. This folds the four signals the app keeps — deadline pressure
+    (urgency), importance (impact), and the two halves of what it costs you:
+    effort, how hard it is to face, and time, how much of the day it eats.
+    Both costs are counted as their inverse, so cheap wins float.
+
+    Effort alone used to stand for the whole cost, which quietly made every
+    two-minute email and every three-hour slog the same task as long as they
+    felt equally unpleasant. `minutes` is the buffered estimate — the honest
+    length, time tax included — and for a container the work still left inside
+    it (see `block_length`).
 
     Unscored tasks sit at neutral rather than at zero: a task nobody has
     rated yet is unknown, not worthless.
@@ -465,7 +503,8 @@ def priority_score(impact: int | None, effort: int | None, urgency_value: float)
     eff = NEUTRAL_SCORE if effort is None else max(0, min(10, effort))
     raw = (SCORE_WEIGHTS["urgency"] * max(0.0, min(10.0, urgency_value))
            + SCORE_WEIGHTS["impact"] * imp
-           + SCORE_WEIGHTS["ease"] * (10 - eff))
+           + SCORE_WEIGHTS["ease"] * (10 - eff)
+           + SCORE_WEIGHTS["brevity"] * brevity(minutes))
     return round(raw * 10, 1)
 
 
@@ -656,17 +695,66 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
         if d["has_subtasks"] and t["status"] in ACTIVE_STATUSES:
             d["urgency"] = urgency(parse_dt(d["rollup_deadline"]),
                                    d["rollup_remaining"], now)
-        # Computed last, so containers score off the urgency of what they
-        # actually still hold rather than off their own empty shell.
-        d["score"] = priority_score(t["impact"], t["effort"], d["urgency"])
+        # Length before score: how long a task takes is one of the four things
+        # the score is made of, and for a container that is the work inside it.
         d["length_min"] = block_length(d)
         d["raw_length_min"] = max(1, round(d["length_min"] / (1.0 + buf)))
+        # Computed after urgency, so containers score off what they actually
+        # still hold rather than off their own empty shell. Containers then
+        # have this replaced outright by the pass below.
+        d["score"] = priority_score(t["impact"], t["effort"], d["urgency"],
+                                    d["length_min"])
+
+    # A parent is its parts. Bottom-up, so a container at any depth ends up
+    # holding the combined score of the work underneath it.
+    for t in tasks:
+        if t["parent_id"] not in by_id:
+            _rollup_score(t, children, derived)
+
+    # Sort keys last of all: two of them read the score, which is only final
+    # once the rollup above has been through the whole tree.
+    for t in tasks:
+        d = derived[t["id"]]
         # Manual order means manual order: once you have arranged the list by
         # hand, the app stops second-guessing you and reads it top to bottom.
         d["sort_key"] = (manual_sort_key(t, d) if sort_field == "manual"
                          else smart_sort_key(t, d))
         d["list_sort_key"] = list_sort_key(t, d, sort_field, sort_desc)
     return derived
+
+
+def _rollup_score(task: dict, children: dict, derived: dict) -> tuple[float, int]:
+    """Replace every container's score with the combined score of its subtask
+    tree, and return that subtree as (score x minutes, minutes).
+
+    A parent of subtasks has no score of its own to give. Whatever impact and
+    effort someone once put on "Move house" describes nothing you can sit down
+    and do; the work is in the steps, and so is the number. So a container is
+    scored as the weighted mean of the leaves beneath it, each weighing what
+    it costs in minutes — which makes the parent read as exactly what its
+    remaining afternoon is worth, and moves it up and down as the steps inside
+    it are scored, finished, or dropped.
+
+    Leaves only, the same rule the rest of the module books time by: a
+    container adds no minutes of its own, so nothing is counted twice. Work
+    already done or discarded weighs nothing either — a project is worth what
+    is left of it, not what it once was. A container whose subtasks are all
+    finished has nothing left to inherit from and keeps its own score.
+    """
+    kids = [c for c in children.get(task["id"], []) if c["status"] != "discarded"]
+    weighted, minutes = 0.0, 0
+    for kid in kids:
+        kid_weighted, kid_minutes = _rollup_score(kid, children, derived)
+        weighted += kid_weighted
+        minutes += kid_minutes
+    d = derived[task["id"]]
+    if kids:
+        if minutes:
+            d["score"] = round(weighted / minutes, 1)
+        return weighted, minutes
+    if task["status"] not in ACTIVE_STATUSES:
+        return 0.0, 0
+    return d["score"] * d["length_min"], d["length_min"]
 
 
 def next_task(tasks: list[dict], derived: dict[str, dict]) -> dict | None:
