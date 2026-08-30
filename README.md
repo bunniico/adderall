@@ -62,6 +62,13 @@ pulls and rebuilds every time:
 If the pull fails (local edits, diverged history) it says so and starts the
 version you already have, rather than refusing to launch.
 
+### Resource limits
+
+The container is capped at **1 CPU and 512 MB of RAM** in `docker-compose.yml`.
+A FastAPI app over a SQLite file never comes close to that, so the cap mostly
+keeps a runaway from taking the machine with it. If you ever do hit it, raise
+`deploy.resources.limits` in `docker-compose.yml`.
+
 ### Running it at boot
 
 To bring the app up automatically when the machine starts, install a systemd
