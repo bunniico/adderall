@@ -9,6 +9,7 @@
 </head>
 <body>
 
+<div class="page-head">
 <header class="topbar">
   <h1>⏳ adderall</h1>
   <div class="topbar-actions">
@@ -25,6 +26,13 @@
   </div>
 </header>
 
+<nav id="project-tabs" class="project-tabs" aria-label="Projects">
+  <div id="tab-strip" class="tab-strip" role="tablist"></div>
+  <button id="btn-add-project" class="tab-new ghost"
+    title="New project — a separate list of tasks in its own tab">＋</button>
+</nav>
+</div>
+
 <main>
   <form id="add-form" autocomplete="off">
     <input id="add-title" type="text" placeholder="Add a task… (Enter to add)" maxlength="500" required>
@@ -38,7 +46,8 @@
 
   <section id="task-list" class="task-list" aria-live="polite"></section>
   <p id="empty-hint" class="empty-hint" hidden>
-    Nothing here yet. Add a task above, or hit <b>🧠 Braindump</b> and empty your head.
+    <span id="empty-project"></span>Add a task above, or hit
+    <b>🧠 Braindump</b> and empty your head.
   </p>
   <p id="list-hint" class="list-hint" hidden>
     <b>+</b> adds a subtask by hand · drag <b>⠿</b> to reorder, or onto another
@@ -78,6 +87,9 @@
       </label>
     </div>
     <p>Quadrant: <span id="d-quadrant" class="quad-badge"></span></p>
+    <label id="d-project-row" hidden>Project
+      <select id="d-project" title="Move this task — and everything under it — to another tab"></select>
+    </label>
     <div class="modal-actions">
       <button type="button" id="d-breakdown" class="ghost">⚡ Break down</button>
       <button type="button" id="d-annotate" class="ghost" title="Ask the AI to re-estimate and re-score">🎲 Re-estimate</button>

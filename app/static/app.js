@@ -7,9 +7,12 @@
 
 const $ = (id) => document.getElementById(id);
 
-let state = { tasks: [], next_task_id: null };
+let state = { tasks: [], next_task_id: null, projects: [], active_project_id: null,
+              alarm_tasks: [] };
 let settings = null;
 let detailTaskId = null;
+let renamingProject = null;   // project whose tab is currently an input box
+let renameFocusPending = false;
 const thanklessQueue = [];
 let thanklessShowing = null;
 let subtaskDraftFor = null;   // task whose inline "add a subtask" box is open
@@ -43,6 +46,7 @@ function applyState(newState) {
       thanklessQueue.push(t.id);
     }
   }
+  renderTabs();
   render();
   maybeShowThankless();
   scheduleTransitionAlarms();
@@ -63,6 +67,176 @@ function findTask(id, list = state.tasks) {
     if (found) return found;
   }
   return null;
+}
+
+/* ---------------- projects (tabs) ----------------
+ * Each project is its own list of tasks, one open at a time. The server
+ * remembers which tab you are on, so a reload — or the same app opened on
+ * your phone — comes back to the project you were actually working in.
+ * Everything else on the page (adding, braindumping, focusing, ordering)
+ * acts on the open tab and nothing else. */
+
+function renderTabs() {
+  const strip = $("tab-strip");
+  strip.replaceChildren();
+  const projects = state.projects || [];
+  for (const project of projects) {
+    strip.appendChild(
+      renamingProject === project.id ? renameTab(project) : projectTab(project));
+  }
+  // Only worth a strip once there is something to switch between; a single
+  // project is just "the list", and a lone tab is noise.
+  $("project-tabs").classList.toggle("solo", projects.length < 2);
+  if (renameFocusPending) {
+    renameFocusPending = false;
+    const input = strip.querySelector(".tab-rename input");
+    if (input) { input.focus(); input.select(); }
+  }
+  // On a narrow screen the strip scrolls: the tab you are on has to be the
+  // one you can see, however far along the row it sits.
+  strip.querySelector(".tab.active")
+    ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+
+function projectTab(project) {
+  const active = project.id === state.active_project_id;
+  const tab = document.createElement("div");
+  tab.className = "tab" + (active ? " active" : "");
+  tab.setAttribute("role", "presentation");  // the button inside is the tab
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "tab-btn";
+  btn.setAttribute("role", "tab");
+  btn.setAttribute("aria-selected", String(active));
+  btn.title = active ? "Click to rename" : `Switch to ${project.name}`;
+  const name = document.createElement("span");
+  name.className = "tab-name";
+  name.textContent = project.name;
+  btn.appendChild(name);
+  if (project.open_tasks) {
+    const count = document.createElement("span");
+    count.className = "tab-count";
+    count.textContent = project.open_tasks;
+    count.title = `${project.open_tasks} unfinished task` +
+      (project.open_tasks === 1 ? "" : "s");
+    btn.appendChild(count);
+  }
+  btn.addEventListener("click", () => {
+    if (active) startRename(project.id);
+    else switchProject(project.id);
+  });
+  btn.addEventListener("dblclick", () => startRename(project.id));
+  tab.appendChild(btn);
+
+  if (active) {
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "tab-close";
+    del.textContent = "✕";
+    del.title = `Delete ${project.name} and everything in it`;
+    del.setAttribute("aria-label", "Delete project " + project.name);
+    del.addEventListener("click", (e) => {
+      e.stopPropagation();
+      deleteProject(project.id);
+    });
+    tab.appendChild(del);
+  }
+  return tab;
+}
+
+/* Renaming happens in place, in the tab itself — no modal for something this
+ * small. Enter or clicking away keeps it, Escape puts the old name back. */
+function renameTab(project) {
+  const form = document.createElement("form");
+  form.className = "tab tab-rename active";
+  form.setAttribute("role", "presentation");
+  form.autocomplete = "off";
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.maxLength = 80;
+  input.value = project.name;
+  input.setAttribute("aria-label", "Project name");
+
+  let settled = false;
+  const commit = () => {
+    if (settled) return;
+    settled = true;
+    const name = input.value.trim();
+    renamingProject = null;
+    if (name && name !== project.name) renameProject(project.id, name);
+    else renderTabs();
+  };
+  const cancel = () => {
+    if (settled) return;
+    settled = true;
+    renamingProject = null;
+    renderTabs();
+  };
+
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { e.stopPropagation(); cancel(); }
+  });
+  input.addEventListener("blur", commit);
+  form.addEventListener("submit", (e) => { e.preventDefault(); commit(); });
+  form.appendChild(input);
+  return form;
+}
+
+function startRename(projectId) {
+  renamingProject = projectId;
+  renameFocusPending = true;
+  renderTabs();
+}
+
+async function switchProject(projectId) {
+  renamingProject = null;
+  subtaskDraftFor = null;
+  try {
+    applyState(await api(`/projects/${projectId}/activate`, { method: "POST" }));
+  } catch (e) { toast(e.message, true); }
+}
+
+async function addProject() {
+  try {
+    applyState(await api("/projects", {
+      method: "POST", body: JSON.stringify({ name: "New project" }),
+    }));
+  } catch (e) { toast(e.message, true); return; }
+  // Lands you on the new tab with its name selected: name it and start typing
+  // tasks, rather than hunting for a rename control afterwards.
+  startRename(state.active_project_id);
+}
+
+async function renameProject(projectId, name) {
+  try {
+    applyState(await api(`/projects/${projectId}`, {
+      method: "PATCH", body: JSON.stringify({ name }),
+    }));
+  } catch (e) { toast(e.message, true); }
+}
+
+async function deleteProject(projectId) {
+  const project = (state.projects || []).find((p) => p.id === projectId);
+  if (!project) return;
+  if ((state.projects || []).length < 2) {
+    toast("This is your only project — rename it instead of deleting it.");
+    return;
+  }
+  const n = project.open_tasks;
+  const what = n ? ` and its ${n} unfinished task${n === 1 ? "" : "s"}` : "";
+  if (!confirm(`Delete “${project.name}”${what}? Everything in it goes too, ` +
+               `and this can't be undone.`)) return;
+  try {
+    applyState(await api(`/projects/${projectId}`, { method: "DELETE" }));
+    toast(`Deleted “${project.name}”.`);
+  } catch (e) { toast(e.message, true); }
+}
+
+function switchToProjectAt(index) {
+  const project = (state.projects || [])[index];
+  if (project && project.id !== state.active_project_id) switchProject(project.id);
 }
 
 /* ---------------- rendering ---------------- */
@@ -237,6 +411,10 @@ function render() {
   for (const t of sortActive(active)) list.appendChild(taskNode(t, false));
   $("empty-hint").hidden = active.length > 0;
   $("list-hint").hidden = active.length === 0;
+  const project = (state.projects || []).find(
+    (p) => p.id === state.active_project_id);
+  $("empty-project").textContent = project && (state.projects || []).length > 1
+    ? `“${project.name}” is empty. ` : "Nothing here yet. ";
 
   const finished = state.tasks.filter(
     (t) => t.status === "done" || t.status === "discarded");
@@ -638,6 +816,18 @@ function openDetail(id) {
   $("d-estimate").value = task.estimated_time ?? "";
   $("d-impact").value = task.impact ?? 5;
   $("d-effort").value = task.effort ?? 5;
+  // Moving between tabs only means anything once there is more than one.
+  const projects = state.projects || [];
+  const select = $("d-project");
+  select.replaceChildren();
+  for (const p of projects) {
+    const opt = document.createElement("option");
+    opt.value = p.id;
+    opt.textContent = p.name;
+    select.appendChild(opt);
+  }
+  select.value = task.project_id || state.active_project_id;
+  $("d-project-row").hidden = projects.length < 2;
   updateDetailDerived();
   $("modal-detail").showModal();
 }
@@ -674,8 +864,22 @@ async function saveDetail() {
   const dl = $("d-deadline").value;
   if (dl) fields.deadline = new Date(dl).toISOString();
   else fields.clear_deadline = true;
+  const task = findTask(detailTaskId);
+  const targetProject = $("d-project").value;
+  const moving = !$("d-project-row").hidden && task &&
+                 targetProject && targetProject !== task.project_id;
+  const id = detailTaskId;
   $("modal-detail").close();
-  await patchTask(detailTaskId, fields);
+  await patchTask(id, fields);
+  if (moving) {
+    const name = (state.projects || []).find((p) => p.id === targetProject)?.name;
+    try {
+      applyState(await api(`/tasks/${id}/project`, {
+        method: "POST", body: JSON.stringify({ project_id: targetProject }),
+      }));
+      toast(`Moved to “${name}” — it's waiting in that tab.`);
+    } catch (e) { toast(e.message, true); }
+  }
 }
 
 /* ---------------- thankless modal ---------------- */
@@ -815,8 +1019,12 @@ function checkTransitionAlarms() {
     { key: "ready", lead: settings.alarms.ready_lead, text: (t) => `🧦 Get ready: “${t.title}”` },
     { key: "go", lead: settings.alarms.go_lead, text: (t) => `🚀 Time for “${t.title}” — go now` },
   ];
-  for (const t of flatten(state.tasks)) {
-    if (!(t.status === "todo" || t.status === "in_progress") || !t.deadline) continue;
+  // Deadlines come from every project, not just the open tab: a cue you
+  // miss because its task is one tab over is the whole failure mode this
+  // app is built to avoid. The banner says which project when it isn't
+  // the one on screen.
+  for (const t of state.alarm_tasks || []) {
+    if (!t.deadline) continue;
     const due = new Date(t.deadline).getTime();
     for (const stage of stages) {
       const fireAt = due - stage.lead * 60000;
@@ -826,9 +1034,11 @@ function checkTransitionAlarms() {
       // deadlines that were already long past when the page opened.
       if (now >= fireAt && now - fireAt < 2 * 60000) {
         firedAlarms.add(id);
+        const where = t.project_id && t.project_id !== state.active_project_id
+          ? ` · in ${t.project_name}` : "";
         SOUNDS[stage.key]();
-        showAlarmBanner(stage.text(t));
-        notify(stage.text(t));
+        showAlarmBanner(stage.text(t) + where);
+        notify(stage.text(t) + where);
       } else if (now - fireAt >= 2 * 60000) {
         firedAlarms.add(id); // silently expire stale cues
       }
@@ -870,7 +1080,8 @@ setInterval(checkTransitionAlarms, 30000);
 
 const FOCUS_KEY = "adderall.focus.v1";
 const FOCUS_PERSIST = [
-  "active", "rootId", "rootTitle", "taskId", "taskTitle", "path", "stepsLeft",
+  "active", "projectId", "rootId", "rootTitle", "taskId", "taskTitle",
+  "taskDescription", "path", "stepsLeft",
   "estimateMin", "totalSec", "startedAt", "pausedAccum", "pauseStart", "paused",
   "skipped", "cuesFired",
 ];
@@ -879,10 +1090,12 @@ const focus = {
   active: false,      // a session exists — running even while the overlay is closed
   open: false,        // overlay visible
   advancing: false,   // guards against re-entrant queue walks
+  projectId: null,    // the tab this session belongs to
   rootId: null,
   rootTitle: "",
   taskId: null,
   taskTitle: "",
+  taskDescription: "",
   path: [],
   stepsLeft: 0,
   nextTitle: "",
@@ -943,6 +1156,7 @@ async function startFocus(taskId) {
   } catch (e) { toast(e.message, true); return; }
   if (!data.queue.length) { toast("Nothing to focus on — add a task first."); return; }
   focus.active = true;
+  focus.projectId = data.project_id || state.active_project_id;
   focus.rootId = data.root_id;
   focus.rootTitle = data.root_title || "";
   focus.skipped = [];
@@ -966,6 +1180,7 @@ async function advanceFocus() {
       if (data && data.root_id && data.root_id !== focus.rootId) {
         focus.rootId = data.root_id;
         focus.rootTitle = data.root_title || "";
+        focus.projectId = data.project_id || focus.projectId;
         focus.skipped = [];
       }
       item = pickFromQueue(data);
@@ -993,6 +1208,8 @@ function focusOn(item, data, resetTimer) {
   const idx = queue.findIndex((t) => t.id === item.id);
   focus.taskId = item.id;
   focus.taskTitle = item.title;
+  focus.taskDescription = item.description || "";
+  focus.projectId = (data && data.project_id) || item.project_id || focus.projectId;
   focus.path = item.path || [];
   focus.stepsLeft = queue.length - (idx < 0 ? 0 : idx);
   focus.nextTitle = idx >= 0 && queue[idx + 1] ? queue[idx + 1].title : "";
@@ -1049,6 +1266,7 @@ function endFocus() {
   focus.open = false;
   focus.taskId = null;
   focus.rootId = null;
+  focus.projectId = null;
   focus.skipped = [];
   $("focus-overlay").hidden = true;
   renderFocusPill();
@@ -1059,6 +1277,13 @@ function endFocus() {
  * overlay is closed, the session walks on by itself. */
 function syncFocusWithState() {
   if (!focus.active || focus.advancing) return;
+  // A session running in another tab is not missing, it is simply off
+  // screen — the list we just rendered says nothing about it either way.
+  if (focus.projectId && state.active_project_id &&
+      focus.projectId !== state.active_project_id) {
+    renderFocusPill();
+    return;
+  }
   const task = focus.taskId ? findTask(focus.taskId) : null;
   if (!task || !(task.status === "todo" || task.status === "in_progress")) {
     advanceFocus();
@@ -1076,7 +1301,7 @@ function syncFocusWithState() {
 function renderFocusTask() {
   const task = focus.taskId ? findTask(focus.taskId) : null;
   $("f-title").textContent = focus.taskTitle || "";
-  $("f-description").textContent = task?.description || "";
+  $("f-description").textContent = task?.description || focus.taskDescription || "";
   $("f-path").textContent = focus.path.length ? focus.path.join(" › ") : "";
   const scope = focus.rootTitle && focus.path.length ? ` in “${focus.rootTitle}”` : "";
   $("f-progress").textContent = focus.stepsLeft > 1
@@ -1263,6 +1488,23 @@ function wire() {
   });
 
   wireListDropTarget();
+
+  $("btn-add-project").addEventListener("click", addProject);
+
+  // Alt+1…9 jumps straight to a tab. Ctrl/Cmd+number belongs to the browser's
+  // own tabs, so it stays out of the way. Read off the physical key, because
+  // Alt+1 types a symbol rather than a digit on several layouts — and for
+  // that same reason it is left alone while you are typing in a field.
+  document.addEventListener("keydown", (e) => {
+    if (!e.altKey || e.ctrlKey || e.metaKey) return;
+    if (e.target?.closest?.("input, textarea, select")) return;
+    const digit = /^Digit([1-9])$/.exec(e.code || "");
+    const n = digit ? Number(digit[1]) : Number(e.key);
+    if (!Number.isInteger(n) || n < 1 || n > 9) return;
+    if (!(state.projects || [])[n - 1]) return;
+    e.preventDefault();
+    switchToProjectAt(n - 1);
+  });
 
   $("btn-braindump").addEventListener("click", () => $("modal-braindump").showModal());
   $("b-compile").addEventListener("click", compileBraindump);

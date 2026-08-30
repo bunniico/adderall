@@ -60,6 +60,18 @@ class TaskMove(BaseModel):
     mode: str | None = Field(default=None, pattern="^(before|after|into)$")
 
 
+class ProjectCreate(BaseModel):
+    name: str = Field(default="New project", min_length=1, max_length=80)
+
+
+class ProjectUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+
+
+class TaskProjectMove(BaseModel):
+    project_id: str
+
+
 class BreakdownRequest(BaseModel):
     granularity: int | None = Field(default=None, ge=1, le=5)
 
@@ -78,15 +90,11 @@ class SettingsUpdate(BaseModel):
 
 # ---------- helpers ----------
 
-def _state() -> dict:
-    """Full task tree with derived fields — the one payload the page renders."""
-    tasks = db.list_tasks()
-    settings = db.get_settings()
-    derived = logic.compute(tasks, settings, db.completion_ratios())
+def _tree(tasks: list[dict], derived: dict[str, dict]) -> list[dict]:
+    """Nest a flat task list into roots + subtasks, derived fields merged in."""
     by_id: dict[str, dict] = {}
     for t in tasks:
-        merged = {**t, **derived[t["id"]], "subtasks": []}
-        by_id[t["id"]] = merged
+        by_id[t["id"]] = {**t, **derived[t["id"]], "subtasks": []}
     roots = []
     for t in tasks:
         node = by_id[t["id"]]
@@ -94,8 +102,72 @@ def _state() -> dict:
             by_id[t["parent_id"]]["subtasks"].append(node)
         else:
             roots.append(node)
-    nxt = logic.next_task(tasks, derived)
-    return {"tasks": roots, "next_task_id": nxt["id"] if nxt else None}
+    return roots
+
+
+def _active_project_id_raw() -> str:
+    """Whatever id is stored, without resolving it against existing projects."""
+    return (db.get_settings().get("active_project") or "").strip()
+
+
+def _active_project_id(projects: list[dict]) -> str:
+    """The project tab the page is on, remembered across reloads.
+
+    Falls back to the first tab whenever the stored one is gone (deleted on
+    another device, or a fresh database), and writes the fallback back so the
+    answer stays stable.
+    """
+    stored = _active_project_id_raw()
+    if any(p["id"] == stored for p in projects):
+        return stored
+    db.update_settings({"active_project": projects[0]["id"]})
+    return projects[0]["id"]
+
+
+def _state(project_id: str | None = None) -> dict:
+    """Everything the page renders: the open tab's task tree, the tab strip,
+    and the cross-project deadline list the alarms run off.
+
+    Only the active project's tasks are sent as a tree — a tab you are not
+    looking at is not on screen — but deadlines are gathered from every
+    project, because a transition alarm you miss because its task lives in
+    another tab is exactly the failure this app exists to prevent.
+    """
+    settings = db.get_settings()
+    ratios = db.completion_ratios()
+    projects = db.list_projects() or [db.ensure_project()]
+    active_id = project_id or _active_project_id(projects)
+
+    by_project: dict[str, list[dict]] = {p["id"]: [] for p in projects}
+    for t in db.list_tasks():
+        by_project.setdefault(t["project_id"], []).append(t)
+
+    counts = db.open_task_counts()
+    alarm_tasks: list[dict] = []
+    tree: list[dict] = []
+    next_task_id = None
+    for project in projects:
+        tasks = by_project.get(project["id"], [])
+        derived = logic.compute(tasks, settings, ratios)
+        for t in tasks:
+            d = derived[t["id"]]
+            if t["status"] in logic.ACTIVE_STATUSES and d.get("deadline"):
+                alarm_tasks.append({
+                    "id": t["id"], "title": t["title"], "deadline": d["deadline"],
+                    "project_id": project["id"], "project_name": project["name"],
+                })
+        if project["id"] == active_id:
+            tree = _tree(tasks, derived)
+            nxt = logic.next_task(tasks, derived)
+            next_task_id = nxt["id"] if nxt else None
+
+    return {
+        "tasks": tree,
+        "next_task_id": next_task_id,
+        "projects": [{**p, "open_tasks": counts.get(p["id"], 0)} for p in projects],
+        "active_project_id": active_id,
+        "alarm_tasks": alarm_tasks,
+    }
 
 
 def _annotate_tasks(task_ids: list[str], want_scores: bool) -> None:
@@ -136,6 +208,13 @@ def _require_task(task_id: str) -> dict:
     return task
 
 
+def _require_project(project_id: str) -> dict:
+    project = db.get_project(project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    return project
+
+
 def _freeze_manual_order() -> None:
     """Switch the list from auto-sort to hand-arranged, keeping what's on screen.
 
@@ -147,11 +226,16 @@ def _freeze_manual_order() -> None:
     settings = db.get_settings()
     if settings.get("manual_order"):
         return
-    tasks = db.list_tasks()
-    derived = logic.compute(tasks, settings, db.completion_ratios())
-    roots = [t for t in tasks if t["parent_id"] is None]
-    roots.sort(key=lambda t: derived[t["id"]]["sort_key"])
-    db.reorder_siblings(None, [t["id"] for t in roots])
+    ratios = db.completion_ratios()
+    # Manual order is one switch for the whole app, so every tab's top level
+    # is frozen, not just the one being dragged in — otherwise the other tabs
+    # would silently rearrange the next time you looked at them.
+    for project in db.list_projects():
+        tasks = db.list_tasks(project["id"])
+        derived = logic.compute(tasks, settings, ratios)
+        roots = [t for t in tasks if t["parent_id"] is None]
+        roots.sort(key=lambda t: derived[t["id"]]["sort_key"])
+        db.reorder_siblings(None, project["id"], [t["id"] for t in roots])
     db.update_settings({"manual_order": True})
 
 
@@ -167,11 +251,69 @@ def get_state():
     return _state()
 
 
+# ---------- projects ----------
+# Tabs across the top: one list of tasks each, one open at a time. Every
+# project route answers with the full page state, so switching tabs, renaming
+# one, or deleting one is a single round trip like every other mutation.
+
+@app.get("/api/projects")
+def list_projects():
+    state = _state()
+    return {"projects": state["projects"],
+            "active_project_id": state["active_project_id"]}
+
+
+@app.post("/api/projects", status_code=201)
+def create_project(body: ProjectCreate):
+    """Add a tab and switch to it — a new project is always one you want to
+    start filling in immediately."""
+    project = db.create_project(body.name.strip() or "New project")
+    db.update_settings({"active_project": project["id"]})
+    return _state(project["id"])
+
+
+@app.patch("/api/projects/{project_id}")
+def rename_project(project_id: str, body: ProjectUpdate):
+    _require_project(project_id)
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(400, "A project needs a name")
+    db.rename_project(project_id, name)
+    return _state()
+
+
+@app.delete("/api/projects/{project_id}")
+def delete_project(project_id: str):
+    """Delete a project and everything in it. The last tab cannot go: there
+    is always somewhere for a task to land."""
+    projects = db.list_projects()
+    if not any(p["id"] == project_id for p in projects):
+        raise HTTPException(404, "Project not found")
+    if len(projects) <= 1:
+        raise HTTPException(400, "This is your only project — rename it instead")
+    index = next(i for i, p in enumerate(projects) if p["id"] == project_id)
+    neighbour = projects[index - 1] if index else projects[1]
+    db.delete_project(project_id)
+    if _active_project_id_raw() == project_id:
+        db.update_settings({"active_project": neighbour["id"]})
+    return _state()
+
+
+@app.post("/api/projects/{project_id}/activate")
+def activate_project(project_id: str):
+    _require_project(project_id)
+    db.update_settings({"active_project": project_id})
+    return _state(project_id)
+
+
 @app.post("/api/tasks", status_code=201)
 def create_task(body: TaskCreate):
+    project_id = _active_project_id(db.list_projects() or [db.ensure_project()])
     if body.parent_id:
-        _require_task(body.parent_id)
+        parent = _require_task(body.parent_id)
+        project_id = parent["project_id"]  # a subtask lives where its parent does
     fields = body.model_dump(exclude={"annotate"})
+    fields["project_id"] = project_id
     task = db.create_task(fields)
     settings = db.get_settings()
     if body.annotate:
@@ -205,8 +347,13 @@ def delete_task(task_id: str):
 
 @app.post("/api/tasks/{task_id}/move")
 def move_task(task_id: str, body: TaskMove):
-    """Reorder or renest one task. Turns manual ordering on the first time."""
-    _require_task(task_id)
+    """Reorder or renest one task. Turns manual ordering on the first time.
+
+    A move stays inside one project — dragging is for arranging a list, not
+    for crossing tabs; `POST /api/tasks/{id}/project` does that.
+    """
+    task = _require_task(task_id)
+    project_id = task["project_id"]
 
     parent_id = body.parent_id
     target = None
@@ -216,12 +363,16 @@ def move_task(task_id: str, body: TaskMove):
         if body.target_id == task_id:
             raise HTTPException(400, "A task cannot be dropped onto itself")
         target = _require_task(body.target_id)
+        if target["project_id"] != project_id:
+            raise HTTPException(400, "That task is in a different project")
         parent_id = target["id"] if body.mode == "into" else target["parent_id"]
 
     if parent_id:
         if parent_id == task_id:
             raise HTTPException(400, "A task cannot be its own parent")
-        _require_task(parent_id)
+        parent = _require_task(parent_id)
+        if parent["project_id"] != project_id:
+            raise HTTPException(400, "That task is in a different project")
         if parent_id in db.descendant_ids(task_id):
             raise HTTPException(400, "A task cannot be moved inside its own subtasks")
 
@@ -229,13 +380,23 @@ def move_task(task_id: str, body: TaskMove):
 
     position = body.position
     if target is not None and body.mode != "into":
-        siblings = db.sibling_ids(parent_id, exclude=task_id)
+        siblings = db.sibling_ids(parent_id, project_id, exclude=task_id)
         idx = siblings.index(target["id"])
         position = idx if body.mode == "before" else idx + 1
     elif target is not None:
         position = None  # dropped onto a task: land at the end of its subtasks
 
-    db.move_task(task_id, parent_id, position)
+    db.move_task(task_id, parent_id, project_id, position)
+    return _state()
+
+
+@app.post("/api/tasks/{task_id}/project")
+def move_task_to_project(task_id: str, body: TaskProjectMove):
+    """Send a task (with its subtasks) to another tab."""
+    task = _require_task(task_id)
+    _require_project(body.project_id)
+    if task["project_id"] != body.project_id:
+        db.move_task_to_project(task_id, body.project_id)
     return _state()
 
 
@@ -258,7 +419,8 @@ def breakdown_task(task_id: str, body: BreakdownRequest):
         raise HTTPException(502, str(exc))
     new_ids = []
     for step in steps:
-        sub = db.create_task({"title": step, "parent_id": task_id})
+        sub = db.create_task({"title": step, "parent_id": task_id,
+                              "project_id": task["project_id"]})
         new_ids.append(sub["id"])
     _annotate_tasks(new_ids, want_scores=settings["ai_scoring"])
     return _state()
@@ -318,11 +480,13 @@ def compile_braindump(body: CompileRequest):
         items = ai.compile_braindump(settings, body.text)
     except ai.AIUnavailable as exc:
         raise HTTPException(502, str(exc))
+    project_id = _active_project_id(db.list_projects() or [db.ensure_project()])
     new_ids = []
     for item in items:
         task = db.create_task({
             "title": item["title"].strip(),
             "description": item.get("description", "").strip(),
+            "project_id": project_id,
         })
         new_ids.append(task["id"])
     _annotate_tasks(new_ids, want_scores=settings["ai_scoring"])
@@ -331,7 +495,8 @@ def compile_braindump(body: CompileRequest):
 
 @app.get("/api/next")
 def get_next():
-    tasks = db.list_tasks()
+    project_id = _active_project_id(db.list_projects() or [db.ensure_project()])
+    tasks = db.list_tasks(project_id)
     settings = db.get_settings()
     derived = logic.compute(tasks, settings, db.completion_ratios())
     nxt = logic.next_task(tasks, derived)
@@ -344,17 +509,26 @@ def get_next():
 def get_focus(root: str | None = None):
     """The ordered walk Taskmaster follows through a task tree.
 
-    `root` scopes the session to one task's subtree; without it the tree
-    owning the most urgent step is chosen. The queue is depth-first —
+    `root` scopes the session to one task's subtree; without it the most
+    urgent tree in the open tab is chosen. The queue is depth-first —
     subtasks before the task that contains them — so a session drills down
     to the smallest first step and works its way back up.
+
+    A named root keeps the session in *its* project, whichever tab is open:
+    ducking out to another project to jot something down must not hijack a
+    running timer onto a different task.
     """
-    tasks = db.list_tasks()
+    if root:
+        project_id = _require_task(root)["project_id"]
+    else:
+        project_id = _active_project_id(db.list_projects() or [db.ensure_project()])
+    tasks = db.list_tasks(project_id)
     settings = db.get_settings()
     derived = logic.compute(tasks, settings, db.completion_ratios())
     root_id = root or logic.focus_root_id(tasks, derived)
     if not root_id:
-        return {"root_id": None, "root_title": None, "queue": []}
+        return {"root_id": None, "root_title": None, "project_id": project_id,
+                "queue": []}
     by_id = {t["id"]: t for t in tasks}
     if root_id not in by_id:
         raise HTTPException(404, "Task not found")
@@ -365,6 +539,7 @@ def get_focus(root: str | None = None):
     return {
         "root_id": root_id,
         "root_title": by_id[root_id]["title"],
+        "project_id": project_id,
         "queue": queue,
     }
 

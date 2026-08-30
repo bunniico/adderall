@@ -316,8 +316,10 @@ def test_focus_endpoint_skips_finished_work(client):
 
 
 def test_focus_endpoint_empty_and_unknown_root(client):
-    assert client.get("/api/focus").json() == {
-        "root_id": None, "root_title": None, "queue": []}
+    empty = client.get("/api/focus").json()
+    assert empty["root_id"] is None and empty["root_title"] is None
+    assert empty["queue"] == []
+    assert empty["project_id"]  # an empty tab is still a tab
     assert client.get("/api/focus?root=nope").status_code == 404
 
 
@@ -399,3 +401,223 @@ def test_index_served(client):
     res = client.get("/")
     assert res.status_code == 200
     assert "adderall" in res.text
+
+
+# ---------------- projects (tabs) ----------------
+
+def new_project(client, name="side quests"):
+    res = client.post("/api/projects", json={"name": name})
+    assert res.status_code == 201, res.text
+    return res.json()
+
+
+def test_default_project_exists_and_owns_new_tasks(client):
+    state = client.get("/api/state").json()
+    assert len(state["projects"]) == 1
+    project = state["projects"][0]
+    assert project["name"] == "Tasks"
+    assert state["active_project_id"] == project["id"]
+    task = find(create(client, title="wash dishes"), "wash dishes")
+    assert task["project_id"] == project["id"]
+
+
+def test_creating_a_project_switches_to_it_and_scopes_tasks(client):
+    home = find(create(client, title="home task"), "home task")
+    state = new_project(client, "work")
+    work = state["active_project_id"]
+    assert work != home["project_id"]
+    assert state["tasks"] == []  # a new tab starts empty
+
+    state = create(client, title="work task")
+    assert find(state, "work task")["project_id"] == work
+    assert find(state, "home task") is None  # the other tab is not on screen
+
+    # Switching back shows exactly the other list.
+    state = client.post(f"/api/projects/{home['project_id']}/activate").json()
+    assert find(state, "home task") is not None
+    assert find(state, "work task") is None
+
+
+def test_active_project_survives_a_restart(client):
+    state = new_project(client, "work")
+    work = state["active_project_id"]
+    assert client.get("/api/state").json()["active_project_id"] == work
+
+
+def test_tab_counts_only_unfinished_tasks(client):
+    state = create(client, title="a")
+    create(client, title="b")
+    state = client.post(f"/api/tasks/{find(state, 'a')['id']}/complete", json={}).json()
+    assert state["projects"][0]["open_tasks"] == 1
+
+
+def test_subtasks_and_braindump_land_in_the_open_tab(client):
+    state = new_project(client, "work")
+    work = state["active_project_id"]
+    parent = find(create(client, title="clean kitchen"), "clean kitchen")
+    state = client.post(f"/api/tasks/{parent['id']}/breakdown", json={}).json()
+    assert all(s["project_id"] == work for s in find(state, "clean kitchen")["subtasks"])
+    state = client.post("/api/compile", json={"text": "stuff"}).json()
+    assert find(state, "call dentist")["project_id"] == work
+
+
+def test_rename_project(client):
+    state = new_project(client, "work")
+    pid = state["active_project_id"]
+    state = client.patch(f"/api/projects/{pid}", json={"name": "deep work"}).json()
+    assert [p["name"] for p in state["projects"]] == ["Tasks", "deep work"]
+
+
+def test_project_name_cannot_be_blanked(client):
+    pid = client.get("/api/state").json()["active_project_id"]
+    assert client.patch(f"/api/projects/{pid}", json={"name": "   "}).status_code == 400
+    assert client.get("/api/state").json()["projects"][0]["name"] == "Tasks"
+
+
+def test_delete_project_removes_its_tasks_and_falls_back(client):
+    first = client.get("/api/state").json()["active_project_id"]
+    state = new_project(client, "work")
+    work = state["active_project_id"]
+    doomed = find(create(client, title="work task"), "work task")["id"]
+
+    state = client.delete(f"/api/projects/{work}").json()
+    assert state["active_project_id"] == first
+    assert [p["id"] for p in state["projects"]] == [first]
+    assert client.get(f"/api/state").json()["tasks"] == []
+    # the tasks went with it
+    from app import db
+    assert db.get_task(doomed) is None
+
+
+def test_cannot_delete_the_only_project(client):
+    pid = client.get("/api/state").json()["active_project_id"]
+    res = client.delete(f"/api/projects/{pid}")
+    assert res.status_code == 400
+    assert client.get("/api/state").json()["projects"]
+
+
+def test_unknown_project_is_404(client):
+    assert client.post("/api/projects/nope/activate").status_code == 404
+    assert client.patch("/api/projects/nope", json={"name": "x"}).status_code == 404
+    assert client.delete("/api/projects/nope").status_code == 404
+
+
+def test_move_task_to_another_project_takes_its_subtasks(client):
+    parent = find(create(client, title="clean kitchen"), "clean kitchen")
+    client.post(f"/api/tasks/{parent['id']}/breakdown", json={})
+    state = new_project(client, "chores")
+    chores = state["active_project_id"]
+
+    state = client.post(f"/api/tasks/{parent['id']}/project",
+                        json={"project_id": chores}).json()
+    moved = find(state, "clean kitchen")
+    assert moved["project_id"] == chores
+    assert moved["parent_id"] is None
+    assert [s["project_id"] for s in moved["subtasks"]] == [chores] * 3
+
+
+def test_move_task_to_unknown_project_is_404(client):
+    tid = find(create(client, title="x"), "x")["id"]
+    assert client.post(f"/api/tasks/{tid}/project",
+                       json={"project_id": "nope"}).status_code == 404
+
+
+def test_tasks_cannot_be_dragged_across_projects(client):
+    home = find(create(client, title="home task"), "home task")
+    new_project(client, "work")
+    work_task = find(create(client, title="work task"), "work task")
+    res = client.post(f"/api/tasks/{work_task['id']}/move",
+                      json={"target_id": home["id"], "mode": "into"})
+    assert res.status_code == 400
+    res = client.post(f"/api/tasks/{work_task['id']}/move",
+                      json={"parent_id": home["id"]})
+    assert res.status_code == 400
+
+
+def test_ordering_is_independent_per_project(client):
+    a = find(create(client, title="a"), "a")
+    b = find(create(client, title="b"), "b")
+    new_project(client, "work")
+    x = find(create(client, title="x"), "x")
+    y = find(create(client, title="y"), "y")
+
+    # Dragging in one tab freezes every tab's order but reshuffles neither.
+    state = client.post(f"/api/tasks/{y['id']}/move",
+                        json={"target_id": x["id"], "mode": "before"}).json()
+    assert [t["title"] for t in state["tasks"]] == ["y", "x"]
+    state = client.post(f"/api/projects/{a['project_id']}/activate").json()
+    assert sorted(t["title"] for t in state["tasks"]) == ["a", "b"]
+    assert {t["id"] for t in state["tasks"]} == {a["id"], b["id"]}
+
+
+def test_focus_stays_in_the_project_of_its_root(client):
+    home = find(create(client, title="home task"), "home task")
+    new_project(client, "work")
+    create(client, title="work task")
+
+    # The open tab decides an unscoped session…
+    assert client.get("/api/focus").json()["queue"][0]["title"] == "work task"
+    # …but a session already running in another tab follows its own root.
+    data = client.get(f"/api/focus?root={home['id']}").json()
+    assert data["project_id"] == home["project_id"]
+    assert [t["title"] for t in data["queue"]] == ["home task"]
+
+
+def test_alarm_tasks_span_every_project(client):
+    due = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+    create(client, title="home task", deadline=due)
+    new_project(client, "work")
+    state = create(client, title="work task", deadline=due)
+    titles = {t["title"] for t in state["alarm_tasks"]}
+    assert {"home task", "work task"} <= titles
+    assert {t["project_name"] for t in state["alarm_tasks"]} == {"Tasks", "work"}
+
+
+def test_next_task_ignores_other_projects(client):
+    create(client, title="home task")
+    state = new_project(client, "work")
+    assert state["next_task_id"] is None
+    state = create(client, title="work task")
+    assert state["next_task_id"] == find(state, "work task")["id"]
+
+
+def test_pre_projects_database_is_migrated(tmp_path, monkeypatch):
+    """An existing install upgrades in place: its tasks become the first tab."""
+    import sqlite3
+
+    path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(path)
+    conn.executescript("""
+        CREATE TABLE tasks (
+            id TEXT PRIMARY KEY, title TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            parent_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+            deadline TEXT, estimated_time INTEGER, actual_time INTEGER,
+            impact INTEGER, effort INTEGER,
+            status TEXT NOT NULL DEFAULT 'todo',
+            ack_thankless INTEGER NOT NULL DEFAULT 0,
+            order_index INTEGER NOT NULL DEFAULT 0, started_at TEXT,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TABLE settings (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+        INSERT INTO tasks (id, title, order_index, created_at, updated_at)
+        VALUES ('old1', 'from before', 0, '2024-01-01T00:00:00+00:00',
+                '2024-01-01T00:00:00+00:00');
+    """)
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setenv("ADDERALL_DB", str(path))
+    from app import db
+    importlib.reload(db)
+    from app import main
+    importlib.reload(main)
+    client = TestClient(main.app)
+
+    state = client.get("/api/state").json()
+    assert len(state["projects"]) == 1
+    assert [t["title"] for t in state["tasks"]] == ["from before"]
+    assert state["tasks"][0]["project_id"] == state["projects"][0]["id"]
+    # and running init again changes nothing
+    db.init()
+    assert len(db.list_projects()) == 1

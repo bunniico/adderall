@@ -111,6 +111,17 @@ set `ANTHROPIC_WORKSPACE_ID`. You can find the ID in the Claude Console URL:
 
 ## What it does
 
+- **Projects in tabs** — a row of tabs across the top, one list of tasks
+  each: work, house, that side thing. Click a tab to switch (or **Alt+1…9**),
+  **＋** to start a new one, click the open tab to rename it, **✕** to delete
+  it and everything in it. Adding, braindumping, breaking down, ordering and
+  focusing all act on the tab you're on and leave the others alone, and the
+  app reopens on the tab you were last in. Send a task to another tab from
+  its detail modal — its subtasks go with it. Deadline alarms are the one
+  thing that deliberately ignores tabs: a cue you'd miss because its task is
+  one tab over is exactly what this app exists to prevent, so those fire
+  wherever you are and say which project they came from. Existing installs
+  upgrade with everything in a first tab called "Tasks".
 - **Magic ToDo** — type a task, hit ⚡, get concrete subtasks. A 🌶
   granularity slider controls how fine the breakdown is; any subtask can be
   broken down further, recursively. The **+** on every task adds a subtask by
@@ -169,7 +180,9 @@ set `ANTHROPIC_WORKSPACE_ID`. You can find the ID in the Claude Console URL:
    (WAL, `synchronous=FULL`), every edit persisted immediately. The entire
    class of sync-conflict/data-loss bugs can't happen.
 2. **One page, no swapping.** All four tools share one task list on one
-   screen; everything deeper is a modal or overlay.
+   screen; everything deeper is a modal or overlay. Projects are tabs over
+   that same page, not separate places to navigate to — switching is one
+   click and changes nothing but which list is on screen.
 3. **Time is visual and honest.** Buffered by default, analog + depleting
    color, elapsed and remaining both shown, staged alarms instead of one.
 4. **Deterministic where possible, AI only where needed.** All scheduling,
@@ -207,7 +220,8 @@ ordering); `tests/test_api.py` covers the API with the AI stubbed out.
 ```
 app/
   main.py     FastAPI routes + static hosting
-  db.py       SQLite persistence (schema, settings, task CRUD)
+  db.py       SQLite persistence (schema + migrations, settings, project
+              and task CRUD)
   logic.py    deterministic scheduling core — no AI, no I/O
   ai.py       Claude API broker (breakdown / annotate / compile)
   static/     single-page front end (vanilla JS, no build step)

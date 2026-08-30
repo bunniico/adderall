@@ -26,15 +26,66 @@ body {
   font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
+/* Header and tab strip travel together, so the tabs are always one click
+   away however tall the header wraps on a phone. */
+.page-head { position: sticky; top: 0; background: var(--bg); z-index: 5; }
 .topbar {
   display: flex; align-items: center; justify-content: space-between;
   padding: 10px 18px; border-bottom: 1px solid var(--border);
-  position: sticky; top: 0; background: var(--bg); z-index: 5;
+  background: var(--bg);
 }
 .topbar h1 { font-size: 20px; margin: 0; letter-spacing: .5px; }
 .topbar-actions { display: flex; gap: 8px; }
 
 main { max-width: 780px; margin: 0 auto; padding: 18px 14px 80px; }
+
+/* ---- project tabs ----
+   One list per tab, one tab open. Scrolls sideways rather than wrapping when
+   there are more projects than fit across. */
+.project-tabs {
+  display: flex; align-items: flex-end; gap: 6px;
+  max-width: 780px; margin: 0 auto; padding: 6px 14px 0;
+  border-bottom: 1px solid var(--border); background: var(--bg);
+}
+.tab-strip {
+  display: flex; gap: 4px; flex: 0 1 auto; min-width: 0;
+  overflow-x: auto; scrollbar-width: thin; padding-bottom: 1px;
+}
+.tab {
+  display: flex; align-items: center; gap: 2px; flex: none;
+  border: 1px solid var(--border); border-bottom: none;
+  border-radius: var(--radius) var(--radius) 0 0;
+  background: var(--panel); max-width: 220px;
+  margin-bottom: -1px;
+}
+.tab.active { background: var(--panel-2); border-color: var(--accent); }
+.tab-btn {
+  display: flex; align-items: center; gap: 6px; min-width: 0;
+  background: none; border: none; border-radius: 0;
+  padding: 8px 10px; color: var(--muted); font-size: 14px;
+}
+.tab.active .tab-btn { color: var(--text); font-weight: 600; }
+.tab-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tab-count {
+  flex: none; font-size: 11px; padding: 0 6px; border-radius: 20px;
+  background: var(--panel-2); color: var(--muted);
+}
+.tab.active .tab-count { background: var(--accent); color: #10131c; font-weight: 600; }
+.tab-close {
+  background: none; border: none; border-radius: 0;
+  padding: 8px 8px 8px 0; color: var(--muted); font-size: 12px;
+}
+.tab-close:hover { color: var(--bad); }
+.tab-rename { padding: 3px 4px; }
+.tab-rename input { padding: 4px 6px; font-size: 14px; min-width: 140px; }
+.tab-new {
+  flex: none; padding: 4px 10px; margin: 0 auto 5px 0; font-size: 15px;
+  color: var(--muted);
+}
+.tab-new:hover { color: var(--text); }
+/* A single project isn't a choice to make — keep the strip out of the way. */
+.project-tabs.solo .tab { border-color: transparent; background: none; }
+.project-tabs.solo .tab.active .tab-btn { color: var(--muted); font-weight: 400; }
 
 button {
   font: inherit; color: var(--text); background: var(--panel-2);
