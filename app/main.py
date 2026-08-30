@@ -69,6 +69,19 @@ class ProjectUpdate(BaseModel):
     name: str = Field(min_length=1, max_length=80)
 
 
+class ProjectMove(BaseModel):
+    """Where a dragged tab lands.
+
+    Like a task move this is phrased as "put this tab before/after that one"
+    rather than as an index, so a drop means what it looked like on screen.
+    A bare `position` (or nothing at all) puts the tab at that index, or at
+    the end of the strip.
+    """
+    target_id: str | None = None
+    mode: str | None = Field(default=None, pattern="^(before|after)$")
+    position: int | None = Field(default=None, ge=0)
+
+
 class TaskProjectMove(BaseModel):
     project_id: str
 
@@ -407,6 +420,25 @@ def delete_project(project_id: str):
     db.delete_project(project_id)
     if _active_project_id_raw() == project_id:
         db.update_settings({"active_project": neighbour["id"]})
+    return _state()
+
+
+@app.post("/api/projects/{project_id}/move")
+def move_project(project_id: str, body: ProjectMove):
+    """Reorder the tab strip. Which tab is open doesn't change: dragging a
+    tab rearranges the row, it doesn't switch to it."""
+    _require_project(project_id)
+    others = [p["id"] for p in db.list_projects() if p["id"] != project_id]
+    position = body.position
+    if body.target_id:
+        if not body.mode:
+            raise HTTPException(400, "mode is required when target_id is given")
+        if body.target_id == project_id:
+            raise HTTPException(400, "A project cannot be dropped onto itself")
+        _require_project(body.target_id)
+        idx = others.index(body.target_id)
+        position = idx if body.mode == "before" else idx + 1
+    db.move_project(project_id, position)
     return _state()
 
 

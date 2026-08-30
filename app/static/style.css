@@ -83,6 +83,12 @@ main { max-width: 780px; margin: 0 auto; padding: 18px 14px 80px; }
   color: var(--muted);
 }
 .tab-new:hover { color: var(--text); }
+/* Dragging a tab along the strip: the tab itself fades, and a bar marks the
+   gap it would drop into — the same green the task list uses for a drop. */
+.tab.dragging { opacity: .45; }
+.tab.drop-before { box-shadow: inset 3px 0 0 var(--good); }
+.tab.drop-after { box-shadow: inset -3px 0 0 var(--good); }
+.tab-strip.drop-end { box-shadow: inset -3px 0 0 var(--good); }
 /* A single project isn't a choice to make — keep the strip out of the way. */
 .project-tabs.solo .tab { border-color: transparent; background: none; }
 .project-tabs.solo .tab.active .tab-btn { color: var(--muted); font-weight: 400; }

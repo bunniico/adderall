@@ -217,6 +217,31 @@ def delete_project(project_id: str) -> bool:
         return cur.rowcount > 0
 
 
+def move_project(project_id: str, position: int | None = None) -> list[dict]:
+    """Drop one tab at `position` in the strip, renumbering the whole row.
+
+    `position` is the index among the *other* projects, so it means the same
+    thing whichever way the tab is travelling; None sends it to the end.
+    Order indices are rewritten as a dense 0..n-1 sequence so the next drop
+    lands where it looked like it would.
+    """
+    order = [p["id"] for p in list_projects() if p["id"] != project_id]
+    if position is None:
+        position = len(order)
+    position = max(0, min(position, len(order)))
+    order.insert(position, project_id)
+    with connect() as conn:
+        for idx, pid in enumerate(order):
+            conn.execute(
+                "UPDATE projects SET order_index = ? WHERE id = ?", (idx, pid)
+            )
+        conn.execute(
+            "UPDATE projects SET updated_at = ? WHERE id = ?",
+            (now_iso(), project_id),
+        )
+    return list_projects()
+
+
 def ensure_project() -> dict:
     """The first project, created if none exists. There is always a tab."""
     projects = list_projects()

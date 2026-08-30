@@ -18,6 +18,7 @@ let thanklessShowing = null;
 let subtaskDraftFor = null;   // task whose inline "add a subtask" box is open
 let subtaskDraftText = "";
 let handleFocusFor = null;    // drag handle to re-focus after a keyboard move
+let tabFocusFor = null;       // project tab to re-focus after a keyboard move
 let toggleFocusFor = null;    // collapse toggle to re-focus after a fold/unfold
 
 /* ---------------- API ---------------- */
@@ -103,6 +104,18 @@ function renderTabs() {
     const input = strip.querySelector(".tab-rename input");
     if (input) { input.focus(); input.select(); }
   }
+  // A tab moved with the keyboard is redrawn somewhere else in the strip;
+  // focus follows it, so the next Shift+arrow keeps moving the same tab.
+  if (tabFocusFor) {
+    const moved = strip.querySelector(
+      `.tab[data-project-id="${cssEscape(tabFocusFor)}"] > .tab-btn`);
+    tabFocusFor = null;
+    if (moved) {
+      moved.focus();
+      moved.scrollIntoView({ block: "nearest", inline: "nearest" });
+      return;
+    }
+  }
   // On a narrow screen the strip scrolls: the tab you are on has to be the
   // one you can see, however far along the row it sits.
   strip.querySelector(".tab.active")
@@ -111,16 +124,20 @@ function renderTabs() {
 
 function projectTab(project) {
   const active = project.id === state.active_project_id;
+  // A lone tab has nothing to be reordered against, so it stays a plain tab.
+  const reorderable = (state.projects || []).length > 1;
   const tab = document.createElement("div");
   tab.className = "tab" + (active ? " active" : "");
   tab.setAttribute("role", "presentation");  // the button inside is the tab
+  tab.dataset.projectId = project.id;
 
   const btn = document.createElement("button");
   btn.type = "button";
   btn.className = "tab-btn";
   btn.setAttribute("role", "tab");
   btn.setAttribute("aria-selected", String(active));
-  btn.title = active ? "Click to rename" : `Switch to ${project.name}`;
+  btn.title = (active ? "Click to rename" : `Switch to ${project.name}`) +
+    (reorderable ? " — drag to reorder, or Shift+← / Shift+→" : "");
   const name = document.createElement("span");
   name.className = "tab-name";
   name.textContent = project.name;
@@ -134,10 +151,13 @@ function projectTab(project) {
     btn.appendChild(count);
   }
   btn.addEventListener("click", () => {
+    // A drag that ended on this tab is not also a click on it.
+    if (tabClickSuppressed) return;
     if (active) startRename(project.id);
     else switchProject(project.id);
   });
   btn.addEventListener("dblclick", () => startRename(project.id));
+  btn.addEventListener("keydown", (e) => wireTabKeys(e, project));
   tab.appendChild(btn);
 
   if (active) {
@@ -153,6 +173,7 @@ function projectTab(project) {
     });
     tab.appendChild(del);
   }
+  if (reorderable) wireTabDrag(tab, project);
   return tab;
 }
 
@@ -248,6 +269,215 @@ async function deleteProject(projectId) {
 function switchToProjectAt(index) {
   const project = (state.projects || [])[index];
   if (project && project.id !== state.active_project_id) switchProject(project.id);
+}
+
+/* ---------------- tab order ----------------
+ * The strip is yours to arrange: drag a tab along it and drop it where you
+ * want it, hold and slide on a phone, or Shift+← / Shift+→ it once it has
+ * focus — because drag-and-drop is unusable for plenty of the people this
+ * app is for. Plain ← / → walk the strip without moving anything.
+ *
+ * Like a task move, the server is told "before/after that tab" rather than
+ * an index, so a drop means what it looked like on screen. Reordering never
+ * switches tabs: rearranging the row is not the same as going somewhere. */
+
+let dragProjectId = null;    // tab being dragged
+let pendingTabDrop = null;   // move body for where it would land right now
+let tabClickSuppressed = false;
+
+async function moveProject(projectId, body) {
+  try {
+    applyState(await api(`/projects/${projectId}/move`, {
+      method: "POST", body: JSON.stringify(body),
+    }));
+  } catch (e) { toast(e.message, true); }
+}
+
+function wireTabKeys(e, project) {
+  const dir = { ArrowLeft: -1, ArrowRight: 1 }[e.key];
+  if (!dir || e.altKey || e.ctrlKey || e.metaKey) return;
+  e.preventDefault();
+  const projects = state.projects || [];
+  const i = projects.findIndex((p) => p.id === project.id);
+  if (i < 0) return;
+  if (e.shiftKey) nudgeProject(project, dir);
+  else focusTabAt(i + dir);
+}
+
+function nudgeProject(project, dir) {
+  const projects = state.projects || [];
+  const i = projects.findIndex((p) => p.id === project.id);
+  const neighbour = projects[i + dir];
+  if (!neighbour) return;  // already at that end of the strip
+  tabFocusFor = project.id;
+  moveProject(project.id,
+    { target_id: neighbour.id, mode: dir < 0 ? "before" : "after" });
+}
+
+function focusTabAt(index) {
+  const tabs = $("tab-strip").querySelectorAll(".tab-btn");
+  const btn = tabs[Math.max(0, Math.min(index, tabs.length - 1))];
+  if (btn) { btn.focus(); btn.scrollIntoView({ block: "nearest", inline: "nearest" }); }
+}
+
+/* Where a tab held at this point would land: next to whichever tab the
+ * pointer is over — its own half of that tab decides which side — or at the
+ * end of the row when the pointer is past the last tab. */
+function tabDropAt(x, y) {
+  const strip = $("tab-strip");
+  const under = document.elementFromPoint(x, y);
+  const target = under && under.closest(".tab");
+  if (target && strip.contains(target) && target.dataset.projectId &&
+      target.dataset.projectId !== dragProjectId) {
+    const r = target.getBoundingClientRect();
+    return { el: target,
+             body: { target_id: target.dataset.projectId,
+                     mode: x < r.left + r.width / 2 ? "before" : "after" } };
+  }
+  // Past the last tab — the bare row, or the strip's own edge.
+  if (under === strip || under === $("project-tabs"))
+    return { el: strip, body: { position: null } };
+  return null;
+}
+
+function markTabDrop(x, y) {
+  clearTabDropMarks();
+  const drop = tabDropAt(x, y);
+  pendingTabDrop = drop && drop.body;
+  if (!drop) return;
+  drop.el.classList.add(
+    drop.body.target_id ? "drop-" + drop.body.mode : "drop-end");
+}
+
+function clearTabDropMarks() {
+  document.querySelectorAll(
+    "#tab-strip .drop-before, #tab-strip .drop-after, #tab-strip.drop-end")
+    .forEach((el) => el.classList.remove("drop-before", "drop-after", "drop-end"));
+}
+
+function endTabDrag(tab) {
+  tab.classList.remove("dragging");
+  dragProjectId = null;
+  pendingTabDrop = null;
+  clearTabDropMarks();
+}
+
+function wireTabDrag(tab, project) {
+  tab.draggable = true;
+  tab.addEventListener("dragstart", (e) => {
+    // Renaming owns the tab while it is an input box; nothing to drag.
+    if (renamingProject) { e.preventDefault(); return; }
+    dragProjectId = project.id;
+    pendingTabDrop = null;
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", project.name);
+    tab.classList.add("dragging");
+  });
+  tab.addEventListener("dragover", (e) => {
+    if (!dragProjectId || dragProjectId === project.id) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = "move";
+    markTabDrop(e.clientX, e.clientY);
+  });
+  tab.addEventListener("drop", (e) => {
+    if (!dragProjectId || !pendingTabDrop) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const id = dragProjectId, body = pendingTabDrop;
+    endTabDrag(tab);
+    moveProject(id, body);
+  });
+  tab.addEventListener("dragend", () => endTabDrag(tab));
+  wireTabTouchDrag(tab, project);
+}
+
+/* Phones don't get HTML5 drag-and-drop, and the strip itself scrolls
+ * sideways, so a swipe has to stay a swipe: a tab only comes loose once you
+ * have held it still for a moment. */
+function wireTabTouchDrag(tab, project) {
+  let timer = null;
+  let start = null;
+  let moved = false;
+
+  const cancelHold = () => {
+    if (timer) { clearTimeout(timer); timer = null; }
+  };
+
+  tab.addEventListener("touchstart", (e) => {
+    // A second finger means a pinch or a two-handed scroll, not a drag.
+    if (renamingProject || e.touches.length > 1) { cancelHold(); return; }
+    start = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    moved = false;
+    cancelHold();
+    timer = setTimeout(() => {
+      timer = null;
+      dragProjectId = project.id;
+      pendingTabDrop = null;
+      tab.classList.add("dragging");
+      navigator.vibrate?.(10);
+    }, 300);
+  }, { passive: true });
+
+  tab.addEventListener("touchmove", (e) => {
+    const touch = e.touches[0];
+    if (timer) {
+      // Still deciding: a finger that travels is scrolling the strip.
+      if (Math.abs(touch.clientX - start.x) > 8 ||
+          Math.abs(touch.clientY - start.y) > 8) cancelHold();
+      return;
+    }
+    if (dragProjectId !== project.id) return;
+    e.preventDefault();  // the finger is carrying a tab, not scrolling
+    moved = true;
+    markTabDrop(touch.clientX, touch.clientY);
+  }, { passive: false });
+
+  const finish = () => {
+    cancelHold();
+    if (dragProjectId !== project.id) return;
+    const id = dragProjectId, body = pendingTabDrop;
+    endTabDrag(tab);
+    if (!moved) return;   // held and let go without going anywhere
+    // A drag ends where the finger left it, not on a tap: the click the
+    // browser may still fire has to be ignored.
+    tabClickSuppressed = true;
+    setTimeout(() => { tabClickSuppressed = false; }, 400);
+    if (body) moveProject(id, body);
+  };
+  tab.addEventListener("touchend", finish);
+  tab.addEventListener("touchcancel", finish);
+}
+
+/* The empty stretch of row past the last tab means "put it at the end" —
+ * the strip itself is only as wide as its tabs, so the row is where there is
+ * actually somewhere to let go. */
+function wireTabStripDropTarget() {
+  const row = $("project-tabs");
+  const strip = $("tab-strip");
+  // Only the bare row counts: a drop that bubbled up from a tab has already
+  // been dealt with, and the ＋ button is not a place to put a tab.
+  const onBackground = (e) => dragProjectId && (e.target === row || e.target === strip);
+  row.addEventListener("dragover", (e) => {
+    if (!onBackground(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    clearTabDropMarks();
+    pendingTabDrop = { position: null };
+    strip.classList.add("drop-end");
+  });
+  row.addEventListener("dragleave", (e) => {
+    if (onBackground(e)) strip.classList.remove("drop-end");
+  });
+  row.addEventListener("drop", (e) => {
+    if (!onBackground(e) || !pendingTabDrop) return;
+    e.preventDefault();
+    const id = dragProjectId, body = pendingTabDrop;
+    dragProjectId = null;
+    pendingTabDrop = null;
+    clearTabDropMarks();
+    moveProject(id, body);
+  });
 }
 
 /* ---------------- rendering ---------------- */
@@ -1576,6 +1806,7 @@ function wire() {
   });
 
   wireListDropTarget();
+  wireTabStripDropTarget();
   wireCalendar();
 
   $("btn-add-project").addEventListener("click", addProject);
