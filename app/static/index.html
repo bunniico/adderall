@@ -46,6 +46,23 @@
     <button type="submit" class="accent">Add</button>
   </form>
 
+  <!-- The sorter: one lens over the same list. It arranges the top-level
+       tasks only — the steps inside a task keep the order the plan put them
+       in — and it never changes what ▶ Focus hands you next. -->
+  <div id="list-toolbar" class="list-toolbar" hidden>
+    <label for="sort-field">Sort</label>
+    <select id="sort-field"
+      title="How this list is ordered. Steps nested inside a task keep their plan order, and Focus still picks by urgency.">
+      <option value="smart">Smart — urgency first</option>
+      <option value="manual">Manual — as you dragged it</option>
+      <option value="score">Score</option>
+      <option value="deadline">Deadline</option>
+      <option value="subtasks">Subtasks</option>
+      <option value="created">Created</option>
+    </select>
+    <button id="sort-dir" class="ghost sort-dir" type="button" hidden></button>
+  </div>
+
   <section id="task-list" class="task-list" aria-live="polite"></section>
   <p id="empty-hint" class="empty-hint" hidden>
     <span id="empty-project"></span>Add a task above, or hit
@@ -241,7 +258,8 @@
 
     <label class="row"><input id="s-manual-order" type="checkbox">
       Manual order <span class="muted">— keep the list exactly as you drag it, instead of
-      auto-sorting by urgency. Turns itself on the first time you move a task.</span></label>
+      sorting it. Turns itself on the first time you move a task; it is the same
+      switch as <b>Manual</b> in the list's Sort control.</span></label>
 
     <label>Anthropic API key <span id="s-key-status" class="tag"></span>
       <input id="s-api-key" type="password" placeholder="sk-ant-… (leave blank to keep current)">

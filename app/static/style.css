@@ -120,6 +120,14 @@ textarea { resize: vertical; }
 #add-form input[type="text"] { flex: 1; padding: 12px 14px; font-size: 16px; }
 .granularity { display: flex; align-items: center; gap: 4px; width: 120px; flex: none; }
 
+/* ---- sort bar ---- */
+.list-toolbar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: -6px 0 12px; color: var(--muted); font-size: 13px;
+}
+.list-toolbar select { width: auto; padding: 5px 8px; font-size: 13px; }
+.list-toolbar button.sort-dir { padding: 5px 10px; font-size: 13px; }
+
 /* ---- task list ---- */
 .task-list { display: flex; flex-direction: column; gap: 8px; }
 .task {

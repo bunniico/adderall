@@ -211,7 +211,8 @@ def test_reordering_beside_a_folded_task_leaves_it_folded(client):
 
 def roots(state):
     """Top-level titles in the order the page shows them (see sortActive)."""
-    return [t["title"] for t in sorted(state["tasks"], key=lambda t: t["sort_key"])]
+    return [t["title"] for t in sorted(state["tasks"],
+                                       key=lambda t: t["list_sort_key"])]
 
 
 def test_move_reorders_top_level_tasks(client):
@@ -322,6 +323,96 @@ def test_manual_order_drives_focus_and_next(client):
                 json={"target_id": ids["second"], "mode": "before"})
     assert client.get("/api/next").json()["task"]["title"] == "first"
     assert client.get("/api/focus").json()["root_title"] == "first"
+
+
+# ---- the sorter ----
+
+def _dated(client, title, **when):
+    return create(client, title=title,
+                  deadline=(datetime.now(timezone.utc) + timedelta(**when)).isoformat())
+
+
+def test_sorting_by_deadline_reorders_the_list(client):
+    _dated(client, "middle", days=2)
+    _dated(client, "last", days=5)
+    _dated(client, "first", hours=2)
+
+    client.put("/api/settings", json={"sort_field": "deadline", "sort_dir": "asc"})
+    assert roots(client.get("/api/state").json()) == ["first", "middle", "last"]
+    client.put("/api/settings", json={"sort_field": "deadline", "sort_dir": "desc"})
+    assert roots(client.get("/api/state").json()) == ["last", "middle", "first"]
+
+
+def test_sorting_by_subtasks_reorders_the_list(client):
+    create(client, title="flat")
+    state = create(client, title="project")
+    pid = find(state, "project")["id"]
+    client.post(f"/api/tasks/{pid}/breakdown", json={})
+
+    client.put("/api/settings", json={"sort_field": "subtasks", "sort_dir": "desc"})
+    state = client.get("/api/state").json()
+    assert roots(state) == ["project", "flat"]
+    assert find(state, "project")["open_subtasks"] == 3
+    client.put("/api/settings", json={"sort_field": "subtasks", "sort_dir": "asc"})
+    assert roots(client.get("/api/state").json()) == ["flat", "project"]
+
+
+def test_sorting_leaves_what_next_alone(client):
+    """Reading the list a different way is not a change of plan."""
+    create(client, title="calm", impact=8, effort=2, estimated_time=10)
+    state = create(client, title="urgent", estimated_time=60,
+                   deadline=(datetime.now(timezone.utc) + timedelta(minutes=70)).isoformat())
+    urgent_id = find(state, "urgent")["id"]
+
+    client.put("/api/settings", json={"sort_field": "created", "sort_dir": "asc"})
+    state = client.get("/api/state").json()
+    assert roots(state)[0] == "calm"
+    assert state["next_task_id"] == urgent_id
+    assert client.get("/api/next").json()["task"]["title"] == "urgent"
+
+
+def test_dragging_while_sorted_keeps_the_order_you_were_looking_at(client):
+    _dated(client, "a", days=1)
+    _dated(client, "b", days=2)
+    _dated(client, "c", days=3)
+    client.put("/api/settings", json={"sort_field": "deadline", "sort_dir": "desc"})
+    state = client.get("/api/state").json()
+    assert roots(state) == ["c", "b", "a"]
+
+    ids = {t["title"]: t["id"] for t in state["tasks"]}
+    state = client.post(f"/api/tasks/{ids['a']}/move",
+                        json={"target_id": ids["c"], "mode": "before"}).json()
+    # the drag froze the deadline order that was on screen and moved one task
+    assert roots(state) == ["a", "c", "b"]
+    settings = client.get("/api/settings").json()
+    assert settings["sort_field"] == "manual"
+    assert settings["manual_order"] is True
+
+
+def test_the_sorter_and_the_manual_order_checkbox_are_one_switch(client):
+    assert client.get("/api/settings").json()["sort_field"] == "smart"
+    assert client.put("/api/settings",
+                      json={"manual_order": True}).json()["sort_field"] == "manual"
+    assert client.put("/api/settings",
+                      json={"manual_order": False}).json()["sort_field"] == "smart"
+    got = client.put("/api/settings", json={"sort_field": "score"}).json()
+    assert got["manual_order"] is False
+    got = client.put("/api/settings", json={"sort_field": "manual"}).json()
+    assert got["manual_order"] is True
+
+
+def test_saving_the_settings_modal_leaves_the_sorter_alone(client):
+    """The modal sends the whole form every time, checkbox included."""
+    client.put("/api/settings", json={"sort_field": "score", "sort_dir": "asc"})
+    got = client.put("/api/settings",
+                     json={"manual_order": False, "granularity": 4}).json()
+    assert got["sort_field"] == "score" and got["sort_dir"] == "asc"
+
+
+def test_unknown_sort_choices_fall_back_to_smart(client):
+    got = client.put("/api/settings",
+                     json={"sort_field": "vibes", "sort_dir": "sideways"}).json()
+    assert got["sort_field"] == "smart" and got["sort_dir"] == "desc"
 
 
 def test_compile_braindump(client):

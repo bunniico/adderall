@@ -30,6 +30,20 @@ ACTIVE_STATUSES = {"todo", "in_progress"}
 SCORE_WEIGHTS = {"urgency": 0.45, "impact": 0.35, "ease": 0.20}
 NEUTRAL_SCORE = 5  # stand-in for an impact/effort the AI hasn't filled in yet
 
+# ---- how the list is sorted ----
+# "smart" is the app's own opinion (urgency, then quadrant); "manual" is the
+# order you dragged things into. The rest are plain one-field sorts, there for
+# the moments when you want to read the list a particular way — biggest first,
+# soonest first, oldest first — rather than argue with the app about it.
+SORT_FIELDS = ("smart", "manual", "score", "deadline", "subtasks", "created")
+
+# Which way round a field means by default: nobody picks "deadline" wanting the
+# furthest one first, or "score" wanting the least worthwhile task at the top.
+DEFAULT_SORT_DIR = {
+    "smart": "desc", "manual": "asc", "score": "desc",
+    "deadline": "asc", "subtasks": "desc", "created": "desc",
+}
+
 
 def parse_dt(value: str | None) -> datetime | None:
     if not value:
@@ -126,23 +140,93 @@ def priority_score(impact: int | None, effort: int | None, urgency_value: float)
     return round(raw * 10, 1)
 
 
+def sort_mode(settings: dict) -> tuple[str, bool]:
+    """(field, descending) — how the list is currently being read.
+
+    `manual_order` predates the sorter and is still the flag a drag sets, so a
+    list left on "smart" with that flag on is a manual list: nobody who
+    arranged their tasks by hand should have them rearranged by an upgrade.
+    """
+    field = str(settings.get("sort_field") or "smart").strip().lower()
+    if field not in SORT_FIELDS:
+        field = "smart"
+    if field == "smart" and settings.get("manual_order"):
+        field = "manual"
+    direction = str(settings.get("sort_dir") or "").strip().lower()
+    if direction not in ("asc", "desc"):
+        direction = DEFAULT_SORT_DIR[field]
+    return field, direction == "desc"
+
+
+def _epoch(iso: str | None) -> float | None:
+    dt = parse_dt(iso)
+    return dt.timestamp() if dt else None
+
+
+def smart_sort_key(task: dict, d: dict) -> list:
+    """The app's own opinion: most urgent first, quick wins ahead of slogs."""
+    return [-d["urgency"], QUADRANT_RANK.get(d["quadrant"], 2),
+            task["order_index"], task["created_at"]]
+
+
+def manual_sort_key(task: dict, d: dict) -> list:
+    """Where you put it, and nothing else."""
+    return d.get("order_path", [task["order_index"]])
+
+
+def list_sort_key(task: dict, d: dict, field: str, descending: bool) -> list:
+    """The order the list is drawn in, as a key the page can compare directly.
+
+    Every one-field sort ends in the same tie-breakers as the rest of the app
+    (hand-arranged position, then age), so tasks the field cannot tell apart —
+    two unscored tasks, two things due the same minute — still come out in a
+    stable, sensible order instead of shuffling on every reload.
+    """
+    if field == "manual":
+        return manual_sort_key(task, d)
+    if field == "score":
+        value, missing = d["score"], False
+    elif field == "subtasks":
+        value, missing = float(d["open_subtasks"]), False
+    elif field == "deadline":
+        # A container is read off the work it holds here too, so the list
+        # sorts by the date shown on the task rather than an empty shell's.
+        stamp = _epoch(d["rollup_deadline"] if d["has_subtasks"] else d["deadline"])
+        value, missing = (stamp or 0.0), stamp is None
+    elif field == "created":
+        value, missing = (_epoch(task["created_at"]) or 0.0), False
+    else:
+        return smart_sort_key(task, d)
+    # Undated tasks sink to the bottom whichever way the sort is pointing:
+    # flipping the direction to see the far end of your deadlines should not
+    # fill the top of the list with tasks that have no deadline at all.
+    return [1 if missing else 0, -value if descending else value,
+            task["order_index"], task["created_at"]]
+
+
 def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None,
             now: datetime | None = None) -> dict[str, dict]:
     """Compute all derived fields for a flat task list.
 
     Returns {task_id: {buffered_estimate, quadrant, urgency, deadline,
-    deadline_source, order_path, sort_key, actionable}}.
+    deadline_source, order_path, sort_key, list_sort_key, actionable}}.
 
     `sort_key` is the app's opinion of what comes first — urgency, then
     quadrant — unless the `manual_order` setting is on, in which case it is
-    the position you dragged the task to and nothing else.
+    the position you dragged the task to and nothing else. It is what "what
+    next" reads (see `next_task`).
+
+    `list_sort_key` is the order the list is *drawn* in, which is the same
+    thing until you pick a field in the sorter. Keeping the two apart means
+    reading your list by deadline for a minute doesn't change what Taskmaster
+    hands you next.
     """
     now = now or datetime.now(timezone.utc)
     ratios = ratios or []
     buf = effective_buffer(settings, ratios)
     threshold = int(settings.get("matrix_threshold", 5))
     auto_deadlines = bool(settings.get("auto_deadlines", True))
-    manual_order = bool(settings.get("manual_order", False))
+    sort_field, sort_desc = sort_mode(settings)
 
     by_id = {t["id"]: t for t in tasks}
     children: dict[str | None, list[dict]] = {}
@@ -204,6 +288,7 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
     for t in tasks:
         if t["parent_id"] not in by_id:
             _rollup(t, children, derived)
+            _count_open_subtasks(t, children, derived)
 
     for t in tasks:
         d = derived[t["id"]]
@@ -223,12 +308,9 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
         d["raw_length_min"] = max(1, round(d["length_min"] / (1.0 + buf)))
         # Manual order means manual order: once you have arranged the list by
         # hand, the app stops second-guessing you and reads it top to bottom.
-        d["sort_key"] = d.get("order_path", [t["order_index"]]) if manual_order else [
-            -d["urgency"],
-            QUADRANT_RANK.get(d["quadrant"], 2),
-            t["order_index"],
-            t["created_at"],
-        ]
+        d["sort_key"] = (manual_sort_key(t, d) if sort_field == "manual"
+                         else smart_sort_key(t, d))
+        d["list_sort_key"] = list_sort_key(t, d, sort_field, sort_desc)
     return derived
 
 
@@ -304,6 +386,25 @@ def _rollup(task: dict, children: dict, derived: dict) -> None:
             best_dl, best_src = cand, cand_src
     d["rollup_deadline"] = best_dl
     d["rollup_deadline_source"] = best_src
+
+
+def _count_open_subtasks(task: dict, children: dict, derived: dict) -> None:
+    """Fill `open_subtasks` on a task and everything under it.
+
+    Counted all the way down and only for work still to do: "12 subtasks" on a
+    task you have half finished is a number about the past. Sorting by it
+    answers "which of these is still a whole project?", which is the reason to
+    sort by it at all.
+    """
+    total = 0
+    for kid in children.get(task["id"], []):
+        _count_open_subtasks(kid, children, derived)
+        if kid["status"] == "discarded":
+            continue  # a dropped branch is off the plan, and so is its inside
+        total += derived[kid["id"]]["open_subtasks"]
+        if kid["status"] in ACTIVE_STATUSES:
+            total += 1
+    derived[task["id"]]["open_subtasks"] = total
 
 
 def _children_map(tasks: list[dict]) -> dict[str | None, list[dict]]:
