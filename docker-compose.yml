@@ -9,6 +9,11 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       # Only needed for identity-linked keys; can also be set in ⚙ Settings.
       - ANTHROPIC_WORKSPACE_ID=${ANTHROPIC_WORKSPACE_ID:-}
+      # Every AI call logs its prompt, any thinking, and the returned JSON to
+      # `docker logs`. DEBUG adds the system prompt; ADDERALL_AI_LOG_CHARS caps
+      # how much of one prompt or completion a single line carries (0 = no cap).
+      - ADDERALL_LOG_LEVEL=${ADDERALL_LOG_LEVEL:-INFO}
+      - ADDERALL_AI_LOG_CHARS=${ADDERALL_AI_LOG_CHARS:-4000}
     # Adderall is a small FastAPI app over SQLite; it never needs more than
     # one core or half a gig, so cap it and leave the rest of the box alone.
     deploy:

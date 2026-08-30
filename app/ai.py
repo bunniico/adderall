@@ -15,9 +15,12 @@ the design doc:
 from __future__ import annotations
 
 import json
+import logging
 import os
 
 import anthropic
+
+LOG = logging.getLogger(__name__)
 
 SYSTEM = (
     "You are the planning engine inside a task app for people with executive "
@@ -134,6 +137,63 @@ def _clamp(value, low: int, high: int) -> int:
         return low
 
 
+# How much of a prompt or completion goes into a single log record. A
+# braindump can run to thousands of words, and dumping all of it buries
+# everything else in `docker logs`; set ADDERALL_AI_LOG_CHARS=0 for no cap.
+DEFAULT_AI_LOG_CHARS = 4000
+
+
+def _log_chars() -> int:
+    raw = os.environ.get("ADDERALL_AI_LOG_CHARS", "").strip()
+    if not raw:
+        return DEFAULT_AI_LOG_CHARS
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return DEFAULT_AI_LOG_CHARS
+
+
+def _truncate(text: str) -> str:
+    limit = _log_chars()
+    if limit and len(text) > limit:
+        return f"{text[:limit]}… [{len(text) - limit} more characters]"
+    return text
+
+
+def _log_text(label: str, text: str) -> None:
+    """Log one labelled block of model text, newlines and all.
+
+    These lines are read by a human tailing `docker logs`, so a braindump
+    squeezed onto a single line would be worse than useless.
+    """
+    LOG.info("%s:\n%s", label, _truncate(text))
+
+
+def _log_response(response) -> None:
+    """Log what came back: the usage summary, any thinking, and the output."""
+    usage = getattr(response, "usage", None)
+    LOG.info(
+        "AI response ← model=%s stop_reason=%s input_tokens=%s output_tokens=%s",
+        getattr(response, "model", "?"),
+        getattr(response, "stop_reason", None),
+        getattr(usage, "input_tokens", "?"),
+        getattr(usage, "output_tokens", "?"),
+    )
+    for block in getattr(response, "content", None) or []:
+        kind = getattr(block, "type", "")
+        if kind == "thinking":
+            # Only the compile call thinks, and only because it asks for a
+            # summary: adaptive thinking with the default display returns
+            # these blocks with empty text.
+            thought = getattr(block, "thinking", "")
+            if thought:
+                _log_text("AI thinking", thought)
+        elif kind == "redacted_thinking":
+            LOG.info("AI thinking: (redacted by the API)")
+        elif kind == "text":
+            _log_text("AI output", block.text)
+
+
 class AIUnavailable(Exception):
     """Raised when no API key is configured or the API call fails."""
 
@@ -152,10 +212,9 @@ def _client(settings: dict) -> anthropic.Anthropic:
     return anthropic.Anthropic(default_headers=headers)
 
 
-def _call(settings: dict, tier: str, prompt: str, schema: dict,
-          max_tokens: int = 4096, effort: str | None = None,
-          thinking: bool = False) -> dict:
-    model = settings.get("models", {}).get(tier) or "claude-haiku-4-5"
+def _request(settings: dict, model: str, prompt: str, schema: dict,
+             max_tokens: int, effort: str | None, thinking: bool):
+    """One Messages API call, with API errors mapped onto AIUnavailable."""
     kwargs: dict = {
         "model": model,
         "max_tokens": max_tokens,
@@ -167,9 +226,12 @@ def _call(settings: dict, tier: str, prompt: str, schema: dict,
     if effort:
         kwargs["output_config"]["effort"] = effort
     if thinking:
-        kwargs["thinking"] = {"type": "adaptive"}
+        # `summarized` rather than the default `omitted`: the reasoning is
+        # thought and billed either way, and the summary is what makes it
+        # visible in the logs below.
+        kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
     try:
-        response = _client(settings).messages.create(**kwargs)
+        return _client(settings).messages.create(**kwargs)
     except anthropic.AuthenticationError as exc:
         raise AIUnavailable(
             "Anthropic API key missing or invalid. Set it in Settings or via "
@@ -186,6 +248,35 @@ def _call(settings: dict, tier: str, prompt: str, schema: dict,
         raise AIUnavailable(f"Claude API error ({exc.status_code}): {exc.message}") from exc
     except anthropic.APIConnectionError as exc:
         raise AIUnavailable("Could not reach the Claude API (network error).") from exc
+
+
+def _call(settings: dict, tier: str, prompt: str, schema: dict,
+          max_tokens: int = 4096, effort: str | None = None,
+          thinking: bool = False) -> dict:
+    """Make one call and log both sides of it at INFO.
+
+    Once this is running in a container the log is the only window into what
+    the model was asked and what it answered, so the prompt, any thinking it
+    returns, and the raw JSON all go to stdout. `settings` never does: that
+    dict carries the API key.
+    """
+    model = settings.get("models", {}).get(tier) or "claude-haiku-4-5"
+    LOG.info(
+        "AI call → tier=%s model=%s max_tokens=%s effort=%s thinking=%s",
+        tier, model, max_tokens, effort or "default",
+        "adaptive" if thinking else "off",
+    )
+    # The system prompt is the same on every call, so it is not worth a line
+    # each time; ADDERALL_LOG_LEVEL=DEBUG brings it back when it matters.
+    LOG.debug("AI system prompt:\n%s", SYSTEM)
+    _log_text("AI input", prompt)
+    try:
+        response = _request(settings, model, prompt, schema, max_tokens,
+                            effort, thinking)
+    except AIUnavailable as exc:
+        LOG.warning("AI call failed → tier=%s model=%s: %s", tier, model, exc)
+        raise
+    _log_response(response)
     if response.stop_reason == "refusal":
         raise AIUnavailable("The model declined this request.")
     text = next((b.text for b in response.content if b.type == "text"), None)

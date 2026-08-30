@@ -6,7 +6,9 @@ All state lives in a local SQLite file; every mutation persists immediately.
 
 from __future__ import annotations
 
+import logging
 import os
+import sys
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException
@@ -14,6 +16,30 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import ai, db, logic
+
+def _configure_logging() -> None:
+    """Send the app's own logs to stdout, where `docker logs` reads them.
+
+    uvicorn only configures its own loggers, so without a handler on the root
+    logger everything this app logs — the AI exchanges in `ai.py` above all —
+    would be dropped before it ever reached the container's output.
+    basicConfig() is a no-op if something upstream has already configured
+    logging, which is the right deference: an explicit setup wins.
+    """
+    level = getattr(logging, os.environ.get("ADDERALL_LOG_LEVEL", "INFO").strip().upper(),
+                    logging.INFO)
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)-7s %(name)s | %(message)s",
+        stream=sys.stdout,
+    )
+    # The HTTP stack stays at INFO however loud the app gets: its debug output
+    # includes request headers, and one of those headers is the API key.
+    for noisy in ("anthropic", "httpcore", "httpx", "httpx2"):
+        logging.getLogger(noisy).setLevel(max(level, logging.INFO))
+
+
+_configure_logging()
 
 app = FastAPI(title="Adderall", docs_url="/api/docs", openapi_url="/api/openapi.json")
 
