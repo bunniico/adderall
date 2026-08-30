@@ -43,6 +43,7 @@ class TaskUpdate(BaseModel):
     effort: int | None = Field(default=None, ge=0, le=10)
     status: str | None = Field(default=None, pattern="^(todo|in_progress|done|discarded)$")
     ack_thankless: bool | None = None
+    collapsed: bool | None = None
     order_index: int | None = None
 
 
@@ -201,6 +202,20 @@ def _annotate_tasks(task_ids: list[str], want_scores: bool) -> None:
             db.update_task(t["id"], fields)
 
 
+def _reveal(task_id: str | None) -> None:
+    """Unfold a collapsed task, so whatever just landed inside it is on screen.
+
+    Adding a subtask to a folded-away task and seeing nothing happen is
+    exactly the "did that even work?" moment this app exists to spare you,
+    so anything that puts a task inside another one opens the container.
+    """
+    if not task_id:
+        return
+    task = db.get_task(task_id)
+    if task and task["collapsed"]:
+        db.update_task(task_id, {"collapsed": False})
+
+
 def _require_task(task_id: str) -> dict:
     task = db.get_task(task_id)
     if not task:
@@ -315,6 +330,7 @@ def create_task(body: TaskCreate):
     fields = body.model_dump(exclude={"annotate"})
     fields["project_id"] = project_id
     task = db.create_task(fields)
+    _reveal(body.parent_id)
     settings = db.get_settings()
     if body.annotate:
         _annotate_tasks([task["id"]], want_scores=settings["ai_scoring"])
@@ -387,6 +403,7 @@ def move_task(task_id: str, body: TaskMove):
         position = None  # dropped onto a task: land at the end of its subtasks
 
     db.move_task(task_id, parent_id, project_id, position)
+    _reveal(parent_id)
     return _state()
 
 
@@ -422,6 +439,8 @@ def breakdown_task(task_id: str, body: BreakdownRequest):
         sub = db.create_task({"title": step, "parent_id": task_id,
                               "project_id": task["project_id"]})
         new_ids.append(sub["id"])
+    if new_ids:
+        _reveal(task_id)
     _annotate_tasks(new_ids, want_scores=settings["ai_scoring"])
     return _state()
 

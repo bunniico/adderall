@@ -18,6 +18,7 @@ let thanklessShowing = null;
 let subtaskDraftFor = null;   // task whose inline "add a subtask" box is open
 let subtaskDraftText = "";
 let handleFocusFor = null;    // drag handle to re-focus after a keyboard move
+let toggleFocusFor = null;    // collapse toggle to re-focus after a fold/unfold
 
 /* ---------------- API ---------------- */
 
@@ -310,9 +311,62 @@ function progressBar(task) {
   return wrap;
 }
 
+/* ---------------- folding ----------------
+ * A task with a long tail of subtasks is exactly the task you most need to
+ * stop staring at. Folding one hides its steps and leaves the container —
+ * its rolled-up time, deadline and progress bar — sitting there as one line.
+ * The fold is stored on the task, so the shape you left the list in is the
+ * shape it comes back in, on this device and any other. */
+
+function twisty(task, count, collapsed) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "twisty";
+  btn.textContent = collapsed ? "▸" : "▾";
+  const label = `${count} subtask${count === 1 ? "" : "s"}`;
+  btn.title = collapsed ? `Show ${label}` : `Hide ${label}`;
+  btn.setAttribute("aria-expanded", String(!collapsed));
+  btn.setAttribute("aria-label",
+    (collapsed ? "Show " : "Hide ") + label + " of " + task.title);
+  btn.addEventListener("click", () => toggleCollapsed(task.id));
+  return btn;
+}
+
+/* Keeps the checkboxes of leaves and containers in one column. */
+function spacer() {
+  const span = document.createElement("span");
+  span.className = "twisty-spacer";
+  span.setAttribute("aria-hidden", "true");
+  return span;
+}
+
+function holdsNextTask(task) {
+  return !!state.next_task_id &&
+    flatten(task.subtasks || []).some((t) => t.id === state.next_task_id);
+}
+
+/* Optimistic on purpose: folding is a view change, and waiting on a round
+ * trip to see a list close is the kind of lag that loses you the thought. */
+async function toggleCollapsed(id) {
+  const task = findTask(id);
+  if (!task) return;
+  const collapsed = !task.collapsed;
+  task.collapsed = collapsed;
+  toggleFocusFor = id;
+  render();
+  toggleFocusFor = id;  // the reply rebuilds the list a second time
+  await patchTask(id, { collapsed });
+}
+
 function taskNode(task, isSub) {
   const el = document.createElement("div");
   const active = task.status === "todo" || task.status === "in_progress";
+  const subs = (task.subtasks || []).filter(
+    (s) => s.status === "todo" || s.status === "in_progress");
+  const composing = active && subtaskDraftFor === task.id;
+  // Folding is only ever about subtasks you can actually see: a stale flag on
+  // a task whose subtasks are all finished must not hide anything.
+  const collapsed = !!task.collapsed && subs.length > 0;
   el.className = "task" + (active ? "" : " done-task") +
     (task.id === state.next_task_id ? " next" : "");
   el.dataset.id = task.id;
@@ -324,6 +378,11 @@ function taskNode(task, isSub) {
     row.appendChild(dragHandle(task, el));
     wireDropTarget(el, task);
   }
+
+  // The fold sits in its own column so that parents and leaves line up: a
+  // task with nothing under it gets the empty space instead of the arrow.
+  row.appendChild(subs.length ? twisty(task, subs.length, collapsed)
+                             : spacer());
 
   const check = document.createElement("input");
   check.type = "checkbox";
@@ -374,6 +433,9 @@ function taskNode(task, isSub) {
       return b;
     };
     if (task.id === state.next_task_id) add("next up", "next-badge");
+    // Folded away, but the thing you were told to do next is in there:
+    // hiding that without a word is how a good list quietly stops working.
+    if (collapsed && holdsNextTask(task)) add("next up inside", "next-badge");
     // A task that contains subtasks is worth what it holds: the estimate is
     // the sum of everything underneath, the deadline the furthest one inside.
     const est = task.has_subtasks ? task.rollup_estimate : task.buffered_estimate;
@@ -386,14 +448,15 @@ function taskNode(task, isSub) {
     const dl = fmtDeadline(dlIso);
     if (dl) add(dl.label + (dlSrc === "auto" ? " (auto)" : ""), dl.cls);
     if (task.quadrant) add(QUAD_LABEL[task.quadrant], "quad-" + task.quadrant);
+    if (collapsed)
+      add(`${subs.length} subtask${subs.length === 1 ? "" : "s"} hidden`, "folded");
     if (badges.children.length) el.appendChild(badges);
+    // The progress bar stays out in the open when a task is folded: a rolled
+    // up "40m left · 60%" is the whole point of hiding the steps.
     if (task.has_subtasks) el.appendChild(progressBar(task));
   }
 
-  const subs = (task.subtasks || []).filter(
-    (s) => s.status === "todo" || s.status === "in_progress");
-  const composing = active && subtaskDraftFor === task.id;
-  if (subs.length || composing) {
+  if (!collapsed && (subs.length || composing)) {
     const wrap = document.createElement("div");
     wrap.className = "subtasks";
     for (const sub of subs) wrap.appendChild(taskNode(sub, true));
@@ -446,6 +509,12 @@ function restoreListFocus() {
     handleFocusFor = null;
     if (handle) handle.focus();
   }
+  if (toggleFocusFor) {
+    const twist = document.querySelector(
+      `.task[data-id="${cssEscape(toggleFocusFor)}"] > .task-row > .twisty`);
+    toggleFocusFor = null;
+    if (twist) twist.focus();
+  }
 }
 
 function cssEscape(value) {
@@ -457,6 +526,13 @@ function cssEscape(value) {
 function openSubtaskComposer(parentId) {
   subtaskDraftFor = parentId;
   subtaskDraftText = "";
+  // Typing into a box you cannot see is no use: opening the composer on a
+  // folded task unfolds it, here and on the server.
+  const task = findTask(parentId);
+  if (task && task.collapsed) {
+    task.collapsed = false;
+    patchTask(parentId, { collapsed: false });
+  }
   render();
 }
 

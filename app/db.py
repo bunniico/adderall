@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     effort        INTEGER,
     status        TEXT NOT NULL DEFAULT 'todo',
     ack_thankless INTEGER NOT NULL DEFAULT 0,
+    collapsed     INTEGER NOT NULL DEFAULT 0,
     order_index   INTEGER NOT NULL DEFAULT 0,
     started_at    TEXT,
     created_at    TEXT NOT NULL,
@@ -80,7 +81,7 @@ CREATE TABLE IF NOT EXISTS settings (
 
 TASK_FIELDS = {
     "title", "description", "parent_id", "project_id", "deadline", "estimated_time",
-    "actual_time", "impact", "effort", "status", "ack_thankless",
+    "actual_time", "impact", "effort", "status", "ack_thankless", "collapsed",
     "order_index", "started_at",
 }
 
@@ -109,6 +110,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
     list is simply the first tab.
     """
     cols = {r[1] for r in conn.execute("PRAGMA table_info(tasks)").fetchall()}
+    if "collapsed" not in cols:
+        # Older databases predate collapsible tasks; everything starts open,
+        # which is exactly how the list looked before the column existed.
+        conn.execute(
+            "ALTER TABLE tasks ADD COLUMN collapsed INTEGER NOT NULL DEFAULT 0"
+        )
     if "project_id" not in cols:
         conn.execute(
             "ALTER TABLE tasks ADD COLUMN project_id TEXT "
@@ -230,6 +237,7 @@ def open_task_counts() -> dict[str, int]:
 def _row_to_task(row: sqlite3.Row) -> dict:
     task = dict(row)
     task["ack_thankless"] = bool(task["ack_thankless"])
+    task["collapsed"] = bool(task["collapsed"])
     return task
 
 

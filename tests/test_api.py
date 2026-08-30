@@ -141,6 +141,74 @@ def test_subtask_under_unknown_parent_is_404(client):
                        ).status_code == 404
 
 
+# ---- folding (collapsible tasks) ----
+
+def test_tasks_start_unfolded_and_remember_being_folded(client):
+    state = create(client, title="parent")
+    pid = find(state, "parent")["id"]
+    assert find(state, "parent")["collapsed"] is False
+
+    state = client.patch(f"/api/tasks/{pid}", json={"collapsed": True}).json()
+    assert find(state, "parent")["collapsed"] is True
+    # survives the round trip: the shape you left the list in is what comes back
+    assert find(client.get("/api/state").json(), "parent")["collapsed"] is True
+
+    state = client.patch(f"/api/tasks/{pid}", json={"collapsed": False}).json()
+    assert find(state, "parent")["collapsed"] is False
+
+
+def test_folding_a_task_keeps_its_subtasks(client):
+    """Folding is a view state, not a deletion — the subtree is untouched."""
+    state = create(client, title="parent")
+    pid = find(state, "parent")["id"]
+    state = client.post(f"/api/tasks/{pid}/breakdown", json={}).json()
+    state = client.patch(f"/api/tasks/{pid}", json={"collapsed": True}).json()
+    parent = find(state, "parent")
+    assert parent["collapsed"] is True
+    assert [s["title"] for s in parent["subtasks"]] == ["step 1", "step 2", "step 3"]
+    assert parent["has_subtasks"] is True
+    assert parent["rollup_estimate"] is not None
+
+
+def test_adding_a_subtask_unfolds_the_parent(client):
+    state = create(client, title="parent")
+    pid = find(state, "parent")["id"]
+    client.patch(f"/api/tasks/{pid}", json={"collapsed": True})
+    state = create(client, title="by hand", parent_id=pid)
+    assert find(state, "parent")["collapsed"] is False
+
+
+def test_breakdown_unfolds_the_task(client):
+    state = create(client, title="parent")
+    pid = find(state, "parent")["id"]
+    client.patch(f"/api/tasks/{pid}", json={"collapsed": True})
+    state = client.post(f"/api/tasks/{pid}/breakdown", json={}).json()
+    assert find(state, "parent")["collapsed"] is False
+
+
+def test_dropping_a_task_into_a_folded_one_unfolds_it(client):
+    state = create(client, title="a")
+    state = create(client, title="b")
+    ids = {t["title"]: t["id"] for t in state["tasks"]}
+    client.patch(f"/api/tasks/{ids['a']}", json={"collapsed": True})
+    state = client.post(f"/api/tasks/{ids['b']}/move",
+                        json={"target_id": ids["a"], "mode": "into"}).json()
+    a = find(state, "a")
+    assert a["collapsed"] is False
+    assert [s["title"] for s in a["subtasks"]] == ["b"]
+
+
+def test_reordering_beside_a_folded_task_leaves_it_folded(client):
+    """Only landing *inside* a folded task opens it."""
+    state = create(client, title="a")
+    state = create(client, title="b")
+    ids = {t["title"]: t["id"] for t in state["tasks"]}
+    client.patch(f"/api/tasks/{ids['a']}", json={"collapsed": True})
+    state = client.post(f"/api/tasks/{ids['b']}/move",
+                        json={"target_id": ids["a"], "mode": "before"}).json()
+    assert find(state, "a")["collapsed"] is True
+
+
 def roots(state):
     """Top-level titles in the order the page shows them (see sortActive)."""
     return [t["title"] for t in sorted(state["tasks"], key=lambda t: t["sort_key"])]
@@ -618,6 +686,9 @@ def test_pre_projects_database_is_migrated(tmp_path, monkeypatch):
     assert len(state["projects"]) == 1
     assert [t["title"] for t in state["tasks"]] == ["from before"]
     assert state["tasks"][0]["project_id"] == state["projects"][0]["id"]
+    # the folding column is added too, and everything starts open — exactly
+    # how the list looked before it existed
+    assert state["tasks"][0]["collapsed"] is False
     # and running init again changes nothing
     db.init()
     assert len(db.list_projects()) == 1
