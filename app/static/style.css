@@ -233,6 +233,16 @@ dialog::backdrop { background: rgba(0,0,0,.6); }
 .title-input { font-size: 17px; font-weight: 600; flex: 1; }
 .modal-body label { display: flex; flex-direction: column; gap: 4px; font-size: 14px; color: var(--muted); }
 .modal-body label.row { flex-direction: row; align-items: center; gap: 8px; color: var(--text); }
+/* One settings idea, boxed together: the cap, whether it learns, when the day
+   opens and whether work is spread over days are four controls answering one
+   question, and reading them as a run of unrelated checkboxes is how a
+   settings dialog stops being read at all. */
+.s-group {
+  display: flex; flex-direction: column; gap: 12px; margin: 0;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 12px 14px 14px;
+}
+.s-group legend { font-size: 13px; color: var(--muted); padding: 0 6px; }
 .modal-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .modal-actions button { flex: 1; min-width: 100px; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -517,6 +527,9 @@ body.calendar-mode main { max-width: 1180px; }
   padding: 4px 6px; border-top: 1px solid var(--border);
   font-size: 11px; text-align: right;
 }
+/* A day booked past what it can hold. Loud enough to notice while paging
+   through a week, quiet enough not to shout at a Tuesday. */
+.cal-col-foot.over { color: var(--warn); font-weight: 600; }
 
 /* ---- month view ---- */
 .cal-dow {

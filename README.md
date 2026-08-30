@@ -142,7 +142,9 @@ set `ANTHROPIC_WORKSPACE_ID`. You can find the ID in the Claude Console URL:
   a block ending at its deadline and starting one buffered estimate earlier,
   with its **time tax drawn as a striped tail** so you can see that a "45m"
   job really occupies an hour, the free stretches between blocks labelled with
-  how long they are, and a line across the current time. **Week** and **Month**
+  how long they are, and a line across the current time, above a running
+  count of how much of the day is booked against how much it holds. **Week**
+  and **Month**
   are day-by-day lists ranked by **score** — deadline pressure, impact and how
   cheap the task is, folded into one 0–100 number — so the top of each day is
   what that day is actually about. Arrow keys page through, `T` goes to today,
@@ -233,6 +235,30 @@ set `ANTHROPIC_WORKSPACE_ID`. You can find the ID in the Claude Console URL:
   them (toggleable). Subtasks are backward-scheduled from their parent's
   deadline using buffered estimates. Urgency rises as remaining time shrinks
   relative to the (buffered) work left, and drives the "what next" ordering.
+- **Deadlines that land on a day that can hold them** — an auto-assigned
+  deadline used to be a horizon and nothing else, so fifteen things
+  braindumped in one minute came back as fifteen blocks stacked on the same
+  afternoon, at the same instant, on a day that could never have held them —
+  a plan you bounce off rather than start. Now the app keeps a book of what
+  each day already holds — deadlines you set, work it has already placed,
+  across *every* tab — and gives each new task the first slot that actually
+  fits, laid out through your working day and rolling onto the next one when
+  a day is full. It only ever looks forward from the day the horizon asked
+  for, so nothing is quietly pulled earlier, and nothing already overdue is
+  quietly rescheduled out of the red. A whole task tree is placed as one
+  span, so a project's steps still tile the block its parent occupies.
+  Everything about it is a preference: the length of a day, the hour it
+  starts, and whether to spread work at all, all in ⚙ Settings.
+- **A day cap that learns** — the calendar warns when a day is booked past
+  what a day holds, and auto-deadlines pack up to that and no further. Eight
+  hours is the default, but it is also the number most likely to be wrong for
+  any particular person, so **Learn my real day** watches how often you
+  actually reach it. Clear it every single day and it rises; never once reach
+  it and it falls halfway toward the day you really have — counting only the
+  days you finished something on, so a weekend off is not evidence. A goal
+  you have never hit isn't a plan, it's a daily notification that you failed,
+  which is the exact failure mode this app exists to avoid. The warning always
+  says which number it is using and why.
 - **Transition alarms** — three staged cues before any deadline (stop what
   you're doing → get ready → go), with different sounds and configurable
   lead times.
@@ -252,8 +278,8 @@ set `ANTHROPIC_WORKSPACE_ID`. You can find the ID in the Claude Console URL:
 3. **Time is visual and honest.** Buffered by default, analog + depleting
    color, elapsed and remaining both shown, staged alarms instead of one.
 4. **Deterministic where possible, AI only where needed.** All scheduling,
-   buffering, urgency, priority scores, rollups, focus traversal, matrix math
-   and deadline-nudging is local code (`app/logic.py`, fully unit-tested). The AI only does language work
+   buffering, urgency, priority scores, day-capacity learning, rollups, focus
+   traversal, matrix math and deadline-nudging is local code (`app/logic.py`, fully unit-tested). The AI only does language work
    and returns minimal structured JSON.
 5. **Low friction.** No accounts, one command, zero configuration required.
 
@@ -278,8 +304,9 @@ pytest
 ```
 
 `tests/test_logic.py` covers the deterministic core (buffering, quadrants,
-urgency, priority scores, backward scheduling, subtree rollups, focus
-traversal, next-task ordering, list sorting, deadline nudging);
+urgency, priority scores, backward scheduling, load-aware placement, the
+learned day cap, subtree rollups, focus traversal, next-task ordering, list
+sorting, deadline nudging);
 `tests/test_api.py` covers the API with the AI stubbed out.
 
 ## Layout

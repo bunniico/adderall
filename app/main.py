@@ -153,6 +153,35 @@ def _active_project_id(projects: list[dict]) -> str:
     return projects[0]["id"]
 
 
+def _capacity(settings: dict | None = None) -> dict:
+    """How much work one day is allowed to hold, and how that was arrived at.
+
+    The 8-hour cap is a setting; this is what it has learned to be. The number
+    and its workings travel together so the calendar can say which one it is
+    warning against and why — see `logic.capacity_plan`.
+    """
+    return logic.capacity_plan(settings or db.get_settings(), db.completed_history())
+
+
+def _derive_all(projects: list[dict], by_project: dict[str, list[dict]],
+                settings: dict, ratios: list[float]) -> dict[str, dict]:
+    """Derived fields for every project, planned against one shared day book.
+
+    Two passes, deliberately. Everything already pinned to a time is booked
+    first, across every project, and only then does the app place the work it
+    schedules itself. A task in one tab must never be dropped on top of a
+    commitment in another: the calendar spans every project, and so does the
+    day it is spending.
+    """
+    planner = logic.day_planner(settings, _capacity(settings)["minutes"])
+    for project in projects:
+        logic.reserve_fixed(planner, by_project.get(project["id"], []),
+                            settings, ratios)
+    return {p["id"]: logic.compute(by_project.get(p["id"], []), settings, ratios,
+                                   planner=planner)
+            for p in projects}
+
+
 def _state(project_id: str | None = None) -> dict:
     """Everything the page renders: the open tab's task tree, the tab strip,
     and the cross-project deadline list the alarms run off.
@@ -172,12 +201,13 @@ def _state(project_id: str | None = None) -> dict:
         by_project.setdefault(t["project_id"], []).append(t)
 
     counts = db.open_task_counts()
+    all_derived = _derive_all(projects, by_project, settings, ratios)
     alarm_tasks: list[dict] = []
     tree: list[dict] = []
     next_task_id = None
     for project in projects:
         tasks = by_project.get(project["id"], [])
-        derived = logic.compute(tasks, settings, ratios)
+        derived = all_derived[project["id"]]
         for t in tasks:
             d = derived[t["id"]]
             if t["status"] in logic.ACTIVE_STATUSES and d.get("deadline"):
@@ -220,10 +250,11 @@ def _calendar_events() -> list[dict]:
     for t in db.list_tasks():
         by_project.setdefault(t["project_id"], []).append(t)
 
+    all_derived = _derive_all(projects, by_project, settings, ratios)
     events: list[dict] = []
     for project in projects:
         tasks = by_project.get(project["id"], [])
-        derived = logic.compute(tasks, settings, ratios)
+        derived = all_derived[project["id"]]
         children_count: dict[str, int] = {}
         for t in tasks:
             if t["parent_id"] and t["status"] != "discarded":
@@ -335,12 +366,20 @@ def _freeze_manual_order() -> None:
     if logic.sort_mode(settings)[0] == "manual":
         return
     ratios = db.completion_ratios()
+    projects = db.list_projects()
+    by_project: dict[str, list[dict]] = {p["id"]: [] for p in projects}
+    for t in db.list_tasks():
+        by_project.setdefault(t["project_id"], []).append(t)
+    # Planned exactly the way the page plans it — one shared day book over
+    # every project — so a list sorted by deadline freezes in the order it was
+    # actually drawn in rather than in a slightly different one.
+    all_derived = _derive_all(projects, by_project, settings, ratios)
     # Manual order is one switch for the whole app, so every tab's top level
     # is frozen, not just the one being dragged in — otherwise the other tabs
     # would silently rearrange the next time you looked at them.
-    for project in db.list_projects():
-        tasks = db.list_tasks(project["id"])
-        derived = logic.compute(tasks, settings, ratios)
+    for project in projects:
+        tasks = by_project.get(project["id"], [])
+        derived = all_derived[project["id"]]
         roots = [t for t in tasks if t["parent_id"] is None]
         # The order on screen, not the app's opinion of it: dragging a task
         # while the list is sorted by deadline must keep the deadline order
@@ -715,8 +754,12 @@ def get_calendar():
     One payload for all three views: the page slices it into days, weeks and
     months locally, so ‹ › navigation and changing a filter never wait on the
     network.
+
+    `capacity` rides along: the day cap the views warn against overshooting,
+    plus the history that moved it, so the warning can explain itself instead
+    of quoting a number from nowhere.
     """
-    return {"events": _calendar_events()}
+    return {"events": _calendar_events(), "capacity": _capacity()}
 
 
 @app.post("/api/nudge")
@@ -772,6 +815,9 @@ def get_settings():
     has_key = bool((settings.pop("api_key", "") or "").strip()
                    or os.environ.get("ANTHROPIC_API_KEY"))
     settings["has_api_key"] = has_key
+    # Derived, not stored: what the day cap has actually learned to be, so the
+    # dialog can show it next to the number you set.
+    settings["capacity"] = _capacity()
     return settings
 
 
@@ -779,6 +825,7 @@ def get_settings():
 def put_settings(body: SettingsUpdate):
     changes = body.model_dump()
     changes.pop("has_api_key", None)
+    changes.pop("capacity", None)  # derived; the page only ever echoes it back
     if changes.get("api_key") == "":
         changes.pop("api_key")  # empty field means "leave unchanged"
     _normalize_sort(changes)
