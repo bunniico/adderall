@@ -113,3 +113,79 @@ def test_compile_caps_task_count(monkeypatch):
         {"title": f"t{i}", "description": ""} for i in range(100)
     ]})
     assert len(ai.compile_braindump({}, "text")) == ai.MAX_COMPILED
+
+
+# ---- nesting: the compiled braindump is a tree, bounded in code ----
+
+def test_compile_schema_nests_to_the_declared_depth():
+    node = ai.COMPILE_SCHEMA["properties"]["tasks"]["items"]
+    for _ in range(ai.COMPILE_DEPTH - 1):
+        assert "subtasks" in node["properties"], "nesting stops too early"
+        assert "subtasks" in node["required"]
+        node = node["properties"]["subtasks"]["items"]
+    # The deepest level is a leaf, which is what bounds the recursion.
+    assert "subtasks" not in node["properties"]
+
+
+def test_compile_keeps_the_tree_shape(monkeypatch):
+    _fake_call(monkeypatch, {"tasks": [
+        {"title": "buy gift", "description": "for mom", "subtasks": [
+            {"title": "pick a present", "description": "", "subtasks": []},
+        ]},
+    ]})
+    tasks = ai.compile_braindump({}, "text")
+    assert tasks == [{
+        "title": "buy gift", "description": "for mom",
+        "subtasks": [{"title": "pick a present", "description": "", "subtasks": []}],
+    }]
+
+
+def test_compile_truncates_nesting_past_max_depth(monkeypatch):
+    deepest = {"title": "too deep", "description": ""}
+    node = deepest
+    for i in range(ai.COMPILE_DEPTH):
+        node = {"title": f"level {i}", "description": "", "subtasks": [node]}
+    _fake_call(monkeypatch, {"tasks": [node]})
+
+    task = ai.compile_braindump({}, "text")[0]
+    depth = 1
+    while task["subtasks"]:
+        task = task["subtasks"][0]
+        depth += 1
+    assert depth == ai.COMPILE_DEPTH
+    assert task["title"] != "too deep"
+
+
+def test_compile_cap_counts_subtasks(monkeypatch):
+    _fake_call(monkeypatch, {"tasks": [
+        {"title": f"root {i}", "description": "", "subtasks": [
+            {"title": f"child {i}.{j}", "description": "", "subtasks": []}
+            for j in range(4)
+        ]}
+        for i in range(100)
+    ]})
+
+    def count(nodes):
+        return sum(1 + count(n["subtasks"]) for n in nodes)
+
+    assert count(ai.compile_braindump({}, "text")) == ai.MAX_COMPILED
+
+
+def test_compile_drops_untitled_tasks_at_every_level(monkeypatch):
+    _fake_call(monkeypatch, {"tasks": [
+        {"title": "   ", "description": "no title, dropped"},
+        {"title": "keep me", "description": "", "subtasks": [
+            {"title": "", "description": "", "subtasks": []},
+            {"title": "keep me too", "description": "", "subtasks": []},
+        ]},
+    ]})
+    tasks = ai.compile_braindump({}, "text")
+    assert [t["title"] for t in tasks] == ["keep me"]
+    assert [t["title"] for t in tasks[0]["subtasks"]] == ["keep me too"]
+
+
+def test_compile_tolerates_a_missing_subtasks_key(monkeypatch):
+    _fake_call(monkeypatch, {"tasks": [{"title": "flat", "description": ""}]})
+    assert ai.compile_braindump({}, "text") == [
+        {"title": "flat", "description": "", "subtasks": []}
+    ]

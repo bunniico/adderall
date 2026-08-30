@@ -210,7 +210,9 @@ set `ANTHROPIC_WORKSPACE_ID`. You can find the ID in the Claude Console URL:
   not how many checkboxes are ticked.
 - **Compiler** — 🧠 Braindump: dump everything in your head into one box;
   a single deep-model call with extended thinking turns it into discrete
-  tasks.
+  tasks — **nested**, so the steps that add up to one outcome land as
+  subtasks under it (up to three levels deep) instead of a flat wall of
+  items. Unrelated one-off things stay where they belong, at the top level.
 - **Taskmaster** — ▶ Focus mode shows *one task at a time* with a
   Time-Timer-style depleting dial (with a real analog clock in the middle),
   a shrinking color block, elapsed **and** remaining time, and staged
