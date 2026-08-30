@@ -240,6 +240,23 @@ set `ANTHROPIC_WORKSPACE_ID`. You can find the ID in the Claude Console URL:
   because shaving twenty minutes off a half-hour job changes whether you do it
   now, and shaving twenty off a six-hour one changes nothing. A task nobody has
   estimated or rated sits at neutral, never at zero.
+- **The score is on the task** — that number used to exist only inside the
+  app's own head and on the calendar chips. Every active task now wears it as
+  a `★ 62` badge, and the detail modal spells out what it is made of, so the
+  order the list is in is an order you can check rather than one you have to
+  take on trust.
+- **XP and levels** — finishing a task pays out its score as XP: worth 62,
+  earns 62. One number, not two — there is nothing extra to learn and nothing
+  to farm, and the way to earn more is to do the work that was worth more. A
+  level and a bar sit in the top-right corner, the bar slides as the XP lands
+  and `+62 XP` floats up under it, and passing a level runs the bar out to
+  full before starting the new one. Levels sit steadily further apart (100 XP
+  to level 2, another 200 to level 3), the Done list keeps what each task
+  paid, and XP already earned stays earned — a task that has paid once never
+  pays again, however often it is reopened, and deleting it later costs you
+  nothing. Containers pay through their steps, never twice for the same
+  afternoon. The whole thing is one switch in ⚙ Settings, along with the
+  confetti.
 - **A parent is its parts** — a task with subtasks gets no score of its own.
   It inherits the combined score of the work still underneath it, each step
   weighing what it costs in minutes, all the way down the tree. Finished and
@@ -292,8 +309,8 @@ set `ANTHROPIC_WORKSPACE_ID`. You can find the ID in the Claude Console URL:
 3. **Time is visual and honest.** Buffered by default, analog + depleting
    color, elapsed and remaining both shown, staged alarms instead of one.
 4. **Deterministic where possible, AI only where needed.** All scheduling,
-   buffering, urgency, priority scores, day-capacity learning, rollups, focus
-   traversal, matrix math and deadline-nudging is local code (`app/logic.py`, fully unit-tested). The AI only does language work
+   buffering, urgency, priority scores, the XP curve, day-capacity learning,
+   rollups, focus traversal, matrix math and deadline-nudging is local code (`app/logic.py`, fully unit-tested). The AI only does language work
    and returns minimal structured JSON.
 5. **Low friction.** No accounts, one command, zero configuration required.
 
@@ -318,9 +335,9 @@ pytest
 ```
 
 `tests/test_logic.py` covers the deterministic core (buffering, quadrants,
-urgency, priority scores, backward scheduling, load-aware placement, the
-learned day cap, subtree rollups, focus traversal, next-task ordering, list
-sorting, deadline nudging);
+urgency, priority scores, XP and levels, backward scheduling, load-aware
+placement, the learned day cap, subtree rollups, focus traversal, next-task
+ordering, list sorting, deadline nudging);
 `tests/test_api.py` covers the API with the AI stubbed out.
 
 ## Layout
@@ -328,8 +345,8 @@ sorting, deadline nudging);
 ```
 app/
   main.py     FastAPI routes + static hosting
-  db.py       SQLite persistence (schema + migrations, settings, project
-              and task CRUD)
+  db.py       SQLite persistence (schema + migrations, settings, lifetime
+              XP, project and task CRUD)
   logic.py    deterministic scheduling core — no AI, no I/O
   ai.py       Claude API broker (breakdown / annotate / compile)
   static/     single-page front end (vanilla JS, no build step)

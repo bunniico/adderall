@@ -961,3 +961,46 @@ def test_unknown_timezone_falls_back_to_utc():
     assert logic.resolve_tz("Mars/Olympus") is timezone.utc
     assert logic.resolve_tz("") is timezone.utc
     assert logic.resolve_tz(None) is timezone.utc
+
+
+# ---- XP and levels ----
+
+def test_task_xp_is_the_score_rounded():
+    assert logic.task_xp(62.4) == 62
+    assert logic.task_xp(62.6) == 63
+    assert logic.task_xp(0.0) == 1      # doing something always counts for something
+    assert logic.task_xp(100.0) == 100
+
+
+def test_level_thresholds_get_steadily_further_apart():
+    assert logic.level_threshold(1) == 0
+    assert logic.level_threshold(2) == 100
+    assert logic.level_threshold(3) == 300
+    assert logic.level_threshold(4) == 600
+    spans = [logic.level_threshold(n + 1) - logic.level_threshold(n)
+             for n in range(1, 6)]
+    assert spans == sorted(spans) and len(set(spans)) == len(spans)
+
+
+def test_level_progress_reads_a_running_total():
+    assert logic.level_progress(0) == {
+        "total": 0, "level": 1, "into_level": 0, "level_span": 100,
+        "to_next": 100, "progress": 0.0,
+    }
+    # One XP short of the next level is still the current one.
+    assert logic.level_progress(99)["level"] == 1
+    assert logic.level_progress(100)["level"] == 2
+    assert logic.level_progress(299)["level"] == 2
+    assert logic.level_progress(300)["level"] == 3
+
+    mid = logic.level_progress(200)
+    assert mid["level"] == 2
+    assert (mid["into_level"], mid["level_span"], mid["to_next"]) == (100, 200, 100)
+    assert mid["progress"] == 0.5
+
+
+def test_level_progress_never_goes_backwards_or_negative():
+    assert logic.level_progress(-50)["level"] == 1
+    assert logic.level_progress(-50)["total"] == 0
+    levels = [logic.level_progress(n)["level"] for n in range(0, 2000, 37)]
+    assert levels == sorted(levels)

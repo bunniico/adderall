@@ -8,7 +8,7 @@
 const $ = (id) => document.getElementById(id);
 
 let state = { tasks: [], next_task_id: null, projects: [], active_project_id: null,
-              alarm_tasks: [] };
+              alarm_tasks: [], xp: null };
 let settings = null;
 let detailTaskId = null;
 let renamingProject = null;   // project whose tab is currently an input box
@@ -50,6 +50,7 @@ function applyState(newState) {
   }
   renderTabs();
   render();
+  renderXp();
   maybeShowThankless();
   scheduleTransitionAlarms();
   syncFocusWithState();
@@ -743,6 +744,13 @@ function taskNode(task, isSub) {
     // Folded away, but the thing you were told to do next is in there:
     // hiding that without a word is how a good list quietly stops working.
     if (collapsed && holdsNextTask(task)) add("next up inside", "next-badge");
+    // The score, out in the open. It is the number the calendar sorts by, the
+    // number "next up" is picked with, and — when gamification is on — the
+    // number finishing the task pays you, so it belongs on the task itself
+    // rather than buried in a dialog.
+    if (task.score != null) {
+      add(`★ ${Math.round(task.score)}`, "score-badge").title = scoreTitle(task);
+    }
     // A task that contains subtasks is worth what it holds: the estimate is
     // the sum of everything underneath, the deadline the furthest one inside.
     const est = task.has_subtasks ? task.rollup_estimate : task.buffered_estimate;
@@ -766,6 +774,17 @@ function taskNode(task, isSub) {
     // The progress bar stays out in the open when a task is folded: a rolled
     // up "40m left · 60%" is the whole point of hiding the steps.
     if (task.has_subtasks) el.appendChild(progressBar(task));
+  } else if (task.xp_awarded && settings?.gamification) {
+    // What it paid, kept next to it. The Done list is the only place the
+    // XP total can be traced back to the work that earned it.
+    const badges = document.createElement("div");
+    badges.className = "task-badges";
+    const b = document.createElement("span");
+    b.className = "badge xp-badge";
+    b.textContent = `+${task.xp_awarded} XP`;
+    b.title = "What finishing this one paid out — its score at the time.";
+    badges.appendChild(b);
+    el.appendChild(badges);
   }
 
   if (!collapsed && (subs.length || composing)) {
@@ -776,6 +795,20 @@ function taskNode(task, isSub) {
     el.appendChild(wrap);
   }
   return el;
+}
+
+/* What the score means, in the one place both the list badge and the detail
+ * modal read it from. */
+function scoreTitle(task) {
+  const score = Math.round(task.score);
+  const how = task.has_subtasks
+    ? `Score ${score}/100, rolled up from the steps still left inside it`
+    : `Score ${score}/100 — deadline pressure, impact, and how cheap it is ` +
+      `in both effort and time, in one number`;
+  if (!settings?.gamification) return how + ".";
+  return how + (task.has_subtasks
+    ? ". Each of those steps pays out its own score in XP when you finish it."
+    : `. Finishing it earns ${Math.max(1, score)} XP.`);
 }
 
 /* The overdue badge, as a button. Clicking it opens the nudge dialog on this
@@ -942,6 +975,90 @@ function celebrate() {
     box.appendChild(c);
   }
   setTimeout(() => { box.hidden = true; box.replaceChildren(); }, 2200);
+}
+
+/* ---------------- XP & levels ----------------
+ * The bar in the corner is the same score you can read on every task, added
+ * up: finish something worth 62 and the bar moves 62. It only ever animates
+ * on a gain — every other state read redraws it exactly where it already was,
+ * because a bar that slides about on its own is noise, not feedback. */
+
+let xpDrawn = null;      // what the meter is currently showing
+let xpGainTimer = null;
+const XP_FILL_MS = 600;  // must match the transition in style.css
+
+function renderXp() {
+  const meter = $("xp-meter");
+  const xp = state.xp;
+  if (!xp || !settings?.gamification) {
+    meter.hidden = true;
+    // Remembered even while hidden, so turning the setting back on shows the
+    // bar where it belongs instead of replaying an animation you missed.
+    xpDrawn = xp ? { level: xp.level, progress: xp.progress } : null;
+    return;
+  }
+  const wasHidden = meter.hidden;
+  meter.hidden = false;
+  $("xp-level").textContent = xp.level;
+  $("xp-count").textContent = `${xp.into_level} / ${xp.level_span}`;
+  meter.title = `Level ${xp.level} — ${xp.total} XP earned, ${xp.to_next} to ` +
+    `level ${xp.level + 1}. Finishing a task pays out its score.`;
+  meter.setAttribute("aria-label",
+    `Level ${xp.level}, ${xp.into_level} of ${xp.level_span} XP`);
+
+  const gained = xp.gained || 0;
+  const previous = xpDrawn;
+  xpDrawn = { level: xp.level, progress: xp.progress };
+  if (!gained || wasHidden || !previous) { xpFill(xp.progress, false); return; }
+
+  xpFloat(gained);
+  // The focus overlay covers the header, so a bar sliding about underneath it
+  // is a reward nobody sees. Finishing a task from inside a session says it in
+  // the one thing that does show through.
+  if (focus.open) toast(`+${gained} XP`);
+  if (xp.level > previous.level) {
+    // Run the old level out to the end before starting the new one: a bar
+    // that jumps from nearly-full to nearly-empty with no fanfare reads as
+    // losing your progress rather than as passing a milestone.
+    xpFill(1, false);
+    setTimeout(() => {
+      xpFill(0, true);          // back to empty with no animation at all
+      xpFill(xp.progress, false);
+      meter.classList.remove("levelup");
+      void meter.offsetWidth;   // restart the flash if two levels land at once
+      meter.classList.add("levelup");
+      toast(`Level ${xp.level}! ${xp.to_next} XP to the next one.`);
+    }, XP_FILL_MS + 40);
+  } else {
+    xpFill(xp.progress, false);
+  }
+}
+
+/* `snap` fills without animating — the one moment that needs it is the reset
+ * to an empty bar on a level-up, which must not be seen sliding backwards. */
+function xpFill(progress, snap) {
+  const fill = $("xp-fill");
+  const width = Math.max(0, Math.min(1, progress)) * 100 + "%";
+  if (!snap) { fill.style.width = width; return; }
+  fill.style.transition = "none";
+  fill.style.width = width;
+  void fill.offsetWidth;  // force the reflow, so the next width does animate
+  fill.style.transition = "";
+}
+
+/* The "+62 XP" that rises off the bar. */
+function xpFloat(amount) {
+  const el = $("xp-gain");
+  el.textContent = `+${amount} XP`;
+  el.hidden = false;
+  el.classList.remove("rise");
+  void el.offsetWidth;
+  el.classList.add("rise");
+  clearTimeout(xpGainTimer);
+  xpGainTimer = setTimeout(() => {
+    el.hidden = true;
+    el.classList.remove("rise");
+  }, 1600);
 }
 
 /* ---------------- task actions ---------------- */
@@ -1254,6 +1371,16 @@ function updateDetailDerived() {
   badge.style.color = `var(--${quad})`;
   const est = Number($("d-estimate").value);
   const task = findAnyTask(detailTaskId);
+  // The score as the server last worked it out. Impact and effort feed it, so
+  // dragging those sliders changes it — but only once saved, since urgency
+  // and the rolled-up length are the server's to know.
+  const scoreEl = $("d-score");
+  const hasScore = task && task.score != null;
+  scoreEl.textContent = hasScore ? `★ ${Math.round(task.score)}` : "–";
+  scoreEl.title = hasScore ? scoreTitle(task) : "";
+  $("d-score-note").textContent = hasScore
+    ? scoreTitle(task) + " Saving new impact, effort or estimate values re-scores it."
+    : "";
   const buf = task?.buffer_applied ?? (settings ? settings.buffer : 0.3);
   $("d-buffer-note").textContent = est
     ? `Buffered: ${est}m + ${Math.round(buf * 100)}% time tax = ${fmtMinutes(Math.max(1, Math.ceil(est * (1 + buf) - 1e-9)))} — the timer uses this.`

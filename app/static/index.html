@@ -13,6 +13,17 @@
 <header class="topbar">
   <h1>⏳ adderall</h1>
   <div class="topbar-actions">
+    <!-- Level and XP. Every task pays out its own score when you finish it,
+         so the number on the badge and the number in the bar are the same
+         number, read twice. -->
+    <div id="xp-meter" class="xp-meter" hidden>
+      <div class="xp-line">
+        <span class="xp-level">Lv <b id="xp-level">1</b></span>
+        <span id="xp-count" class="xp-count"></span>
+      </div>
+      <div class="xp-track"><div id="xp-fill" class="xp-fill"></div></div>
+      <span id="xp-gain" class="xp-gain" role="status" hidden></span>
+    </div>
     <button id="focus-pill" class="focus-pill" hidden
       title="Focus session still running — click to come back to it">
       <span class="focus-pill-dot">▶</span>
@@ -153,7 +164,9 @@
         <input id="d-effort" type="range" min="0" max="10" value="5">
       </label>
     </div>
-    <p>Quadrant: <span id="d-quadrant" class="quad-badge"></span></p>
+    <p>Quadrant: <span id="d-quadrant" class="quad-badge"></span>
+       · Score: <span id="d-score" class="badge score-badge"></span></p>
+    <p id="d-score-note" class="muted"></p>
     <label id="d-project-row" hidden>Project
       <select id="d-project" title="Move this task — and everything under it — to another tab"></select>
     </label>
@@ -282,7 +295,8 @@
     </label>
 
     <label class="row"><input id="s-gamification" type="checkbox">
-      Completion celebration</label>
+      Gamification <span class="muted">— the confetti when you finish something,
+      and the level and XP bar in the corner</span></label>
 
     <label class="row"><input id="s-manual-order" type="checkbox">
       Manual order <span class="muted">— keep the list exactly as you drag it, instead of
