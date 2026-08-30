@@ -173,6 +173,18 @@ set `ANTHROPIC_WORKSPACE_ID`. You can find the ID in the Claude Console URL:
   shape it comes back in, on every device. Anything that puts a task inside a
   folded one — the **+** box, a ⚡ breakdown, a drag — opens it back up, so
   nothing ever lands somewhere you can't see.
+- **Sort it however you need to read it** — a **Sort** control above the list
+  reorders it by **score** (the app's one-number answer to "what deserves the
+  next hour"), **deadline**, **number of subtasks** (open steps, counted all
+  the way down — which of these is still a whole project?), or **created
+  time**, each way round: soonest or furthest off, most steps or fewest,
+  newest or oldest. It is a lens, not a change of plan — the steps nested
+  inside a task keep the order the breakdown gave them, and ▶ Focus still
+  hands you the most urgent thing, so reading your list by deadline for a
+  minute never quietly changes what you are about to work on. Tasks the field
+  says nothing about (no deadline, say) sink to the bottom whichever way the
+  sort is pointing. **Smart** is the default — urgency first, quick wins
+  ahead of slogs — and **Manual** is the list exactly as you dragged it.
 - **Your own order** — drag any task by its ⠿ handle: onto the top or bottom
   edge of another task to sit above or below it, into the middle of one to
   nest inside it, or onto empty list space to pull it back out to the top
@@ -180,7 +192,10 @@ set `ANTHROPIC_WORKSPACE_ID`. You can find the ID in the Claude Console URL:
   handle and use ↑ ↓ to move, → to nest under the task above, ← to pop out).
   The first move switches the list to **manual order**: it then stays exactly
   as you arranged it — including which task is "next up" — instead of being
-  re-sorted by urgency. ⚙ Settings turns that back off, and everything else
+  re-sorted. Whatever order you were looking at when you dragged is the order
+  it freezes, so a list sorted by deadline keeps its deadline order and only
+  the task you moved moves. Picking another **Sort** (or the switch in
+  ⚙ Settings, which is the same switch) turns it back off, and everything else
   (estimates, deadlines, rollups, alarms) carries on as before either way.
 - **Estimator** — every task gets a time estimate (AI-seeded, always
   overridable), and every estimate gets an automatic **time tax**: a 25–50%
@@ -262,8 +277,8 @@ pytest
 
 `tests/test_logic.py` covers the deterministic core (buffering, quadrants,
 urgency, priority scores, backward scheduling, subtree rollups, focus
-traversal, next-task ordering, deadline nudging); `tests/test_api.py` covers
-the API with the AI stubbed out.
+traversal, next-task ordering, list sorting, deadline nudging);
+`tests/test_api.py` covers the API with the AI stubbed out.
 
 ## Layout
 

@@ -509,11 +509,77 @@ const QUAD_LABEL = {
   thankless: "😮‍💨 thankless",
 };
 
+/* ---------------- sorting ----------------
+ * The sorter is a lens, not a plan: it decides the order the top-level tasks
+ * are read in and nothing else. Steps nested inside a task stay in the order
+ * the breakdown put them in — a plan whose steps rearrange themselves by score
+ * is not a plan — and ▶ Focus still picks by urgency (or by your manual order),
+ * so glancing at the list by deadline never quietly changes what you are about
+ * to work on.
+ *
+ * The server does the actual comparing: every task arrives with a
+ * `list_sort_key` computed from the stored setting, so the page only has to
+ * put the keys in order and draw the control that chose them. */
+
+const SORT_FIELDS = ["smart", "manual", "score", "deadline", "subtasks", "created"];
+const DEFAULT_SORT_DIR = {
+  smart: "desc", manual: "asc", score: "desc",
+  deadline: "asc", subtasks: "desc", created: "desc",
+};
+/* What each direction actually means, in the words of the field — "descending
+ * subtasks" is a sentence nobody thinks in. */
+const SORT_DIR_LABEL = {
+  score: { desc: "↓ highest first", asc: "↑ lowest first" },
+  deadline: { asc: "↑ soonest first", desc: "↓ furthest off first" },
+  subtasks: { desc: "↓ most steps first", asc: "↑ fewest steps first" },
+  created: { desc: "↓ newest first", asc: "↑ oldest first" },
+};
+
+/* Mirrors logic.sort_mode on the server: the old manual-order flag still means
+ * a hand-arranged list, so a list arranged before the sorter existed keeps the
+ * shape it was left in. */
+function sortMode() {
+  let field = settings?.sort_field || "smart";
+  if (!SORT_FIELDS.includes(field)) field = "smart";
+  if (field === "smart" && settings?.manual_order) field = "manual";
+  let dir = settings?.sort_dir;
+  if (dir !== "asc" && dir !== "desc") dir = DEFAULT_SORT_DIR[field];
+  return { field, dir };
+}
+
+function renderSortBar() {
+  if (!settings) return;
+  const { field, dir } = sortMode();
+  $("sort-field").value = field;
+  const btn = $("sort-dir");
+  const labels = SORT_DIR_LABEL[field];
+  // Smart and manual carry their own direction — "urgency, ascending" would
+  // just be the same list upside down — so the flip button steps aside.
+  btn.hidden = !labels;
+  if (!labels) return;
+  btn.textContent = labels[dir];
+  btn.title = `Sorting ${labels[dir].slice(2)} — click to flip`;
+  btn.setAttribute("aria-label", "Reverse the sort order");
+}
+
+async function setSort(field, dir) {
+  try {
+    settings = await api("/settings", {
+      method: "PUT",
+      body: JSON.stringify({ sort_field: field, sort_dir: dir }),
+    });
+    applyState(await api("/state"));  // the keys are computed server-side
+  } catch (e) { toast(e.message, true); }
+  renderSortBar();
+}
+
 function sortActive(tasks) {
+  const key = (t) => t.list_sort_key || t.sort_key;
   return [...tasks].sort((a, b) => {
-    for (let i = 0; i < a.sort_key.length; i++) {
-      if (a.sort_key[i] < b.sort_key[i]) return -1;
-      if (a.sort_key[i] > b.sort_key[i]) return 1;
+    const ka = key(a), kb = key(b);
+    for (let i = 0; i < ka.length; i++) {
+      if (ka[i] < kb[i]) return -1;
+      if (ka[i] > kb[i]) return 1;
     }
     return 0;
   });
@@ -735,6 +801,9 @@ function render() {
   for (const t of sortActive(active)) list.appendChild(taskNode(t, false));
   $("empty-hint").hidden = active.length > 0;
   $("list-hint").hidden = active.length === 0;
+  // Nothing to sort is nothing to decide about: the bar arrives with the list.
+  $("list-toolbar").hidden = active.length === 0;
+  renderSortBar();
   const project = (state.projects || []).find(
     (p) => p.id === state.active_project_id);
   $("empty-project").textContent = project && (state.projects || []).length > 1
@@ -930,18 +999,20 @@ let dragId = null;      // task being dragged
 let pendingDrop = null; // {targetId, mode} under the pointer right now
 
 async function moveTask(id, body) {
-  const wasAuto = settings && !settings.manual_order;
+  const wasAuto = settings && sortMode().field !== "manual";
   try {
     applyState(await api(`/tasks/${id}/move`, {
       method: "POST", body: JSON.stringify(body),
     }));
   } catch (e) { toast(e.message, true); return; }
-  // The first move takes the list off auto-sort; say so once, then stop.
+  // The first move takes the list off whatever it was sorted by; say so once,
+  // then stop. The sorter itself has already flipped to Manual on the server.
   if (wasAuto) {
     try { settings = await api("/settings"); } catch {}
-    if (settings?.manual_order)
+    renderSortBar();
+    if (sortMode().field === "manual")
       toast("Manual order on — the list stays exactly as you arrange it. " +
-            "Turn it off in ⚙ Settings to go back to auto-sort.");
+            "Pick another Sort above to go back.");
   }
 }
 
@@ -1275,7 +1346,7 @@ function openSettings() {
   $("s-granularity").value = settings.granularity;
   $("s-granularity-val").textContent = settings.granularity;
   $("s-gamification").checked = settings.gamification;
-  $("s-manual-order").checked = settings.manual_order;
+  $("s-manual-order").checked = sortMode().field === "manual";
   $("s-api-key").value = "";
   $("s-key-status").textContent = settings.has_api_key ? "configured ✓" : "not set";
   // Not a secret, unlike the key — safe to show so it can be edited/cleared.
@@ -1831,6 +1902,18 @@ function wire() {
   wireCalendar();
 
   $("btn-add-project").addEventListener("click", addProject);
+
+  // The sorter. Switching field takes that field's natural direction with it —
+  // picking "Deadline" and being shown the furthest-off task first would be an
+  // answer to a question nobody asked — and the button flips it from there.
+  $("sort-field").addEventListener("change", () => {
+    const field = $("sort-field").value;
+    setSort(field, DEFAULT_SORT_DIR[field] || "desc");
+  });
+  $("sort-dir").addEventListener("click", () => {
+    const { field, dir } = sortMode();
+    setSort(field, dir === "asc" ? "desc" : "asc");
+  });
 
   // Alt+1…9 jumps straight to a tab. Ctrl/Cmd+number belongs to the browser's
   // own tabs, so it stays out of the way. Read off the physical key, because

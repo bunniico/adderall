@@ -33,6 +33,9 @@ DEFAULT_SETTINGS = {
     "granularity": 3,          # default breakdown spiciness 1-5
     "gamification": True,
     "manual_order": False,     # you arrange the list yourself (set by dragging)
+    "sort_field": "smart",     # how the list is read: smart | manual | score |
+                               # deadline | subtasks | created
+    "sort_dir": "desc",        # asc | desc, for the one-field sorts
     "active_project": "",      # id of the project tab currently open
     "api_key": "",             # optional; falls back to ANTHROPIC_API_KEY env
     "workspace_id": "",        # required for identity-linked keys; falls back

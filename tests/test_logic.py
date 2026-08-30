@@ -225,6 +225,126 @@ def test_manual_order_leaves_the_rest_of_the_derivations_alone():
         assert auto[field] == manual[field]
 
 
+# ---- the sorter (how the list is read) ----
+
+def sorter(field, direction=None):
+    settings = {**SETTINGS, "sort_field": field}
+    if direction:
+        settings["sort_dir"] = direction
+    return settings
+
+
+def sorted_ids(tasks, settings, of=None):
+    """Top-level ids in the order the page draws them (see sortActive)."""
+    derived = logic.compute(tasks, settings, now=NOW)
+    rows = of if of is not None else [t for t in tasks if t["parent_id"] is None]
+    return [t["id"] for t in sorted(rows, key=lambda t: derived[t["id"]]["list_sort_key"])]
+
+
+def test_sort_mode_reads_the_stored_choice():
+    assert logic.sort_mode({}) == ("smart", True)
+    assert logic.sort_mode({"sort_field": "deadline"}) == ("deadline", False)
+    assert logic.sort_mode({"sort_field": "deadline", "sort_dir": "desc"}) == ("deadline", True)
+    # a list arranged by hand before the sorter existed is still a manual list
+    assert logic.sort_mode({"manual_order": True}) == ("manual", False)
+    # ...but a field you actually picked wins over that flag
+    assert logic.sort_mode({"sort_field": "score", "manual_order": True}) == ("score", True)
+    assert logic.sort_mode({"sort_field": "vibes", "sort_dir": "sideways"}) == ("smart", True)
+
+
+def test_sort_by_score_reads_best_first_and_flips_on_request():
+    weak = make_task("weak", order_index=0, impact=1, effort=9, estimated_time=30)
+    strong = make_task("strong", order_index=1, impact=9, effort=1, estimated_time=30)
+    tasks = [weak, strong]
+    assert sorted_ids(tasks, sorter("score")) == ["strong", "weak"]
+    assert sorted_ids(tasks, sorter("score", "asc")) == ["weak", "strong"]
+
+
+def test_sort_by_deadline_sinks_undated_tasks_either_way():
+    settings = {**SETTINGS, "auto_deadlines": False, "sort_field": "deadline"}
+    soon = make_task("soon", order_index=0,
+                     deadline=(NOW + timedelta(hours=2)).isoformat())
+    later = make_task("later", order_index=1,
+                      deadline=(NOW + timedelta(days=3)).isoformat())
+    undated = make_task("undated", order_index=2)
+    tasks = [soon, later, undated]
+    assert sorted_ids(tasks, settings) == ["soon", "later", "undated"]
+    # flipped round it is the furthest deadline first — but a task with no
+    # deadline at all is still not the answer to "what is due last?"
+    assert sorted_ids(tasks, {**settings, "sort_dir": "desc"}) == [
+        "later", "soon", "undated"]
+
+
+def test_sort_by_deadline_reads_a_container_off_the_work_it_holds():
+    settings = {**SETTINGS, "auto_deadlines": False, "sort_field": "deadline"}
+    solo = make_task("solo", order_index=0,
+                     deadline=(NOW + timedelta(days=2)).isoformat())
+    parent = make_task("parent", order_index=1)
+    step = make_task("step", parent_id="parent",
+                     deadline=(NOW + timedelta(hours=1)).isoformat())
+    assert sorted_ids([solo, parent, step], settings) == ["parent", "solo"]
+
+
+def test_sort_by_subtasks_counts_open_steps_all_the_way_down():
+    flat = make_task("flat", order_index=0)
+    small = make_task("small", order_index=1)
+    small_step = make_task("small_step", parent_id="small")
+    big = make_task("big", order_index=2)
+    big_step = make_task("big_step", parent_id="big")
+    grandsteps = [make_task(f"g{i}", parent_id="big_step", order_index=i)
+                  for i in range(2)]
+    tasks = [flat, small, small_step, big, big_step, *grandsteps]
+    assert sorted_ids(tasks, sorter("subtasks")) == ["big", "small", "flat"]
+    assert sorted_ids(tasks, sorter("subtasks", "asc")) == ["flat", "small", "big"]
+    derived = logic.compute(tasks, sorter("subtasks"), now=NOW)
+    assert derived["big"]["open_subtasks"] == 3   # the step and both grandsteps
+    assert derived["flat"]["open_subtasks"] == 0
+
+
+def test_open_subtasks_counts_only_work_still_to_do():
+    parent = make_task("p")
+    finished = make_task("finished", parent_id="p", order_index=0, status="done")
+    dropped = make_task("dropped", parent_id="p", order_index=1, status="discarded")
+    inside_dropped = make_task("inside_dropped", parent_id="dropped")
+    todo = make_task("todo", parent_id="p", order_index=2)
+    derived = logic.compute([parent, finished, dropped, inside_dropped, todo],
+                            SETTINGS, now=NOW)
+    assert derived["p"]["open_subtasks"] == 1
+
+
+def test_sort_by_created_reads_newest_or_oldest_first():
+    old = make_task("old", order_index=1,
+                    created_at=(NOW - timedelta(days=2)).isoformat())
+    new = make_task("new", order_index=0, created_at=NOW.isoformat())
+    tasks = [old, new]
+    assert sorted_ids(tasks, sorter("created")) == ["new", "old"]
+    assert sorted_ids(tasks, sorter("created", "asc")) == ["old", "new"]
+
+
+def test_sorting_the_list_leaves_what_next_alone():
+    """The sorter is a lens on the list, not a change of plan."""
+    urgent = make_task("urgent", order_index=1, estimated_time=60,
+                       deadline=(NOW + timedelta(minutes=70)).isoformat())
+    calm = make_task("calm", order_index=0, impact=8, effort=2, estimated_time=10,
+                     created_at=(NOW - timedelta(days=1)).isoformat())
+    tasks = [urgent, calm]
+    settings = {**sorter("created", "asc"), "auto_deadlines": False}
+    assert sorted_ids(tasks, settings) == ["calm", "urgent"]
+    derived = logic.compute(tasks, settings, now=NOW)
+    assert logic.next_task(tasks, derived)["id"] == "urgent"
+
+
+def test_manual_stays_manual_through_the_sorter():
+    first = make_task("first", order_index=0)
+    second = make_task("second", order_index=1, estimated_time=10,
+                       deadline=(NOW + timedelta(minutes=11)).isoformat())
+    tasks = [first, second]
+    assert sorted_ids(tasks, sorter("manual")) == ["first", "second"]
+    derived = logic.compute(tasks, sorter("manual"), now=NOW)
+    for t in tasks:
+        assert derived[t["id"]]["list_sort_key"] == derived[t["id"]]["sort_key"]
+
+
 # ---- subtree rollups (a container is worth what it holds) ----
 
 def test_rollup_estimate_sums_subtasks():

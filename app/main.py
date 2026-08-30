@@ -323,15 +323,16 @@ def _require_project(project_id: str) -> dict:
 
 
 def _freeze_manual_order() -> None:
-    """Switch the list from auto-sort to hand-arranged, keeping what's on screen.
+    """Switch the list from sorted to hand-arranged, keeping what's on screen.
 
-    Top-level tasks are normally shown in urgency order rather than in stored
-    order, so the first drag writes the order you were looking at into
-    `order_index` before moving anything. Without that, everything else would
-    jump the moment manual order took effect.
+    Top-level tasks are normally shown in some computed order — urgency, or
+    whichever field the sorter is set to — rather than in stored order, so the
+    first drag writes the order you were looking at into `order_index` before
+    moving anything. Without that, everything else would jump the moment
+    manual order took effect.
     """
     settings = db.get_settings()
-    if settings.get("manual_order"):
+    if logic.sort_mode(settings)[0] == "manual":
         return
     ratios = db.completion_ratios()
     # Manual order is one switch for the whole app, so every tab's top level
@@ -341,9 +342,35 @@ def _freeze_manual_order() -> None:
         tasks = db.list_tasks(project["id"])
         derived = logic.compute(tasks, settings, ratios)
         roots = [t for t in tasks if t["parent_id"] is None]
-        roots.sort(key=lambda t: derived[t["id"]]["sort_key"])
+        # The order on screen, not the app's opinion of it: dragging a task
+        # while the list is sorted by deadline must keep the deadline order
+        # you were looking at and move only the task you dragged.
+        roots.sort(key=lambda t: derived[t["id"]]["list_sort_key"])
         db.reorder_siblings(None, project["id"], [t["id"] for t in roots])
-    db.update_settings({"manual_order": True})
+    db.update_settings({"manual_order": True, "sort_field": "manual"})
+
+
+def _normalize_sort(changes: dict) -> None:
+    """Keep the sorter and the manual-order flag telling the same story.
+
+    They are two faces of one choice — "Manual" in the list's sorter *is*
+    manual order — but they live in two different places on screen, so
+    whichever one the page sends, the other is brought into line. A settings
+    save that leaves the checkbox alone is not allowed to knock the list off
+    the field it is sorted by, so the flag only speaks when it actually
+    changes something.
+    """
+    if "sort_field" in changes:
+        field = str(changes.get("sort_field") or "").strip().lower()
+        changes["sort_field"] = field if field in logic.SORT_FIELDS else "smart"
+        changes["manual_order"] = changes["sort_field"] == "manual"
+    elif "manual_order" in changes:
+        wanted = bool(changes["manual_order"])
+        if wanted != (logic.sort_mode(db.get_settings())[0] == "manual"):
+            changes["sort_field"] = "manual" if wanted else "smart"
+    if "sort_dir" in changes:
+        direction = str(changes.get("sort_dir") or "").strip().lower()
+        changes["sort_dir"] = direction if direction in ("asc", "desc") else "desc"
 
 
 # ---------- routes ----------
@@ -747,6 +774,7 @@ def put_settings(body: SettingsUpdate):
     changes.pop("has_api_key", None)
     if changes.get("api_key") == "":
         changes.pop("api_key")  # empty field means "leave unchanged"
+    _normalize_sort(changes)
     db.update_settings(changes)
     return get_settings()
 
