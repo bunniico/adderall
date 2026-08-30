@@ -149,13 +149,17 @@ set `ANTHROPIC_WORKSPACE_ID`. You can find the ID in the Claude Console URL:
   `D`/`W`/`M` switch view, and clicking any task opens it wherever it lives.
 - **Nudge past-due work** — a deadline that has already gone by is the most
   demoralizing thing a list like this can show you, and re-typing a date for
-  every item is exactly the friction that leaves it showing. Everything
-  overdue collects in one rail above the calendar with a **⏩** on each and a
-  *Nudge all* on the row: pick "tomorrow, same time", "next week" or a moment
-  of your own, and the task moves **keeping its length** — the estimate never
-  changes, so the block is exactly as big on its new day. For anything with
+  every item is exactly the friction that leaves it showing. So the overdue
+  badge **is a button**: click the red `overdue · … ⏩` on any task, in the
+  list or on the calendar, and pick "in 1 hour", "tonight", "tomorrow, same
+  time", "in 3 days", "next week" or a moment of your own. The task moves
+  **keeping its length** — the estimate never changes, so it takes up exactly
+  as much of the new day as it did of the old one — and for anything with
   subtasks the whole plan slides by the same amount, so three days of steps
-  stay three days of steps instead of collapsing onto the new date.
+  stay three days of steps instead of collapsing onto the new date. The
+  calendar additionally gathers everything overdue into one rail with a
+  *Nudge all* on it, for when the pile is the problem rather than any one
+  task in it.
 - **Magic ToDo** — type a task, hit ⚡, get concrete subtasks. A 🌶
   granularity slider controls how fine the breakdown is; any subtask can be
   broken down further, recursively. The **+** on every task adds a subtask by

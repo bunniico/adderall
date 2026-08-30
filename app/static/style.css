@@ -145,6 +145,12 @@ textarea { resize: vertical; }
 .badge.soon { color: var(--warn); border-color: var(--warn); }
 .badge.next-badge { color: var(--accent); border-color: var(--accent); font-weight: 600; }
 .badge.folded { color: var(--muted); font-style: italic; }
+/* The overdue badge is a button — it is the one badge you always want to act
+   on rather than read. */
+.badge.nudge-badge { cursor: pointer; background: transparent; }
+.badge.nudge-badge:hover, .badge.nudge-badge:focus-visible {
+  background: var(--bad); color: #10131c; filter: none;
+}
 .task-btn {
   padding: 3px 9px; font-size: 13px; border-radius: 7px; flex: none;
 }

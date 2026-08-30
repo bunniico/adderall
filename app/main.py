@@ -234,8 +234,6 @@ def _calendar_events() -> list[dict]:
             # a calendar you can look back at is half of what a calendar is for.
             if t["status"] == "discarded" or not d.get("deadline"):
                 continue
-            length = _block_length(d)
-            buf = d["buffer_applied"] or 0.0
             events.append({
                 "id": t["id"],
                 "title": t["title"],
@@ -248,11 +246,11 @@ def _calendar_events() -> list[dict]:
                 "deadline_source": d["deadline_source"],
                 "estimated_time": t["estimated_time"],
                 "buffered_estimate": d["buffered_estimate"],
-                "buffer_applied": buf,
+                "buffer_applied": d["buffer_applied"],
                 # How long the block is, and how much of that is the time tax
                 # rather than the work — the day view draws the difference.
-                "length_min": length,
-                "raw_length_min": max(1, round(length / (1.0 + buf))),
+                "length_min": d["length_min"],
+                "raw_length_min": d["raw_length_min"],
                 "impact": t["impact"],
                 "effort": t["effort"],
                 "quadrant": d["quadrant"],
@@ -263,21 +261,6 @@ def _calendar_events() -> list[dict]:
                 "path": logic.ancestor_titles(tasks, t),
             })
     return events
-
-
-def _block_length(derived: dict) -> int:
-    """How much time a task takes up on the calendar, in minutes.
-
-    A container is worth the work it still holds, a leaf its own buffered
-    estimate, and a task nobody has estimated yet gets the same default the
-    urgency maths uses rather than a zero-height sliver.
-    """
-    if derived["has_subtasks"]:
-        length = (derived["rollup_remaining"] or derived["rollup_estimate"]
-                  or derived["buffered_estimate"])
-    else:
-        length = derived["buffered_estimate"]
-    return max(1, int(length or logic.DEFAULT_ESTIMATE_MIN))
 
 
 def _annotate_tasks(task_ids: list[str], want_scores: bool) -> None:

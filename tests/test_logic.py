@@ -470,3 +470,28 @@ def test_nudge_plan_handles_a_task_with_no_deadline_at_all():
 
 def test_nudge_plan_ignores_an_unknown_task():
     assert logic.nudge_plan([], {}, "nope", NOW) == {}
+
+
+# ---- how long a task occupies (block size, and what a nudge preserves) ----
+
+def test_length_is_the_buffered_estimate_for_a_leaf():
+    tasks = [make_task("a", estimated_time=60,
+                       deadline=(NOW + timedelta(days=1)).isoformat())]
+    derived = logic.compute(tasks, SETTINGS, now=NOW)
+    assert derived["a"]["length_min"] == 78          # 60 * 1.3
+    assert derived["a"]["raw_length_min"] == 60      # the work inside the tax
+
+
+def test_length_of_a_container_is_the_work_it_still_holds():
+    parent = make_task("p", estimated_time=5,
+                       deadline=(NOW + timedelta(days=1)).isoformat())
+    kid = make_task("k", parent_id="p", estimated_time=60)
+    derived = logic.compute([parent, kid], SETTINGS, now=NOW)
+    assert derived["p"]["length_min"] == 78          # the subtask, not the shell
+
+
+def test_length_falls_back_rather_than_collapsing_to_nothing():
+    """An unestimated task still needs a block you can see and click."""
+    tasks = [make_task("a", deadline=(NOW + timedelta(days=1)).isoformat())]
+    derived = logic.compute(tasks, SETTINGS, now=NOW)
+    assert derived["a"]["length_min"] == logic.DEFAULT_ESTIMATE_MIN
