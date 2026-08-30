@@ -528,6 +528,44 @@ def test_priority_score_effort_only_breaks_ties():
     assert logic.priority_score(9, 9, 6.0) > logic.priority_score(2, 0, 6.0)
 
 
+def test_brevity_decays_with_the_clock():
+    """Time cost, inverted onto the same 0-10 scale as impact and effort."""
+    assert logic.brevity(logic.TIME_COST_HALFLIFE) == 5.0
+    assert logic.brevity(10) > logic.brevity(60) > logic.brevity(480)
+    assert 0 < logic.brevity(10_000) < 1        # saturates, never goes negative
+    # An un-estimated task is unknown, not quick: guessing otherwise would
+    # reward never estimating anything.
+    assert logic.brevity(None) == logic.NEUTRAL_SCORE
+    assert logic.brevity(0) == logic.NEUTRAL_SCORE
+    # The curve is a decay, so the same twenty minutes matters more to a short
+    # task than to a long one.
+    assert (logic.brevity(10) - logic.brevity(30)) > (logic.brevity(340) - logic.brevity(360))
+
+
+def test_priority_score_counts_time_cost_apart_from_effort():
+    """Two tasks equally unpleasant, one of them three hours long.
+
+    Effort is how hard a task is to face and time is how much of the day it
+    eats; a score built on effort alone calls a two-minute chore and an
+    afternoon of the same drudgery the same task.
+    """
+    quick = logic.priority_score(6, 4, 5.0, minutes=10)
+    slog = logic.priority_score(6, 4, 5.0, minutes=180)
+    assert quick > slog
+    # Unknown length lands between the two rather than at either end.
+    assert quick > logic.priority_score(6, 4, 5.0) > slog
+    # Time is a tie-breaker, not the story: a long, urgent, important task
+    # still outranks a quick, slack, pointless one.
+    assert logic.priority_score(9, 3, 10.0, minutes=480) > \
+        logic.priority_score(1, 8, 0.5, minutes=5)
+
+
+def test_priority_score_stays_on_the_0_100_scale():
+    best = logic.priority_score(10, 0, 10.0, minutes=1)
+    worst = logic.priority_score(0, 10, 0.0, minutes=100_000)
+    assert best <= 100 and worst >= 0 and best > worst
+
+
 def test_compute_scores_every_task():
     tasks = [
         make_task("a", impact=9, effort=2, estimated_time=30,
@@ -540,20 +578,94 @@ def test_compute_scores_every_task():
     assert all(0 <= derived[t["id"]]["score"] <= 100 for t in tasks)
 
 
-def test_container_scores_off_the_work_it_still_holds():
-    """A parent's score follows the work in its subtree, not its own estimate.
+def test_container_urgency_reads_the_work_it_still_holds():
+    """A parent's urgency follows the work in its subtree, not its own estimate.
 
     An hour away with five minutes of its own work looks relaxed; an hour away
-    with an hour of subtasks under it does not, and the score has to say so.
+    with an hour of subtasks under it does not, and the number has to say so.
     """
     parent = make_task("p", impact=8, effort=3, estimated_time=5,
                        deadline=(NOW + timedelta(minutes=60)).isoformat())
     kid = make_task("k", parent_id="p", estimated_time=60)
     derived = logic.compute([parent, kid], SETTINGS, now=NOW)
     assert derived["p"]["urgency"] == 10.0        # 78m of work, 60m left
-    assert derived["p"]["score"] == logic.priority_score(8, 3, 10.0)
-    # The same task judged on its own five minutes would barely register.
-    assert derived["p"]["score"] > logic.priority_score(8, 3, 1.2)
+    assert derived["p"]["length_min"] == derived["k"]["length_min"]
+
+
+# ---- a parent is its parts ----
+
+def test_container_score_is_inherited_from_its_subtasks():
+    """A parent has no score of its own — it is worth what is under it.
+
+    Whatever impact and effort someone put on the container describes nothing
+    you can sit down and do, so it must not sway the number.
+    """
+    parent = make_task("p", impact=0, effort=10, estimated_time=5)
+    kid = make_task("k", parent_id="p", impact=9, effort=1, estimated_time=20)
+    derived = logic.compute([parent, kid], SETTINGS, now=NOW)
+    assert derived["p"]["score"] == derived["k"]["score"]
+    # Re-rating the container changes nothing; re-rating the step changes it.
+    parent["impact"], parent["effort"] = 10, 0
+    assert logic.compute([parent, kid], SETTINGS, now=NOW)["p"]["score"] == \
+        derived["p"]["score"]
+
+
+def test_container_score_combines_children_by_the_time_they_cost():
+    """Every leaf pulls its weight in minutes, so the score reads as what the
+    remaining work is actually worth rather than a headcount of subtasks."""
+    parent = make_task("p")
+    big = make_task("big", parent_id="p", impact=9, effort=2, estimated_time=180)
+    small = make_task("small", parent_id="p", impact=1, effort=9,
+                      estimated_time=10, order_index=1)
+    derived = logic.compute([parent, big, small], SETTINGS, now=NOW)
+    lo, hi = sorted((derived["big"]["score"], derived["small"]["score"]))
+    assert lo < derived["p"]["score"] < hi
+    # Three hours of the good work against ten minutes of the bad: the mean
+    # sits far nearer the work the hours actually go into.
+    assert abs(derived["p"]["score"] - derived["big"]["score"]) < \
+        abs(derived["p"]["score"] - derived["small"]["score"])
+
+
+def test_container_score_rolls_up_through_every_level():
+    """Grandparents inherit too, and a container adds no minutes of its own —
+    counting the shell as well as its steps would weigh the plan twice."""
+    root = make_task("root", impact=0, effort=10, estimated_time=999)
+    mid = make_task("mid", parent_id="root", impact=0, effort=10, estimated_time=999)
+    leaf = make_task("leaf", parent_id="mid", impact=8, effort=2, estimated_time=30)
+    derived = logic.compute([root, mid, leaf], SETTINGS, now=NOW)
+    assert derived["root"]["score"] == derived["mid"]["score"] == derived["leaf"]["score"]
+
+
+def test_finished_and_dropped_subtasks_stop_counting():
+    """A project is worth what is left of it, not what it once was."""
+    parent = make_task("p")
+    done = make_task("done", parent_id="p", impact=0, effort=10,
+                     estimated_time=200, status="done")
+    dropped = make_task("dropped", parent_id="p", impact=0, effort=10,
+                        estimated_time=200, status="discarded", order_index=1)
+    live = make_task("live", parent_id="p", impact=9, effort=1,
+                     estimated_time=30, order_index=2)
+    derived = logic.compute([parent, done, dropped, live], SETTINGS, now=NOW)
+    assert derived["p"]["score"] == derived["live"]["score"]
+
+
+def test_container_with_nothing_left_keeps_its_own_score():
+    """Everything underneath is finished: there is nothing to inherit from,
+    so the container falls back to its own number instead of a zero."""
+    parent = make_task("p", impact=8, effort=2, estimated_time=30)
+    kid = make_task("k", parent_id="p", estimated_time=30, status="done")
+    derived = logic.compute([parent, kid], SETTINGS, now=NOW)
+    assert derived["p"]["score"] == logic.priority_score(
+        8, 2, derived["p"]["urgency"], derived["p"]["length_min"])
+
+
+def test_container_score_stays_on_the_0_100_scale():
+    parent = make_task("p")
+    kids = [make_task(f"k{i}", parent_id="p", impact=i, effort=10 - i,
+                      estimated_time=10 * (i + 1), order_index=i)
+            for i in range(5)]
+    derived = logic.compute([parent, *kids], SETTINGS, now=NOW)
+    assert 0 <= derived["p"]["score"] <= 100
 
 
 # ---- nudging a past-due plan forward ----
