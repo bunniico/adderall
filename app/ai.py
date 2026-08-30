@@ -45,7 +45,7 @@ GRANULARITY_HINTS = {
 # Schemas below therefore carry types only, and every bound is enforced
 # locally after parsing — which is where the app does its validation anyway.
 MAX_STEPS = 16       # cap on subtasks from one breakdown
-MAX_COMPILED = 40    # cap on tasks from one braindump
+MAX_COMPILED = 60    # cap on tasks from one braindump, subtasks included
 MAX_MINUTES = 60 * 24 * 30  # a month of minutes; anything larger is nonsense
 
 BREAKDOWN_SCHEMA = {
@@ -55,20 +55,45 @@ BREAKDOWN_SCHEMA = {
     "additionalProperties": False,
 }
 
+COMPILE_DEPTH = 3    # levels of nesting a braindump may produce
+
+
+def _compile_node_schema(depth: int) -> dict:
+    """One task in a compiled braindump, nestable `depth` levels deep.
+
+    The nesting is spelled out level by level rather than expressed as a
+    recursive $ref: structured outputs have no way to bound recursion, and
+    an unbounded tree invites the model to keep splitting hairs. A leaf
+    level simply has no `subtasks` property, which is also what stops the
+    model from nesting past the depth the app is willing to store.
+    """
+    props: dict = {
+        "title": {"type": "string"},
+        "description": {"type": "string"},
+    }
+    required = ["title", "description"]
+    if depth > 1:
+        props["subtasks"] = {
+            "type": "array",
+            "items": _compile_node_schema(depth - 1),
+        }
+        # Required, so a task with nothing under it says so with an empty
+        # array instead of leaving the app to guess at a missing key.
+        required.append("subtasks")
+    return {
+        "type": "object",
+        "properties": props,
+        "required": required,
+        "additionalProperties": False,
+    }
+
+
 COMPILE_SCHEMA = {
     "type": "object",
     "properties": {
         "tasks": {
             "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string"},
-                    "description": {"type": "string"},
-                },
-                "required": ["title", "description"],
-                "additionalProperties": False,
-            },
+            "items": _compile_node_schema(COMPILE_DEPTH),
         }
     },
     "required": ["tasks"],
@@ -221,16 +246,58 @@ def annotate(settings: dict, tasks: list[dict], want_scores: bool = True) -> dic
     return results
 
 
+def _clean_compiled(items, depth: int, budget: list[int]) -> list[dict]:
+    """Normalise one level of the compiled tree, depth-first.
+
+    `budget` is a single-element list shared across the whole walk so that
+    MAX_COMPILED caps the tasks in the tree as a whole, not per level.
+    Anything past the cap, past the depth, or missing a title is dropped.
+    """
+    out = []
+    for item in items or []:
+        if budget[0] <= 0:
+            break
+        if not isinstance(item, dict):
+            continue
+        title = (item.get("title") or "").strip()
+        if not title:
+            continue
+        budget[0] -= 1
+        node = {
+            "title": title,
+            "description": (item.get("description") or "").strip(),
+            "subtasks": [],
+        }
+        if depth > 1:
+            node["subtasks"] = _clean_compiled(item.get("subtasks"), depth - 1, budget)
+        out.append(node)
+    return out
+
+
 def compile_braindump(settings: dict, text: str) -> list[dict]:
     """Compiler: one deep-tier call with adaptive thinking turns a messy
-    braindump into discrete tasks [{title, description}]."""
+    braindump into a task tree [{title, description, subtasks}].
+
+    Braindumps are rarely flat — "sort the car out" is really four steps —
+    so the model is asked to group related items under the outcome they
+    serve, and the app stores that shape as real parent/child tasks.
+    """
     prompt = (
         "Turn this braindump into a list of discrete, actionable tasks. Merge "
         "duplicates, split compound items, drop non-task chatter. Keep titles "
         "short and imperative; put any useful detail from the braindump into "
-        "the description.\n\nBRAINDUMP:\n" + text
+        "the description.\n\n"
+        "Nest the tasks. When several items are steps toward one outcome, or "
+        "when one item is really a small project, make the outcome the parent "
+        "task and put its steps in its `subtasks`. A parent's subtasks must be "
+        f"the steps that finish it — nothing else. Nest at most {COMPILE_DEPTH} "
+        "levels deep, and leave `subtasks` empty for anything that is already a "
+        "single action. Keep unrelated one-off items at the top level: do not "
+        "invent a parent to hold a single task, and do not group things "
+        "together just because they were mentioned near each other.\n\n"
+        f"Return at most {MAX_COMPILED} tasks in total, counting subtasks."
+        "\n\nBRAINDUMP:\n" + text
     )
     data = _call(settings, "deep", prompt, COMPILE_SCHEMA, max_tokens=16000,
                  effort="high", thinking=True)
-    tasks = [t for t in data.get("tasks", []) if t.get("title", "").strip()]
-    return tasks[:MAX_COMPILED]
+    return _clean_compiled(data.get("tasks"), COMPILE_DEPTH, [MAX_COMPILED])

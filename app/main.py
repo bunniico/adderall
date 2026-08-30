@@ -639,13 +639,20 @@ def compile_braindump(body: CompileRequest):
         raise HTTPException(502, str(exc))
     project_id = _active_project_id(db.list_projects() or [db.ensure_project()])
     new_ids = []
-    for item in items:
-        task = db.create_task({
-            "title": item["title"].strip(),
-            "description": item.get("description", "").strip(),
-            "project_id": project_id,
-        })
-        new_ids.append(task["id"])
+
+    def plant(nodes: list[dict], parent_id: str | None) -> None:
+        """Store the compiled tree as real parent/child tasks."""
+        for item in nodes:
+            task = db.create_task({
+                "title": item["title"].strip(),
+                "description": item.get("description", "").strip(),
+                "parent_id": parent_id,
+                "project_id": project_id,
+            })
+            new_ids.append(task["id"])
+            plant(item.get("subtasks") or [], task["id"])
+
+    plant(items, None)
     _annotate_tasks(new_ids, want_scores=settings["ai_scoring"])
     return _state()
 

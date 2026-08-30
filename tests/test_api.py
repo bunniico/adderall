@@ -26,10 +26,19 @@ def client(monkeypatch, tmp_path):
     monkeypatch.setattr(main.ai, "breakdown",
                         lambda settings, title, desc, granularity, parents=None:
                         [f"step {i}" for i in range(1, 4)])
+    # "call dentist" deliberately omits `subtasks` entirely: a leaf is
+    # allowed to arrive without the key.
     monkeypatch.setattr(main.ai, "compile_braindump",
                         lambda settings, text: [
                             {"title": "call dentist", "description": ""},
-                            {"title": "buy gift", "description": "for mom"},
+                            {"title": "buy gift", "description": "for mom",
+                             "subtasks": [
+                                 {"title": "pick a present", "description": "",
+                                  "subtasks": [
+                                      {"title": "ask her sister", "description": ""},
+                                  ]},
+                                 {"title": "wrap it", "description": "", "subtasks": []},
+                             ]},
                         ])
     return TestClient(main.app)
 
@@ -421,6 +430,21 @@ def test_compile_braindump(client):
     state = res.json()
     assert find(state, "call dentist")
     assert find(state, "buy gift")["description"] == "for mom"
+
+
+def test_compile_braindump_nests_tasks(client):
+    state = client.post("/api/compile", json={"text": "dentist... mom bday..."}).json()
+    # Only the two top-level items are roots; the rest hang off "buy gift".
+    assert [t["title"] for t in state["tasks"]] == ["call dentist", "buy gift"]
+    gift = find(state, "buy gift")
+    assert [t["title"] for t in gift["subtasks"]] == ["pick a present", "wrap it"]
+    present = find(state, "pick a present")
+    assert present["parent_id"] == gift["id"]
+    # ...and nesting goes deeper than one level.
+    assert [t["title"] for t in present["subtasks"]] == ["ask her sister"]
+    assert find(state, "ask her sister")["parent_id"] == present["id"]
+    # A compiled subtask lives in the same project as the root it came under.
+    assert find(state, "ask her sister")["project_id"] == gift["project_id"]
 
 
 def test_next_endpoint(client):
