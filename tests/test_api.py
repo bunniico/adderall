@@ -570,6 +570,104 @@ def test_unknown_project_is_404(client):
     assert client.delete("/api/projects/nope").status_code == 404
 
 
+def names(state):
+    return [p["name"] for p in state["projects"]]
+
+
+def three_projects(client):
+    """The default tab plus two more: "Tasks", "work", "errands"."""
+    new_project(client, "work")
+    new_project(client, "errands")
+    return client.get("/api/state").json()["projects"]
+
+
+def test_projects_start_in_the_order_they_were_made(client):
+    three_projects(client)
+    assert names(client.get("/api/state").json()) == ["Tasks", "work", "errands"]
+
+
+def test_drag_a_tab_before_another_one(client):
+    projects = three_projects(client)
+    errands = projects[2]["id"]
+    state = client.post(f"/api/projects/{errands}/move",
+                        json={"target_id": projects[0]["id"], "mode": "before"}).json()
+    assert names(state) == ["errands", "Tasks", "work"]
+
+
+def test_drag_a_tab_after_another_one(client):
+    projects = three_projects(client)
+    tasks = projects[0]["id"]
+    state = client.post(f"/api/projects/{tasks}/move",
+                        json={"target_id": projects[2]["id"], "mode": "after"}).json()
+    assert names(state) == ["work", "errands", "Tasks"]
+
+
+def test_dropping_a_tab_past_the_last_one_sends_it_to_the_end(client):
+    projects = three_projects(client)
+    state = client.post(f"/api/projects/{projects[0]['id']}/move", json={}).json()
+    assert names(state) == ["work", "errands", "Tasks"]
+
+
+def test_move_a_tab_to_an_explicit_position(client):
+    projects = three_projects(client)
+    state = client.post(f"/api/projects/{projects[2]['id']}/move",
+                        json={"position": 1}).json()
+    assert names(state) == ["Tasks", "errands", "work"]
+    # Past the end of the strip is the end of the strip, not an error.
+    state = client.post(f"/api/projects/{projects[0]['id']}/move",
+                        json={"position": 99}).json()
+    assert names(state) == ["errands", "work", "Tasks"]
+
+
+def test_reordering_tabs_leaves_the_open_one_open(client):
+    projects = three_projects(client)
+    work = projects[1]["id"]
+    client.post(f"/api/projects/{work}/activate")
+    task = find(create(client, title="work task"), "work task")
+    state = client.post(f"/api/projects/{work}/move",
+                        json={"target_id": projects[0]["id"], "mode": "before"}).json()
+    assert names(state) == ["work", "Tasks", "errands"]
+    assert state["active_project_id"] == work
+    assert find(state, "work task")["id"] == task["id"]
+
+
+def test_a_new_tab_lands_at_the_end_of_a_reordered_strip(client):
+    projects = three_projects(client)
+    client.post(f"/api/projects/{projects[2]['id']}/move",
+                json={"target_id": projects[0]["id"], "mode": "before"})
+    state = new_project(client, "later")
+    assert names(state) == ["errands", "Tasks", "work", "later"]
+
+
+def test_tab_order_survives_a_restart(client):
+    projects = three_projects(client)
+    client.post(f"/api/projects/{projects[2]['id']}/move",
+                json={"target_id": projects[0]["id"], "mode": "before"})
+    assert names(client.get("/api/state").json()) == ["errands", "Tasks", "work"]
+
+
+def test_deleting_a_tab_leaves_the_rest_in_order(client):
+    projects = three_projects(client)
+    state = client.delete(f"/api/projects/{projects[1]['id']}").json()
+    assert names(state) == ["Tasks", "errands"]
+
+
+def test_bad_tab_moves_are_refused(client):
+    projects = three_projects(client)
+    tasks, work = projects[0]["id"], projects[1]["id"]
+    assert client.post("/api/projects/nope/move", json={}).status_code == 404
+    assert client.post(f"/api/projects/{tasks}/move",
+                       json={"target_id": "nope", "mode": "before"}).status_code == 404
+    assert client.post(f"/api/projects/{tasks}/move",
+                       json={"target_id": tasks, "mode": "before"}).status_code == 400
+    assert client.post(f"/api/projects/{tasks}/move",
+                       json={"target_id": work}).status_code == 400
+    assert client.post(f"/api/projects/{tasks}/move",
+                       json={"target_id": work, "mode": "sideways"}).status_code == 422
+    # nothing moved
+    assert names(client.get("/api/state").json()) == ["Tasks", "work", "errands"]
+
+
 def test_move_task_to_another_project_takes_its_subtasks(client):
     parent = find(create(client, title="clean kitchen"), "clean kitchen")
     client.post(f"/api/tasks/{parent['id']}/breakdown", json={})

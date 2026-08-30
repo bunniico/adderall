@@ -121,7 +121,11 @@ set `ANTHROPIC_WORKSPACE_ID`. You can find the ID in the Claude Console URL:
 - **Projects in tabs** — a row of tabs across the top, one list of tasks
   each: work, house, that side thing. Click a tab to switch (or **Alt+1…9**),
   **＋** to start a new one, click the open tab to rename it, **✕** to delete
-  it and everything in it. Adding, braindumping, breaking down, ordering and
+  it and everything in it. Drag a tab along the strip to put it where you
+  want it — hold and slide on a touchscreen, or focus a tab and use
+  **Shift+←** / **Shift+→** — and that order sticks, on every device;
+  reordering never switches tabs, and **←** / **→** on their own just walk
+  along the strip. Adding, braindumping, breaking down, ordering and
   focusing all act on the tab you're on and leave the others alone, and the
   app reopens on the tab you were last in. Send a task to another tab from
   its detail modal — its subtasks go with it. Deadline alarms are the one
