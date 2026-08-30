@@ -692,3 +692,194 @@ def test_pre_projects_database_is_migrated(tmp_path, monkeypatch):
     # and running init again changes nothing
     db.init()
     assert len(db.list_projects()) == 1
+
+
+# ---- calendar ----
+
+def iso_in(**kw):
+    """A deadline the front end could have sent — whole seconds, like the app."""
+    return (datetime.now(timezone.utc) + timedelta(**kw)).replace(
+        microsecond=0).isoformat()
+
+
+def event(payload, title):
+    return next(e for e in payload["events"] if e["title"] == title)
+
+
+def test_calendar_spans_every_project(client):
+    """The calendar is the one view that ignores which tab is open."""
+    create(client, title="in the first tab", deadline=iso_in(days=1))
+    other = client.post("/api/projects", json={"name": "House"}).json()
+    assert other["active_project_id"] != client.get("/api/state").json()["projects"][0]["id"]
+    create(client, title="in the second tab", deadline=iso_in(days=2))
+
+    payload = client.get("/api/calendar").json()
+    titles = {e["title"] for e in payload["events"]}
+    assert {"in the first tab", "in the second tab"} <= titles
+    assert {e["project_name"] for e in payload["events"]} == {"Tasks", "House"}
+
+
+def test_calendar_events_carry_a_score_and_a_length(client):
+    create(client, title="urgent", deadline=iso_in(minutes=20),
+           estimated_time=60, impact=9, effort=2)
+    create(client, title="relaxed", deadline=iso_in(days=20),
+           estimated_time=60, impact=2, effort=9)
+    payload = client.get("/api/calendar").json()
+
+    urgent, relaxed = event(payload, "urgent"), event(payload, "relaxed")
+    assert urgent["score"] > relaxed["score"]
+    # A block is one buffered estimate long, and says how much of that is tax.
+    assert urgent["length_min"] == 78          # 60 * 1.3
+    assert urgent["raw_length_min"] == 60
+    assert urgent["quadrant"] == "quick_win"
+
+
+def test_calendar_length_falls_back_when_nothing_is_estimated(client):
+    create(client, title="unknown", deadline=iso_in(days=1),
+           estimated_time=None, annotate=False)
+    ev = event(client.get("/api/calendar").json(), "unknown")
+    assert ev["length_min"] == 30              # the same default urgency uses
+    assert ev["score"] is not None
+
+
+def test_calendar_container_is_worth_the_work_it_still_holds(client):
+    state = create(client, title="big thing", deadline=iso_in(days=3))
+    parent = find(state, "big thing")
+    client.post("/api/tasks", json={"title": "step", "parent_id": parent["id"],
+                                    "estimated_time": 100})
+    ev = event(client.get("/api/calendar").json(), "big thing")
+    assert ev["has_subtasks"] is True
+    assert ev["subtask_count"] == 1
+    assert ev["length_min"] == 130             # the subtask, buffered
+
+
+def test_calendar_keeps_done_work_but_drops_discarded(client):
+    state = create(client, title="finished", deadline=iso_in(hours=1))
+    client.post(f"/api/tasks/{find(state, 'finished')['id']}/complete", json={})
+    state = create(client, title="dropped", deadline=iso_in(hours=1))
+    client.patch(f"/api/tasks/{find(state, 'dropped')['id']}",
+                 json={"status": "discarded"})
+
+    titles = {e["title"] for e in client.get("/api/calendar").json()["events"]}
+    assert "finished" in titles       # a calendar you can look back at
+    assert "dropped" not in titles    # discarded work is off the plan
+
+
+def test_calendar_omits_tasks_with_no_date_at_all(client):
+    client.put("/api/settings", json={"auto_deadlines": False})
+    create(client, title="someday")
+    assert client.get("/api/calendar").json()["events"] == []
+
+
+def test_calendar_reports_where_a_deadline_came_from(client):
+    create(client, title="mine", deadline=iso_in(days=1))
+    create(client, title="theirs")
+    payload = client.get("/api/calendar").json()
+    assert event(payload, "mine")["deadline_source"] == "user"
+    assert event(payload, "theirs")["deadline_source"] == "auto"
+
+
+def test_calendar_event_carries_its_ancestry(client):
+    state = create(client, title="project")
+    parent = find(state, "project")
+    client.post("/api/tasks", json={"title": "step", "parent_id": parent["id"]})
+    ev = event(client.get("/api/calendar").json(), "step")
+    assert ev["path"] == ["project"]
+    assert ev["parent_id"] == parent["id"]
+
+
+# ---- nudging past-due work ----
+
+def test_nudge_moves_a_past_due_deadline_and_keeps_the_length(client):
+    state = create(client, title="overdue", deadline=iso_in(days=-2),
+                   estimated_time=60)
+    task = find(state, "overdue")
+    before = event(client.get("/api/calendar").json(), "overdue")
+
+    target = datetime.now(timezone.utc) + timedelta(days=1)
+    res = client.post("/api/nudge", json={
+        "nudges": [{"task_id": task["id"], "deadline": target.isoformat()}]})
+    assert res.status_code == 200, res.text
+
+    after = event(client.get("/api/calendar").json(), "overdue")
+    assert logic_parse(after["deadline"]) == target.replace(microsecond=0)
+    assert after["deadline_source"] == "user"
+    # "Same length" is the promise: the block is the size it always was.
+    assert after["length_min"] == before["length_min"] == 78
+
+
+def logic_parse(iso):
+    from app import logic
+    return logic.parse_dt(iso)
+
+
+def test_nudge_slides_subtask_deadlines_by_the_same_amount(client):
+    state = create(client, title="trip", deadline=iso_in(days=-1))
+    parent = find(state, "trip")
+    state = client.post("/api/tasks", json={
+        "title": "pack", "parent_id": parent["id"],
+        "deadline": iso_in(days=-3)}).json()
+    child = find(state, "pack")
+
+    gap_before = (logic_parse(parent["deadline"]) - logic_parse(child["deadline"]))
+    target = datetime.now(timezone.utc) + timedelta(days=4)
+    client.post("/api/nudge", json={
+        "nudges": [{"task_id": parent["id"], "deadline": target.isoformat()}]})
+
+    payload = client.get("/api/calendar").json()
+    gap_after = (logic_parse(event(payload, "trip")["deadline"])
+                 - logic_parse(event(payload, "pack")["deadline"]))
+    assert gap_after == gap_before          # the plan kept its shape
+    assert logic_parse(event(payload, "pack")["deadline"]) > datetime.now(timezone.utc)
+
+
+def test_nudge_moves_the_whole_overdue_pile_in_one_call(client):
+    ids = []
+    for title in ("one", "two", "three"):
+        state = create(client, title=title, deadline=iso_in(days=-1))
+        ids.append(find(state, title)["id"])
+    target = datetime.now(timezone.utc) + timedelta(days=2)
+    client.post("/api/nudge", json={
+        "nudges": [{"task_id": i, "deadline": target.isoformat()} for i in ids]})
+
+    payload = client.get("/api/calendar").json()
+    now = datetime.now(timezone.utc)
+    assert all(logic_parse(e["deadline"]) > now for e in payload["events"])
+
+
+def test_nudge_an_explicitly_named_subtask_wins_over_the_slide(client):
+    state = create(client, title="trip", deadline=iso_in(days=-1))
+    parent = find(state, "trip")
+    state = client.post("/api/tasks", json={
+        "title": "pack", "parent_id": parent["id"],
+        "deadline": iso_in(days=-3)}).json()
+    child = find(state, "pack")
+
+    parent_target = datetime.now(timezone.utc) + timedelta(days=5)
+    child_target = datetime.now(timezone.utc) + timedelta(days=1)
+    client.post("/api/nudge", json={"nudges": [
+        {"task_id": parent["id"], "deadline": parent_target.isoformat()},
+        {"task_id": child["id"], "deadline": child_target.isoformat()},
+    ]})
+    payload = client.get("/api/calendar").json()
+    assert logic_parse(event(payload, "pack")["deadline"]) == \
+        child_target.replace(microsecond=0)
+
+
+def test_nudge_rejects_unknown_tasks_and_unparseable_dates(client):
+    state = create(client, title="real", deadline=iso_in(days=-1))
+    task = find(state, "real")
+    assert client.post("/api/nudge", json={
+        "nudges": [{"task_id": "nope", "deadline": iso_in(days=1)}]}
+    ).status_code == 404
+    assert client.post("/api/nudge", json={
+        "nudges": [{"task_id": task["id"], "deadline": "next tuesday"}]}
+    ).status_code == 400
+    assert client.post("/api/nudge", json={"nudges": []}).status_code == 422
+    # Nothing was written by any of the rejected calls.
+    assert find(client.get("/api/state").json(), "real")["deadline_source"] == "user"
+
+
+def test_week_start_setting_round_trips(client):
+    assert client.get("/api/settings").json()["week_start"] == 0
+    assert client.put("/api/settings", json={"week_start": 1}).json()["week_start"] == 1

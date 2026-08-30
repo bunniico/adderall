@@ -129,6 +129,29 @@ set `ANTHROPIC_WORKSPACE_ID`. You can find the ID in the Claude Console URL:
   one tab over is exactly what this app exists to prevent, so those fire
   wherever you are and say which project they came from. Existing installs
   upgrade with everything in a first tab called "Tasks".
+- **Calendar** — 📅 in the header swaps the list for a calendar with **Day**,
+  **Week** and **Month** views. Unlike everything else in the app it spans
+  *every* project at once, because "what is due this week" is a question about
+  your whole life and not about whichever tab is open; a filter row narrows it
+  to one project, to one corner of the impact/effort matrix, or hides the
+  deadlines the app assigned itself. **Day** is a real time grid: each task is
+  a block ending at its deadline and starting one buffered estimate earlier,
+  with its **time tax drawn as a striped tail** so you can see that a "45m"
+  job really occupies an hour, the free stretches between blocks labelled with
+  how long they are, and a line across the current time. **Week** and **Month**
+  are day-by-day lists ranked by **score** — deadline pressure, impact and how
+  cheap the task is, folded into one 0–100 number — so the top of each day is
+  what that day is actually about. Arrow keys page through, `T` goes to today,
+  `D`/`W`/`M` switch view, and clicking any task opens it wherever it lives.
+- **Nudge past-due work** — a deadline that has already gone by is the most
+  demoralizing thing a list like this can show you, and re-typing a date for
+  every item is exactly the friction that leaves it showing. Everything
+  overdue collects in one rail above the calendar with a **⏩** on each and a
+  *Nudge all* on the row: pick "tomorrow, same time", "next week" or a moment
+  of your own, and the task moves **keeping its length** — the estimate never
+  changes, so the block is exactly as big on its new day. For anything with
+  subtasks the whole plan slides by the same amount, so three days of steps
+  stay three days of steps instead of collapsing onto the new date.
 - **Magic ToDo** — type a task, hit ⚡, get concrete subtasks. A 🌶
   granularity slider controls how fine the breakdown is; any subtask can be
   broken down further, recursively. The **+** on every task adds a subtask by
@@ -197,12 +220,15 @@ set `ANTHROPIC_WORKSPACE_ID`. You can find the ID in the Claude Console URL:
 2. **One page, no swapping.** All four tools share one task list on one
    screen; everything deeper is a modal or overlay. Projects are tabs over
    that same page, not separate places to navigate to — switching is one
-   click and changes nothing but which list is on screen.
+   click and changes nothing but which list is on screen. The calendar is the
+   same deal: one button swaps the middle of the page for a dated view of the
+   same tasks and swaps it back, with no navigation, no URL and nothing to
+   find your way home from.
 3. **Time is visual and honest.** Buffered by default, analog + depleting
    color, elapsed and remaining both shown, staged alarms instead of one.
 4. **Deterministic where possible, AI only where needed.** All scheduling,
-   buffering, urgency, rollups, focus traversal, and matrix math is local
-   code (`app/logic.py`, fully unit-tested). The AI only does language work
+   buffering, urgency, priority scores, rollups, focus traversal, matrix math
+   and deadline-nudging is local code (`app/logic.py`, fully unit-tested). The AI only does language work
    and returns minimal structured JSON.
 5. **Low friction.** No accounts, one command, zero configuration required.
 
@@ -227,8 +253,9 @@ pytest
 ```
 
 `tests/test_logic.py` covers the deterministic core (buffering, quadrants,
-urgency, backward scheduling, subtree rollups, focus traversal, next-task
-ordering); `tests/test_api.py` covers the API with the AI stubbed out.
+urgency, priority scores, backward scheduling, subtree rollups, focus
+traversal, next-task ordering, deadline nudging); `tests/test_api.py` covers
+the API with the AI stubbed out.
 
 ## Layout
 
@@ -240,6 +267,8 @@ app/
   logic.py    deterministic scheduling core — no AI, no I/O
   ai.py       Claude API broker (breakdown / annotate / compile)
   static/     single-page front end (vanilla JS, no build step)
+                app.js is the task list, focus mode and settings;
+                calendar.js is the day/week/month views and nudging
 tests/        pytest suite
 data/         SQLite database (created at runtime, gitignored)
 ```

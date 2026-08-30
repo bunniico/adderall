@@ -302,9 +302,248 @@ output { color: var(--text); font-weight: 600; }
   to { transform: translateY(105vh) rotate(540deg); opacity: .2; }
 }
 
+/* ---- calendar ----
+   Day, week and month over every project at once. A month grid needs more
+   room than a task list does, so the page widens for it and narrows again
+   when you go back. */
+body.calendar-mode main { max-width: 1180px; }
+#project-tabs[hidden] { display: none; }
+#list-view[hidden], #calendar-view[hidden] { display: none; }
+
+.cal-toolbar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap; margin-bottom: 10px;
+}
+.cal-nav { display: flex; align-items: center; gap: 6px; }
+.cal-nav h2 { margin: 0 0 0 8px; font-size: 18px; font-weight: 600; }
+.cal-arrow { padding: 6px 12px; font-size: 18px; line-height: 1; }
+.cal-views { display: flex; }
+.cal-view-btn { border-radius: 0; border-right-width: 0; }
+.cal-view-btn:first-child { border-radius: var(--radius) 0 0 var(--radius); }
+.cal-view-btn:last-child {
+  border-radius: 0 var(--radius) var(--radius) 0; border-right-width: 1px;
+}
+.cal-view-btn.active {
+  background: var(--accent); border-color: var(--accent);
+  color: #10131c; font-weight: 600;
+}
+
+.cal-filters {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 10px 12px; margin-bottom: 12px;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius); font-size: 13px; color: var(--muted);
+}
+.cal-filters label { display: flex; align-items: center; gap: 6px; }
+.cal-filters select { width: auto; min-width: 130px; padding: 5px 8px; }
+.cal-legend { margin-top: 14px; font-size: 12px; text-align: center; }
+
+/* The overdue rail. A pile of dead deadlines is the most demoralizing thing
+   this app can show you, so it sits apart from the grid with the one button
+   that clears it. */
+.cal-overdue[hidden] { display: none; }
+.cal-overdue {
+  border: 1px solid var(--bad); border-radius: var(--radius);
+  padding: 10px 12px; margin-bottom: 12px; background: rgba(255, 125, 125, .07);
+}
+.cal-overdue-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; margin-bottom: 8px; color: var(--bad); font-weight: 600;
+}
+.cal-overdue-head button { flex: none; padding: 5px 12px; font-size: 13px; }
+.cal-overdue-strip { display: flex; flex-wrap: wrap; gap: 6px; }
+.cal-overdue-strip .cal-chip { max-width: 280px; }
+
+/* Shared chip: one task, wherever it is shown outside the day grid. */
+.cal-chip {
+  display: flex; align-items: stretch; gap: 0; min-width: 0;
+  background: var(--panel-2); border: 1px solid var(--border);
+  border-left: 3px solid var(--fill_in);
+  border-radius: 6px; font-size: 12px;
+}
+.cal-chip.quad-quick_win { border-left-color: var(--quick_win); }
+.cal-chip.quad-major_project { border-left-color: var(--major_project); }
+.cal-chip.quad-thankless { border-left-color: var(--thankless); }
+.cal-chip.quad-none { border-left-color: var(--border); }
+.cal-chip.overdue { border-color: var(--bad); }
+.cal-chip.done { opacity: .5; }
+.cal-chip.done .cal-chip-title { text-decoration: line-through; }
+.cal-chip-open {
+  display: flex; align-items: baseline; gap: 6px; min-width: 0; flex: 1;
+  background: none; border: none; border-radius: 0;
+  padding: 4px 6px; font-size: 12px; text-align: left;
+}
+.cal-chip-open:hover { background: var(--border); }
+.cal-chip-time { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
+.cal-chip-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cal-chip-nudge {
+  flex: none; background: none; border: none; border-radius: 0;
+  padding: 0 6px; font-size: 12px; color: var(--bad);
+}
+.cal-chip-nudge:hover { background: var(--bad); color: #10131c; }
+/* Two-line chip: clock and score on top, the title with the full width under
+   them. What the task is matters more than the minute it is due. */
+.cal-chip.stacked .cal-chip-open {
+  display: grid; grid-template-columns: 1fr auto; align-items: baseline;
+  gap: 0 4px; padding: 4px 6px;
+}
+.cal-chip.stacked .cal-chip-time { grid-column: 1; grid-row: 1; }
+.cal-chip.stacked .cal-score { grid-column: 2; grid-row: 1; }
+.cal-chip.stacked .cal-chip-title {
+  grid-column: 1 / -1; white-space: normal; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  line-height: 1.25;
+}
+.cal-chip.stacked .cal-chip-nudge { align-self: stretch; }
+
+.cal-score {
+  flex: none; font-size: 10px; font-weight: 700; color: var(--muted);
+  background: var(--panel); border-radius: 8px; padding: 1px 5px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- day view ---- */
+.cal-summary {
+  display: flex; gap: 12px; flex-wrap: wrap; align-items: center;
+  font-size: 13px; color: var(--muted); margin-bottom: 8px;
+}
+.cal-warn { color: var(--warn); }
+.cal-empty { text-align: center; padding: 40px 0; }
+.cal-grid {
+  position: relative; display: flex; gap: 0;
+  max-height: 62vh; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--panel);
+}
+.cal-hours { position: relative; flex: none; width: 64px; }
+.cal-hour { position: absolute; left: 0; right: 0; border-top: 1px solid var(--border); }
+.cal-hour-label {
+  position: absolute; top: -8px; right: 6px;
+  font-size: 11px; color: var(--muted); background: var(--panel); padding: 0 2px;
+}
+.cal-canvas { position: relative; flex: 1; border-left: 1px solid var(--border); }
+.cal-gap {
+  position: absolute; left: 0; right: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: repeating-linear-gradient(
+    -45deg, transparent 0 8px, rgba(154, 161, 178, .06) 8px 16px);
+  color: var(--muted); font-size: 11px;
+}
+.cal-block {
+  position: absolute; overflow: hidden;
+  background: var(--panel-2); border: 1px solid var(--border);
+  border-left: 3px solid var(--fill_in);
+  border-radius: 6px;
+}
+.cal-block.quad-quick_win { border-left-color: var(--quick_win); }
+.cal-block.quad-major_project { border-left-color: var(--major_project); }
+.cal-block.quad-thankless { border-left-color: var(--thankless); }
+.cal-block.overdue { border-color: var(--bad); }
+.cal-block.done { opacity: .5; }
+.cal-block.done .cal-block-title { text-decoration: line-through; }
+/* The time tax, drawn where it actually sits: the protected stretch right
+   before the deadline. */
+.cal-block-buffer {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  background: repeating-linear-gradient(
+    -45deg, transparent 0 5px, rgba(232, 234, 240, .10) 5px 10px);
+  border-top: 1px dashed var(--border);
+  pointer-events: none;
+}
+.cal-block-open {
+  position: relative; display: flex; flex-direction: column; gap: 1px;
+  width: 100%; height: 100%; background: none; border: none; border-radius: 0;
+  padding: 3px 26px 3px 6px; text-align: left; overflow: hidden;
+}
+.cal-block-open:hover { background: rgba(124, 156, 255, .10); }
+.cal-block-time { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.cal-block-title { font-size: 12px; font-weight: 600; line-height: 1.25; overflow-wrap: anywhere; }
+.cal-block-meta { font-size: 10px; color: var(--muted); }
+.cal-block.tiny .cal-block-open { flex-direction: row; align-items: baseline; gap: 6px; }
+.cal-block.tiny .cal-block-meta { display: none; }
+.cal-block-score { position: absolute; top: 3px; right: 4px; }
+.cal-block-nudge { position: absolute; bottom: 2px; right: 2px; }
+.cal-now { position: absolute; left: 0; right: 0; height: 2px; background: var(--bad); }
+.cal-now::before {
+  content: ""; position: absolute; left: -5px; top: -4px;
+  width: 10px; height: 10px; border-radius: 50%; background: var(--bad);
+}
+
+/* ---- week view ----
+   Seven ranked lists rather than a second time grid: across a week the
+   question is what is coming, not exactly when. */
+.cal-week-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.cal-col {
+  display: flex; flex-direction: column; min-width: 0;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius); overflow: hidden;
+}
+.cal-col.today { border-color: var(--accent); }
+.cal-col-head {
+  display: flex; align-items: baseline; justify-content: center; gap: 6px;
+  background: var(--panel-2); border: none; border-radius: 0;
+  border-bottom: 1px solid var(--border); padding: 6px; font-size: 12px;
+}
+.cal-col.today .cal-col-head { background: var(--accent); color: #10131c; }
+.cal-col-dow { color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+.cal-col.today .cal-col-dow { color: #10131c; }
+.cal-col-head b { font-size: 15px; }
+.cal-col-body {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 6px; min-height: 90px; flex: 1;
+}
+.cal-col-empty { text-align: center; padding-top: 10px; }
+.cal-col-foot {
+  padding: 4px 6px; border-top: 1px solid var(--border);
+  font-size: 11px; text-align: right;
+}
+
+/* ---- month view ---- */
+.cal-dow {
+  display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px;
+  margin-bottom: 4px; font-size: 11px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .5px; text-align: center;
+}
+.cal-month-grid {
+  display: grid; grid-template-columns: repeat(7, 1fr);
+  grid-auto-rows: minmax(96px, auto); gap: 4px;
+}
+.cal-cell {
+  display: flex; flex-direction: column; gap: 3px; min-width: 0;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; padding: 4px;
+}
+.cal-cell.outside { opacity: .45; }
+.cal-cell.today { border-color: var(--accent); }
+.cal-cell-date {
+  align-self: flex-start; background: none; border: none; border-radius: 6px;
+  padding: 1px 6px; font-size: 12px; color: var(--muted);
+}
+.cal-cell.today .cal-cell-date { background: var(--accent); color: #10131c; font-weight: 700; }
+.cal-more {
+  background: none; border: none; border-radius: 0; padding: 0 6px;
+  font-size: 11px; color: var(--muted); text-align: left;
+}
+.cal-more:hover { color: var(--accent); }
+
+.nudge-presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.nudge-presets button { flex: 1; min-width: 110px; font-size: 13px; padding: 6px 10px; }
+
+@media (max-width: 900px) {
+  /* Seven columns of chips stop being readable long before a phone; the week
+     becomes a stack of days, which is the same information, scrolled. */
+  .cal-week-grid { grid-template-columns: 1fr; }
+  .cal-col-head { justify-content: flex-start; padding-left: 10px; }
+  .cal-col-body { min-height: 0; }
+  .cal-month-grid { grid-auto-rows: minmax(74px, auto); font-size: 11px; }
+}
+
 @media (max-width: 560px) {
   .grid2, .grid3 { grid-template-columns: 1fr; }
   .granularity { display: none; }
   .focus-pill-title { display: none; }
   .focus-pill { max-width: 130px; }
+  .cal-nav h2 { font-size: 15px; margin-left: 4px; }
+  .cal-chip-time { display: none; }
+  .cal-month-grid .cal-chip-title { display: none; }
 }

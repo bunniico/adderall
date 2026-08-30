@@ -85,6 +85,21 @@ class CompileRequest(BaseModel):
     text: str = Field(min_length=1, max_length=20000)
 
 
+class Nudge(BaseModel):
+    """One task's new deadline, as an ISO instant the page worked out locally.
+
+    Day boundaries, "tomorrow" and "tonight" are all local-timezone ideas and
+    the server has no timezone, so the page computes the instant and this
+    just records it.
+    """
+    task_id: str
+    deadline: str
+
+
+class NudgeRequest(BaseModel):
+    nudges: list[Nudge] = Field(min_length=1, max_length=500)
+
+
 class SettingsUpdate(BaseModel):
     model_config = {"extra": "allow"}
 
@@ -169,6 +184,87 @@ def _state(project_id: str | None = None) -> dict:
         "active_project_id": active_id,
         "alarm_tasks": alarm_tasks,
     }
+
+
+def _calendar_events() -> list[dict]:
+    """Every scheduled task across every project, with what a calendar needs.
+
+    The calendar is deliberately the one place in the app that ignores the
+    open tab: "what is due this week" is a question about your whole life,
+    not about whichever list happens to be on screen. Filtering by project
+    happens on the page, over this one payload, so switching filters or
+    flipping between day, week and month costs nothing.
+
+    Times go out as UTC instants. Which day a task lands on, where a block
+    sits in a day, and what "this week" means are all local-timezone
+    questions, and the page is the only side that knows the timezone.
+    """
+    settings = db.get_settings()
+    ratios = db.completion_ratios()
+    projects = db.list_projects() or [db.ensure_project()]
+
+    by_project: dict[str, list[dict]] = {p["id"]: [] for p in projects}
+    for t in db.list_tasks():
+        by_project.setdefault(t["project_id"], []).append(t)
+
+    events: list[dict] = []
+    for project in projects:
+        tasks = by_project.get(project["id"], [])
+        derived = logic.compute(tasks, settings, ratios)
+        children_count: dict[str, int] = {}
+        for t in tasks:
+            if t["parent_id"] and t["status"] != "discarded":
+                children_count[t["parent_id"]] = children_count.get(t["parent_id"], 0) + 1
+        for t in tasks:
+            d = derived[t["id"]]
+            # Discarded work is off the plan entirely; done work stays, because
+            # a calendar you can look back at is half of what a calendar is for.
+            if t["status"] == "discarded" or not d.get("deadline"):
+                continue
+            length = _block_length(d)
+            buf = d["buffer_applied"] or 0.0
+            events.append({
+                "id": t["id"],
+                "title": t["title"],
+                "description": t["description"],
+                "parent_id": t["parent_id"],
+                "project_id": project["id"],
+                "project_name": project["name"],
+                "status": t["status"],
+                "deadline": d["deadline"],
+                "deadline_source": d["deadline_source"],
+                "estimated_time": t["estimated_time"],
+                "buffered_estimate": d["buffered_estimate"],
+                "buffer_applied": buf,
+                # How long the block is, and how much of that is the time tax
+                # rather than the work — the day view draws the difference.
+                "length_min": length,
+                "raw_length_min": max(1, round(length / (1.0 + buf))),
+                "impact": t["impact"],
+                "effort": t["effort"],
+                "quadrant": d["quadrant"],
+                "urgency": d["urgency"],
+                "score": d["score"],
+                "has_subtasks": d["has_subtasks"],
+                "subtask_count": children_count.get(t["id"], 0),
+                "path": logic.ancestor_titles(tasks, t),
+            })
+    return events
+
+
+def _block_length(derived: dict) -> int:
+    """How much time a task takes up on the calendar, in minutes.
+
+    A container is worth the work it still holds, a leaf its own buffered
+    estimate, and a task nobody has estimated yet gets the same default the
+    urgency maths uses rather than a zero-height sliver.
+    """
+    if derived["has_subtasks"]:
+        length = (derived["rollup_remaining"] or derived["rollup_estimate"]
+                  or derived["buffered_estimate"])
+    else:
+        length = derived["buffered_estimate"]
+    return max(1, int(length or logic.DEFAULT_ESTIMATE_MIN))
 
 
 def _annotate_tasks(task_ids: list[str], want_scores: bool) -> None:
@@ -561,6 +657,63 @@ def get_focus(root: str | None = None):
         "project_id": project_id,
         "queue": queue,
     }
+
+
+@app.get("/api/calendar")
+def get_calendar():
+    """Everything with a date on it, from every project, scored.
+
+    One payload for all three views: the page slices it into days, weeks and
+    months locally, so ‹ › navigation and changing a filter never wait on the
+    network.
+    """
+    return {"events": _calendar_events()}
+
+
+@app.post("/api/nudge")
+def nudge(body: NudgeRequest):
+    """Push past-due tasks onto new deadlines, keeping the shape of each plan.
+
+    A deadline that has already gone by is the most demoralizing thing a list
+    like this can show you, and re-typing a date for every item is exactly the
+    friction that leaves it showing. One call moves one task or the whole
+    overdue pile; each task keeps its length (its estimate never changes, so
+    the block is the same size on the new day), and anything nested under it
+    with a deadline of its own slides by the same amount rather than piling up
+    on the new date.
+    """
+    settings = db.get_settings()
+    ratios = db.completion_ratios()
+
+    wanted: dict[str, datetime] = {}
+    for item in body.nudges:
+        when = logic.parse_dt(item.deadline)
+        if when is None:
+            raise HTTPException(400, f"Unparseable deadline: {item.deadline!r}")
+        _require_task(item.task_id)
+        wanted[item.task_id] = when
+
+    # Group by project so each task's current (possibly auto-assigned) deadline
+    # — the thing the shift is measured from — is computed the same way the
+    # list computes it.
+    by_project: dict[str, list[dict]] = {}
+    for t in db.list_tasks():
+        by_project.setdefault(t["project_id"], []).append(t)
+
+    moves: dict[str, str] = {}
+    for task_id, when in wanted.items():
+        task = db.get_task(task_id)
+        tasks = by_project.get(task["project_id"], [])
+        derived = logic.compute(tasks, settings, ratios)
+        # Later entries win, so nudging a parent and one of its children in the
+        # same call lands the child where it was asked to go.
+        for tid, iso in logic.nudge_plan(tasks, derived, task_id, when).items():
+            moves.setdefault(tid, iso)
+        moves[task_id] = when.isoformat(timespec="seconds")
+
+    for tid, iso in moves.items():
+        db.update_task(tid, {"deadline": iso})
+    return _state()
 
 
 @app.get("/api/settings")
