@@ -127,6 +127,14 @@ set `ANTHROPIC_WORKSPACE_ID`. You can find the ID in the Claude Console URL:
   broken down further, recursively. The **+** on every task adds a subtask by
   hand when you already know the step, at any depth, and the box stays open so
   you can reel off several in a row.
+- **Fold anything away** — a task with subtasks gets a **▾** next to it;
+  click it and the whole list underneath collapses into the one line that
+  contains it, which still carries its rolled-up time, its deadline, its
+  progress bar, and a note when the "next up" task is one of the ones now
+  hidden. Folds are stored per task, so the shape you left the list in is the
+  shape it comes back in, on every device. Anything that puts a task inside a
+  folded one — the **+** box, a ⚡ breakdown, a drag — opens it back up, so
+  nothing ever lands somewhere you can't see.
 - **Your own order** — drag any task by its ⠿ handle: onto the top or bottom
   edge of another task to sit above or below it, into the middle of one to
   nest inside it, or onto empty list space to pull it back out to the top

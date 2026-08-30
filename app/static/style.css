@@ -126,7 +126,7 @@ textarea { resize: vertical; }
 .task-title { flex: 1; cursor: pointer; overflow-wrap: anywhere; }
 .task-title:hover { color: var(--accent); }
 .task.done-task .task-title { text-decoration: line-through; color: var(--muted); }
-.task-badges { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 0 30px; }
+.task-badges { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 0 48px; }
 .badge {
   font-size: 12px; padding: 1px 8px; border-radius: 20px;
   border: 1px solid var(--border); color: var(--muted); white-space: nowrap;
@@ -138,10 +138,23 @@ textarea { resize: vertical; }
 .badge.urgent { color: var(--bad); border-color: var(--bad); font-weight: 600; }
 .badge.soon { color: var(--warn); border-color: var(--warn); }
 .badge.next-badge { color: var(--accent); border-color: var(--accent); font-weight: 600; }
+.badge.folded { color: var(--muted); font-style: italic; }
 .task-btn {
   padding: 3px 9px; font-size: 13px; border-radius: 7px; flex: none;
 }
 .subtasks { margin: 8px 0 0 26px; display: flex; flex-direction: column; gap: 6px; }
+
+/* ---- folding (hide a task's subtasks) ----
+ * The arrow and the blank that stands in for it are the same width, so every
+ * checkbox in the list sits in one column whether or not the task has
+ * anything under it. */
+.twisty, .twisty-spacer { flex: none; width: 18px; }
+.twisty {
+  padding: 2px 0; line-height: 1; font-size: 12px; text-align: center;
+  background: transparent; border: none; color: var(--muted);
+  cursor: pointer; border-radius: 6px;
+}
+.twisty:hover, .twisty:focus-visible { color: var(--accent); background: var(--panel-2); }
 
 /* ---- manual ordering & nesting ---- */
 .drag-handle {
@@ -168,7 +181,7 @@ textarea { resize: vertical; }
 .list-hint { color: var(--muted); font-size: 12px; text-align: center; margin: 14px 0 0; }
 
 /* ---- subtree time progress (tasks that contain subtasks) ---- */
-.progress-wrap { margin: 8px 0 0 30px; }
+.progress-wrap { margin: 8px 0 0 48px; }
 .progress {
   height: 7px; background: var(--panel-2); border: 1px solid var(--border);
   border-radius: 20px; overflow: hidden;
