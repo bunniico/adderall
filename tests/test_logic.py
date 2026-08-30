@@ -371,3 +371,102 @@ def test_ancestor_titles():
     g = make_task("g", parent_id="c", title="Step")
     assert logic.ancestor_titles([p, c, g], g) == ["Project", "Chunk"]
     assert logic.ancestor_titles([p, c, g], p) == []
+
+
+# ---- priority score ----
+
+def test_priority_score_ranks_urgent_important_cheap_work_first():
+    urgent_quick_win = logic.priority_score(9, 2, 10.0)
+    distant_thankless = logic.priority_score(2, 9, 0.5)
+    assert urgent_quick_win > distant_thankless
+    assert 0 <= distant_thankless <= 100
+    assert urgent_quick_win <= 100
+
+
+def test_priority_score_is_neutral_for_unscored_tasks():
+    """An unrated task is unknown, not worthless — it must not sink to zero."""
+    unscored = logic.priority_score(None, None, 5.0)
+    assert unscored == logic.priority_score(5, 5, 5.0)
+    assert unscored > logic.priority_score(0, 10, 5.0)
+
+
+def test_priority_score_effort_only_breaks_ties():
+    """Same deadline pressure and impact: the cheaper task comes first."""
+    cheap = logic.priority_score(7, 1, 6.0)
+    dear = logic.priority_score(7, 9, 6.0)
+    assert cheap > dear
+    # ...but impact outweighs it, so a cheap trivial task never beats a
+    # valuable one on effort alone.
+    assert logic.priority_score(9, 9, 6.0) > logic.priority_score(2, 0, 6.0)
+
+
+def test_compute_scores_every_task():
+    tasks = [
+        make_task("a", impact=9, effort=2, estimated_time=30,
+                  deadline=(NOW + timedelta(minutes=30)).isoformat()),
+        make_task("b", impact=2, effort=9, estimated_time=30, order_index=1,
+                  deadline=(NOW + timedelta(days=30)).isoformat()),
+    ]
+    derived = logic.compute(tasks, SETTINGS, now=NOW)
+    assert derived["a"]["score"] > derived["b"]["score"]
+    assert all(0 <= derived[t["id"]]["score"] <= 100 for t in tasks)
+
+
+def test_container_scores_off_the_work_it_still_holds():
+    """A parent's score follows the work in its subtree, not its own estimate.
+
+    An hour away with five minutes of its own work looks relaxed; an hour away
+    with an hour of subtasks under it does not, and the score has to say so.
+    """
+    parent = make_task("p", impact=8, effort=3, estimated_time=5,
+                       deadline=(NOW + timedelta(minutes=60)).isoformat())
+    kid = make_task("k", parent_id="p", estimated_time=60)
+    derived = logic.compute([parent, kid], SETTINGS, now=NOW)
+    assert derived["p"]["urgency"] == 10.0        # 78m of work, 60m left
+    assert derived["p"]["score"] == logic.priority_score(8, 3, 10.0)
+    # The same task judged on its own five minutes would barely register.
+    assert derived["p"]["score"] > logic.priority_score(8, 3, 1.2)
+
+
+# ---- nudging a past-due plan forward ----
+
+def test_nudge_plan_moves_the_task_and_slides_its_subtasks():
+    """The whole plan shifts by one delta, so it keeps its shape and length."""
+    parent = make_task("p", deadline=(NOW - timedelta(days=1)).isoformat())
+    kid = make_task("k", parent_id="p",
+                    deadline=(NOW - timedelta(days=3)).isoformat())
+    grandkid = make_task("g", parent_id="k",
+                         deadline=(NOW - timedelta(days=4)).isoformat())
+    tasks = [parent, kid, grandkid]
+    derived = logic.compute(tasks, SETTINGS, now=NOW)
+
+    target = NOW + timedelta(days=2)
+    moves = logic.nudge_plan(tasks, derived, "p", target)
+
+    assert logic.parse_dt(moves["p"]) == target
+    # delta is +3 days; every user-set deadline underneath moves by exactly that
+    assert logic.parse_dt(moves["k"]) == NOW + timedelta(days=0)
+    assert logic.parse_dt(moves["g"]) == NOW - timedelta(days=1)
+    # ...so the gaps between them — the length of the plan — are unchanged
+    assert logic.parse_dt(moves["p"]) - logic.parse_dt(moves["k"]) == timedelta(days=2)
+
+
+def test_nudge_plan_leaves_auto_deadlines_to_reschedule_themselves():
+    parent = make_task("p", deadline=(NOW - timedelta(days=1)).isoformat())
+    kid = make_task("k", parent_id="p", estimated_time=30)  # auto deadline
+    tasks = [parent, kid]
+    derived = logic.compute(tasks, SETTINGS, now=NOW)
+    moves = logic.nudge_plan(tasks, derived, "p", NOW + timedelta(days=1))
+    assert set(moves) == {"p"}
+
+
+def test_nudge_plan_handles_a_task_with_no_deadline_at_all():
+    task = make_task("solo")
+    settings = {**SETTINGS, "auto_deadlines": False}
+    derived = logic.compute([task], settings, now=NOW)
+    moves = logic.nudge_plan([task], derived, "solo", NOW + timedelta(hours=2))
+    assert logic.parse_dt(moves["solo"]) == NOW + timedelta(hours=2)
+
+
+def test_nudge_plan_ignores_an_unknown_task():
+    assert logic.nudge_plan([], {}, "nope", NOW) == {}

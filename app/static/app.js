@@ -52,6 +52,9 @@ function applyState(newState) {
   maybeShowThankless();
   scheduleTransitionAlarms();
   syncFocusWithState();
+  // Every mutation lands here, and every mutation can move something on the
+  // calendar — including tasks in tabs this state doesn't even carry.
+  refreshCalendar();
 }
 
 function flatten(tasks) {
@@ -68,6 +71,13 @@ function findTask(id, list = state.tasks) {
     if (found) return found;
   }
   return null;
+}
+
+/* The calendar spans every project, so a task opened from it is often not in
+ * the list currently on screen. Its calendar event carries the same fields
+ * the detail modal needs, so it stands in. */
+function findAnyTask(id) {
+  return findTask(id) || calendarTask(id);
 }
 
 /* ---------------- projects (tabs) ----------------
@@ -880,7 +890,7 @@ function isoToLocalInput(iso) {
 }
 
 function openDetail(id) {
-  const task = findTask(id);
+  const task = findAnyTask(id);
   if (!task) return;
   detailTaskId = id;
   $("d-title").value = task.title;
@@ -921,7 +931,7 @@ function updateDetailDerived() {
   badge.textContent = QUAD_LABEL[quad];
   badge.style.color = `var(--${quad})`;
   const est = Number($("d-estimate").value);
-  const task = findTask(detailTaskId);
+  const task = findAnyTask(detailTaskId);
   const buf = task?.buffer_applied ?? (settings ? settings.buffer : 0.3);
   $("d-buffer-note").textContent = est
     ? `Buffered: ${est}m + ${Math.round(buf * 100)}% time tax = ${fmtMinutes(Math.max(1, Math.ceil(est * (1 + buf) - 1e-9)))} — the timer uses this.`
@@ -940,7 +950,7 @@ async function saveDetail() {
   const dl = $("d-deadline").value;
   if (dl) fields.deadline = new Date(dl).toISOString();
   else fields.clear_deadline = true;
-  const task = findTask(detailTaskId);
+  const task = findAnyTask(detailTaskId);
   const targetProject = $("d-project").value;
   const moving = !$("d-project-row").hidden && task &&
                  targetProject && targetProject !== task.project_id;
@@ -1010,6 +1020,7 @@ function openSettings() {
   $("s-ready-lead").value = settings.alarms.ready_lead;
   $("s-go-lead").value = settings.alarms.go_lead;
   $("s-timer-style").value = settings.timer_style;
+  $("s-week-start").value = String(settings.week_start ?? 0);
   $("s-granularity").value = settings.granularity;
   $("s-granularity-val").textContent = settings.granularity;
   $("s-gamification").checked = settings.gamification;
@@ -1035,6 +1046,7 @@ async function saveSettings() {
       go_lead: Number($("s-go-lead").value),
     },
     timer_style: $("s-timer-style").value,
+    week_start: Number($("s-week-start").value),
     granularity: Number($("s-granularity").value),
     gamification: $("s-gamification").checked,
     manual_order: $("s-manual-order").checked,
@@ -1564,6 +1576,7 @@ function wire() {
   });
 
   wireListDropTarget();
+  wireCalendar();
 
   $("btn-add-project").addEventListener("click", addProject);
 
@@ -1702,6 +1715,8 @@ async function boot() {
     settings = await api("/settings");
     $("add-granularity").value = settings.granularity;
     applyState(await api("/state"));
+    // wireCalendar() has already read back which view you were last in.
+    if (cal.mode) setCalendarMode(true);
     if (!settings.has_api_key)
       toast("No Anthropic API key set — AI features are off. Add one in ⚙ Settings.");
   } catch (e) {

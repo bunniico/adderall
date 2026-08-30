@@ -23,6 +23,13 @@ HORIZON_DAYS = {"quick_win": 1, "fill_in": 3, "major_project": 7, "thankless": 1
 
 ACTIVE_STATUSES = {"todo", "in_progress"}
 
+# Priority score weights. Urgency carries the Eisenhower half (how close the
+# deadline is relative to the work left), impact the importance half, and ease
+# — a low effort score — breaks the ties in favour of quick wins. They sum to
+# 1.0, so the score lands on a 0-100 scale you can read at a glance.
+SCORE_WEIGHTS = {"urgency": 0.45, "impact": 0.35, "ease": 0.20}
+NEUTRAL_SCORE = 5  # stand-in for an impact/effort the AI hasn't filled in yet
+
 
 def parse_dt(value: str | None) -> datetime | None:
     if not value:
@@ -81,6 +88,26 @@ def urgency(deadline: datetime | None, buffered_min: int | None, now: datetime) 
         return 10.0
     work = buffered_min if buffered_min and buffered_min > 0 else DEFAULT_ESTIMATE_MIN
     return round(min(10.0, max(0.5, 10.0 * work / remaining_min)), 1)
+
+
+def priority_score(impact: int | None, effort: int | None, urgency_value: float) -> float:
+    """0-100: one number for "what deserves the next hour".
+
+    The week and month views put a whole day of tasks on screen at once, and
+    a list in deadline order says nothing about which of them actually
+    matters. This folds the three signals the app already keeps — deadline
+    pressure (urgency), importance (impact) and cost (effort, counted as its
+    inverse so cheap wins float) — into a single comparable number.
+
+    Unscored tasks sit at neutral rather than at zero: a task nobody has
+    rated yet is unknown, not worthless.
+    """
+    imp = NEUTRAL_SCORE if impact is None else max(0, min(10, impact))
+    eff = NEUTRAL_SCORE if effort is None else max(0, min(10, effort))
+    raw = (SCORE_WEIGHTS["urgency"] * max(0.0, min(10.0, urgency_value))
+           + SCORE_WEIGHTS["impact"] * imp
+           + SCORE_WEIGHTS["ease"] * (10 - eff))
+    return round(raw * 10, 1)
 
 
 def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None,
@@ -173,6 +200,9 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
         if d["has_subtasks"] and t["status"] in ACTIVE_STATUSES:
             d["urgency"] = urgency(parse_dt(d["rollup_deadline"]),
                                    d["rollup_remaining"], now)
+        # Computed last, so containers score off the urgency of what they
+        # actually still hold rather than off their own empty shell.
+        d["score"] = priority_score(t["impact"], t["effort"], d["urgency"])
         # Manual order means manual order: once you have arranged the list by
         # hand, the app stops second-guessing you and reads it top to bottom.
         d["sort_key"] = d.get("order_path", [t["order_index"]]) if manual_order else [
@@ -325,3 +355,47 @@ def ancestor_titles(tasks: list[dict], task: dict) -> list[str]:
         cursor = by_id[cursor["parent_id"]]
         path.insert(0, cursor["title"])
     return path
+
+
+def nudge_plan(tasks: list[dict], derived: dict[str, dict], task_id: str,
+               new_deadline: datetime) -> dict[str, str]:
+    """The deadlines to write when a past-due task is pushed to a new date.
+
+    Returns {task_id: iso}. The task itself lands exactly on `new_deadline`;
+    every task nested under it that carries a deadline *you* set slides by the
+    same delta. That is what "the same length" means for anything bigger than
+    one step: a plan spread over three days stays spread over three days
+    instead of collapsing onto the new date. Auto-assigned deadlines are left
+    alone — they are recomputed by backward scheduling from the new date on
+    the very next read, which is the same shift by another route.
+
+    A task with no deadline at all (auto-deadlines off, nothing set) has no
+    delta to apply, so only the task itself is scheduled.
+    """
+    by_id = {t["id"]: t for t in tasks}
+    task = by_id.get(task_id)
+    if task is None:
+        return {}
+    # Deadlines are stored to the second, so the shift is worked out to the
+    # second too — otherwise a stray microsecond on one end of the subtraction
+    # rounds a subtask a second away from where the plan put it.
+    new_deadline = new_deadline.replace(microsecond=0)
+    moves = {task_id: new_deadline.isoformat(timespec="seconds")}
+
+    current = parse_dt(derived.get(task_id, {}).get("deadline"))
+    if current is None:
+        return moves
+    delta = new_deadline - current.replace(microsecond=0)
+
+    children: dict[str | None, list[dict]] = {}
+    for t in tasks:
+        children.setdefault(t["parent_id"], []).append(t)
+    stack = list(children.get(task_id, []))
+    while stack:
+        kid = stack.pop()
+        stack.extend(children.get(kid["id"], []))
+        own = parse_dt(kid["deadline"])
+        if own is not None:
+            moves[kid["id"]] = (own.replace(microsecond=0) + delta).isoformat(
+                timespec="seconds")
+    return moves

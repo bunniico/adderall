@@ -29,6 +29,7 @@ DEFAULT_SETTINGS = {
         "go_lead": 0,          # minutes before deadline: "time to start/leave"
     },
     "timer_style": "both",     # analog | block | both
+    "week_start": 0,           # calendar week starts on 0=Sunday, 1=Monday
     "granularity": 3,          # default breakdown spiciness 1-5
     "gamification": True,
     "manual_order": False,     # you arrange the list yourself (set by dragging)

@@ -20,6 +20,7 @@
       <span id="focus-pill-title" class="focus-pill-title"></span>
       <span id="focus-pill-end" class="focus-pill-end" title="End this focus session">✕</span>
     </button>
+    <button id="btn-view" class="ghost" title="Switch between the task list and the calendar">📅 Calendar</button>
     <button id="btn-braindump" class="ghost" title="Dump everything in your head; the Compiler turns it into tasks">🧠 Braindump</button>
     <button id="btn-focus" class="accent" title="One task at a time with a visual timer">▶ Focus</button>
     <button id="btn-settings" class="ghost" title="Settings">⚙</button>
@@ -34,6 +35,9 @@
 </div>
 
 <main>
+  <div id="alarm-banner" class="alarm-banner" hidden></div>
+
+  <div id="list-view">
   <form id="add-form" autocomplete="off">
     <input id="add-title" type="text" placeholder="Add a task… (Enter to add)" maxlength="500" required>
     <label class="granularity" title="Breakdown granularity (1 = broad steps, 5 = tiny steps)">
@@ -41,8 +45,6 @@
     </label>
     <button type="submit" class="accent">Add</button>
   </form>
-
-  <div id="alarm-banner" class="alarm-banner" hidden></div>
 
   <section id="task-list" class="task-list" aria-live="polite"></section>
   <p id="empty-hint" class="empty-hint" hidden>
@@ -58,6 +60,53 @@
     <summary>Done &amp; discarded</summary>
     <div id="done-list"></div>
   </details>
+  </div><!-- /#list-view -->
+
+  <!-- Calendar: the one view that ignores the open tab, because "what is due
+       this week" is a question about everything, not about one list. -->
+  <section id="calendar-view" class="calendar" hidden aria-label="Calendar">
+    <div class="cal-toolbar">
+      <div class="cal-nav">
+        <button id="cal-prev" class="ghost cal-arrow" title="Back (←)" aria-label="Previous">‹</button>
+        <button id="cal-today" class="ghost">Today</button>
+        <button id="cal-next" class="ghost cal-arrow" title="Forward (→)" aria-label="Next">›</button>
+        <h2 id="cal-range"></h2>
+      </div>
+      <div class="cal-views" role="tablist" aria-label="Calendar view">
+        <button class="cal-view-btn" data-view="day" role="tab" title="Day (D)">Day</button>
+        <button class="cal-view-btn" data-view="week" role="tab" title="Week (W)">Week</button>
+        <button class="cal-view-btn" data-view="month" role="tab" title="Month (M)">Month</button>
+      </div>
+    </div>
+
+    <div class="cal-filters">
+      <label>Project
+        <select id="cal-project" title="Show one project, or all of them at once"></select>
+      </label>
+      <label>Category
+        <select id="cal-category" title="Filter by where a task sits on the impact/effort matrix">
+          <option value="">All categories</option>
+          <option value="quick_win">⚡ Quick wins</option>
+          <option value="major_project">🏔 Major projects</option>
+          <option value="fill_in">· Fill-ins</option>
+          <option value="thankless">😮‍💨 Thankless</option>
+          <option value="__none">Unscored</option>
+        </select>
+      </label>
+      <label class="row"><input id="cal-auto" type="checkbox" checked>
+        Auto-scheduled <span class="muted">— deadlines the app assigned</span></label>
+      <label class="row"><input id="cal-done" type="checkbox"> Completed</label>
+      <span id="cal-count" class="muted"></span>
+    </div>
+
+    <div id="cal-overdue" class="cal-overdue" hidden></div>
+    <div id="cal-body" class="cal-body"></div>
+    <p class="cal-legend muted">
+      Sorted by <b>score</b> — deadline pressure, impact, and how cheap it is to
+      do, in one number. The striped tail of a block in Day view is its time-tax
+      buffer.
+    </p>
+  </section>
 </main>
 
 <!-- Task detail modal -->
@@ -168,6 +217,13 @@
       <label>Go <input id="s-go-lead" type="number" min="0" max="60"> <span class="muted">min before</span></label>
     </div>
 
+    <label>Week starts on
+      <select id="s-week-start">
+        <option value="0">Sunday</option>
+        <option value="1">Monday</option>
+      </select>
+    </label>
+
     <label>Timer style
       <select id="s-timer-style">
         <option value="both">Analog dial + color block</option>
@@ -197,6 +253,23 @@
 
     <div class="modal-actions">
       <button id="s-save" class="accent wide">Save settings</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- Nudge a past-due deadline forward, keeping the task's length -->
+<dialog id="modal-nudge">
+  <div class="modal-body">
+    <div class="modal-head"><h2>⏩ Nudge to a new deadline</h2>
+      <button type="button" class="ghost close" data-close>✕</button></div>
+    <p id="n-summary"></p>
+    <p id="n-length" class="muted"></p>
+    <div id="n-presets" class="nudge-presets"></div>
+    <label>Or pick the moment yourself
+      <input id="n-when" type="datetime-local">
+    </label>
+    <div class="modal-actions">
+      <button type="button" id="n-save" class="accent wide">Nudge</button>
     </div>
   </div>
 </dialog>
@@ -237,6 +310,9 @@
 <div id="celebration" class="celebration" hidden></div>
 <div id="toast" class="toast" hidden></div>
 
+<!-- calendar.js first: app.js boots as it is parsed, and that boot may open
+     straight into the calendar. -->
+<script src="calendar.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
