@@ -167,6 +167,16 @@ set `ANTHROPIC_WORKSPACE_ID`. You can find the ID in the Claude Console URL:
   broken down further, recursively. The **+** on every task adds a subtask by
   hand when you already know the step, at any depth, and the box stays open so
   you can reel off several in a row.
+- **Delete, with the cascade spelled out** — every task carries a **✕** at
+  the end of its row, finished ones included, and it deletes: not "discard",
+  which keeps the task and marks it dropped, but gone from the database.
+  Because the schema cascades, deleting a task deletes everything nested under
+  it — and that is exactly the thing you can't see at the moment you click,
+  since a container is one line by design and may well be folded shut. So a
+  task with subtasks doesn't get a bare "are you sure": it is counted ("has 7
+  subtasks nested under it, and they all go too"), the first few are named,
+  and the total you are about to lose is on the button. A task with nothing
+  under it just asks once and gets out of the way.
 - **Fold anything away** — a task with subtasks gets a **▾** next to it;
   click it and the whole list underneath collapses into the one line that
   contains it, which still carries its rolled-up time, its deadline, its
