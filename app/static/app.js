@@ -495,7 +495,8 @@ function fmtDeadline(iso) {
   const diffMin = (d - now) / 60000;
   const opts = { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" };
   const label = d.toLocaleString(undefined, opts);
-  if (diffMin < 0) return { label: `overdue · ${label}`, cls: "urgent" };
+  if (diffMin < 0)
+    return { label: `overdue · ${label}`, cls: "urgent", overdue: true };
   if (diffMin < 180) return { label: `due ${label}`, cls: "urgent" };
   if (diffMin < 60 * 24) return { label: `due ${label}`, cls: "soon" };
   return { label: `due ${label}`, cls: "" };
@@ -686,7 +687,12 @@ function taskNode(task, isSub) {
       if (task.has_subtasks) b.title = "Total of all subtasks";
     }
     const dl = fmtDeadline(dlIso);
-    if (dl) add(dl.label + (dlSrc === "auto" ? " (auto)" : ""), dl.cls);
+    // A deadline that has gone by is the one badge worth making clickable:
+    // the thing you want the second you read it is to move it, and the
+    // calendar is a detour for that. Same dialog, same "keeps its length"
+    // promise — just reachable from where the task actually lives.
+    if (dl && dl.overdue) badges.appendChild(nudgeBadge(task, dl, dlSrc));
+    else if (dl) add(dl.label + (dlSrc === "auto" ? " (auto)" : ""), dl.cls);
     if (task.quadrant) add(QUAD_LABEL[task.quadrant], "quad-" + task.quadrant);
     if (collapsed)
       add(`${subs.length} subtask${subs.length === 1 ? "" : "s"} hidden`, "folded");
@@ -704,6 +710,21 @@ function taskNode(task, isSub) {
     el.appendChild(wrap);
   }
   return el;
+}
+
+/* The overdue badge, as a button. Clicking it opens the nudge dialog on this
+ * one task; the calendar's rail is where you move the whole pile at once. */
+function nudgeBadge(task, dl, dlSrc) {
+  const btn = document.createElement("button");
+  btn.className = "badge urgent nudge-badge";
+  btn.type = "button";
+  btn.textContent = dl.label + (dlSrc === "auto" ? " (auto)" : "") + " ⏩";
+  btn.title = `Nudge “${task.title}” to a new deadline — it keeps its ` +
+    `length (${fmtMinutes(task.length_min)} of buffered work)` +
+    (task.has_subtasks ? ", and its subtasks slide with it" : "");
+  btn.setAttribute("aria-label", "Nudge " + task.title + " to a new deadline");
+  btn.addEventListener("click", () => openNudge([task]));
+  return btn;
 }
 
 function render() {

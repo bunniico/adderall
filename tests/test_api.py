@@ -981,3 +981,18 @@ def test_nudge_rejects_unknown_tasks_and_unparseable_dates(client):
 def test_week_start_setting_round_trips(client):
     assert client.get("/api/settings").json()["week_start"] == 0
     assert client.put("/api/settings", json={"week_start": 1}).json()["week_start"] == 1
+
+
+def test_state_carries_the_length_a_nudge_preserves(client):
+    """The list offers the same nudge the calendar does, so it needs the same
+    number: how long the task is, so the dialog can promise to keep it."""
+    state = create(client, title="overdue thing", deadline=iso_in(days=-1),
+                   estimated_time=60)
+    task = find(state, "overdue thing")
+    assert task["length_min"] == 78
+    assert task["raw_length_min"] == 60
+    # ...and nudging it from there leaves that length alone.
+    target = datetime.now(timezone.utc) + timedelta(days=1)
+    state = client.post("/api/nudge", json={
+        "nudges": [{"task_id": task["id"], "deadline": target.isoformat()}]}).json()
+    assert find(state, "overdue thing")["length_min"] == 78

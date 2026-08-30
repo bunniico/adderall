@@ -90,6 +90,22 @@ def urgency(deadline: datetime | None, buffered_min: int | None, now: datetime) 
     return round(min(10.0, max(0.5, 10.0 * work / remaining_min)), 1)
 
 
+def block_length(derived: dict) -> int:
+    """How much time a task occupies, in minutes — the size of its calendar
+    block and the length a nudge preserves.
+
+    A container is worth the work it still holds, a leaf its own buffered
+    estimate, and a task nobody has estimated yet gets the same default the
+    urgency maths uses rather than a zero-height sliver.
+    """
+    if derived["has_subtasks"]:
+        length = (derived["rollup_remaining"] or derived["rollup_estimate"]
+                  or derived["buffered_estimate"])
+    else:
+        length = derived["buffered_estimate"]
+    return max(1, int(length or DEFAULT_ESTIMATE_MIN))
+
+
 def priority_score(impact: int | None, effort: int | None, urgency_value: float) -> float:
     """0-100: one number for "what deserves the next hour".
 
@@ -203,6 +219,8 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
         # Computed last, so containers score off the urgency of what they
         # actually still hold rather than off their own empty shell.
         d["score"] = priority_score(t["impact"], t["effort"], d["urgency"])
+        d["length_min"] = block_length(d)
+        d["raw_length_min"] = max(1, round(d["length_min"] / (1.0 + buf)))
         # Manual order means manual order: once you have arranged the list by
         # hand, the app stops second-guessing you and reads it top to bottom.
         d["sort_key"] = d.get("order_path", [t["order_index"]]) if manual_order else [
