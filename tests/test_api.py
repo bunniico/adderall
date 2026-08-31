@@ -1205,8 +1205,12 @@ def test_spreading_can_be_turned_off(client):
     for i in range(3):
         create(client, title=f"chunk {i}", estimated_time=120, impact=8, effort=2)
     events = client.get("/api/calendar").json()["events"]
-    # Back to the plain horizon: created plus a day, all on the same instant.
-    assert len({e["deadline"] for e in events}) == 1
+    # Back to the plain horizon: created plus a day, with nothing pushed onto a
+    # later day to make room. Deadlines can differ by the second each task was
+    # created in — that is the horizon doing exactly its job — so the assertion
+    # is that they are all the same moment, not that they are the same string.
+    stamps = sorted(logic.parse_dt(e["deadline"]) for e in events)
+    assert (stamps[-1] - stamps[0]).total_seconds() < 60
 
 
 # ---- the daily cap ----

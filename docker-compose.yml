@@ -14,6 +14,12 @@ services:
       # how much of one prompt or completion a single line carries (0 = no cap).
       - ADDERALL_LOG_LEVEL=${ADDERALL_LOG_LEVEL:-INFO}
       - ADDERALL_AI_LOG_CHARS=${ADDERALL_AI_LOG_CHARS:-4000}
+      # How often the recurring-task sweep runs, in seconds. Hourly by default
+      # — finer than the daily check it needs, so a day boundary crossed while
+      # the machine was asleep is picked up within the hour of it waking. Set
+      # to 0 to turn the background job off and drive `POST /api/recurring/run`
+      # from a real cron instead.
+      - ADDERALL_RECUR_INTERVAL=${ADDERALL_RECUR_INTERVAL:-3600}
     # Adderall is a small FastAPI app over SQLite; it never needs more than
     # one core or half a gig, so cap it and leave the rest of the box alone.
     deploy:

@@ -167,6 +167,78 @@
     <p>Quadrant: <span id="d-quadrant" class="quad-badge"></span>
        · Score: <span id="d-score" class="badge score-badge"></span></p>
     <p id="d-score-note" class="muted"></p>
+
+    <!-- Repeat. Four shapes cover what people actually repeat — daily,
+         weekly, monthly, yearly — and "Custom…" is those same four with
+         their knobs turned up, not a fifth kind of rule. The dates
+         underneath come from the server, so the dialog, the badge and the
+         schedule can never describe the same rule three different ways. -->
+    <fieldset class="s-group repeat-block" id="d-repeat-block">
+      <legend>🔁 Repeat</legend>
+      <label>How often
+        <select id="d-repeat-freq" title="Make this task come back on a schedule">
+          <option value="">Doesn't repeat</option>
+          <option value="daily">Daily</option>
+          <option value="weekly">Weekly</option>
+          <option value="monthly">Monthly</option>
+          <option value="yearly">Yearly</option>
+          <option value="custom">Custom…</option>
+        </select>
+      </label>
+
+      <div id="d-repeat-detail" hidden>
+        <label id="d-repeat-every-row" class="repeat-every" hidden>Every
+          <input id="d-repeat-interval" type="number" min="1" max="365" value="1">
+          <select id="d-repeat-unit">
+            <option value="daily">days</option>
+            <option value="weekly">weeks</option>
+            <option value="monthly">months</option>
+            <option value="yearly">years</option>
+          </select>
+        </label>
+
+        <div id="d-repeat-weekdays" class="weekday-picker" hidden
+          role="group" aria-label="Which days of the week"></div>
+
+        <div id="d-repeat-monthly" class="repeat-monthly" hidden>
+          <label class="row"><input type="radio" name="d-monthly-mode"
+            value="day_of_month" checked> On day
+            <select id="d-repeat-monthday"></select></label>
+          <label class="row"><input type="radio" name="d-monthly-mode"
+            value="nth_weekday"> On the
+            <select id="d-repeat-nth"></select>
+            <select id="d-repeat-weekday"></select></label>
+        </div>
+
+        <div class="grid2">
+          <label>At <input id="d-repeat-time" type="time"></label>
+          <label>Ends
+            <select id="d-repeat-end">
+              <option value="">Never</option>
+              <option value="count">After a number of times</option>
+              <option value="until">On a date</option>
+            </select>
+          </label>
+        </div>
+        <div class="grid2">
+          <label id="d-repeat-count-row" hidden>How many times
+            <input id="d-repeat-count" type="number" min="1" max="1000" value="10"></label>
+          <label id="d-repeat-until-row" hidden>Last date
+            <input id="d-repeat-until" type="date"></label>
+        </div>
+
+        <label class="row"><input id="d-repeat-from-completion" type="checkbox">
+          <span>Count from when I finish it <span class="muted">— "every 3
+          days" then means three days after you actually do it, not three days
+          after it was due</span></span></label>
+
+        <p id="d-repeat-preview" class="muted repeat-preview"></p>
+      </div>
+      <p class="muted repeat-note">Only one copy is ever on your list at a
+        time. Finish it and the next one turns up when it's due; ignore it for
+        a fortnight and you are one behind, not fourteen.</p>
+    </fieldset>
+
     <label id="d-project-row" hidden>Project
       <select id="d-project" title="Move this task — and everything under it — to another tab"></select>
     </label>
