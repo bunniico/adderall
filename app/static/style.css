@@ -162,6 +162,13 @@ textarea { resize: vertical; }
 .task-btn {
   padding: 3px 9px; font-size: 13px; border-radius: 7px; flex: none;
 }
+/* The one row action that destroys work instead of doing it: it sits quiet at
+   the end of the row until you go for it, and then wears the colour the rest
+   of the app keeps for the bad news. */
+.task-btn.danger { color: var(--muted); }
+.task-btn.danger:hover, .task-btn.danger:focus-visible {
+  color: var(--bad); border-color: var(--bad);
+}
 .subtasks { margin: 8px 0 0 26px; display: flex; flex-direction: column; gap: 6px; }
 
 /* ---- folding (hide a task's subtasks) ----

@@ -727,6 +727,11 @@ function taskNode(task, isSub) {
     focus.addEventListener("click", () => startFocus(task.id));
     row.appendChild(focus);
   }
+
+  // Last in the row, past everything you press all day: the one control here
+  // that destroys work rather than doing it. Finished tasks get it too —
+  // clearing out the done list is most of what it is for.
+  row.appendChild(deleteBtn(task));
   el.appendChild(row);
 
   if (active) {
@@ -791,6 +796,62 @@ function nudgeBadge(task, dl, dlSrc) {
   btn.setAttribute("aria-label", "Nudge " + task.title + " to a new deadline");
   btn.addEventListener("click", () => openNudge([task]));
   return btn;
+}
+
+/* ---------------- deleting ----------------
+ * The only thing in the list with nothing behind it. Completing a task keeps
+ * it, discarding a task keeps it; deleting takes the row out of the database,
+ * and the schema cascades, so everything nested underneath goes with it.
+ *
+ * That cascade is the part worth stopping for, because what you lose is
+ * rarely the line you clicked on: a container is one line by design — folded
+ * away, or just read past — and the eleven steps it holds are the actual
+ * cost. So a task with subtasks is counted, listed and confirmed against by
+ * name, and a leaf is asked about once and no more than once. Deleting is
+ * meant to stay usable; the warning is for when it isn't what it looks like. */
+
+const DELETE_PREVIEW = 5;  // subtasks named in the warning before "…and N more"
+
+function deleteBtn(task) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "task-btn ghost danger";
+  btn.textContent = "✕";
+  const n = flatten(task.subtasks || []).length;
+  btn.title = n
+    ? `Delete this task and the ${n} subtask${n === 1 ? "" : "s"} under it`
+    : "Delete this task";
+  btn.setAttribute("aria-label", "Delete " + task.title);
+  btn.addEventListener("click", () => deleteTask(task.id));
+  return btn;
+}
+
+async function deleteTask(id) {
+  const task = findTask(id);
+  if (!task) return;
+  // Everything under it, at every depth and whatever its status: the cascade
+  // makes no distinction, so neither does the count you are shown.
+  const doomed = flatten(task.subtasks || []);
+  const n = doomed.length;
+  let message = `Delete “${task.title}”?`;
+  if (n) {
+    const lines = doomed.slice(0, DELETE_PREVIEW).map((t) => `  • ${t.title}`);
+    if (n > lines.length) lines.push(`  • …and ${n - lines.length} more`);
+    message =
+      `“${task.title}” has ${n} subtask${n === 1 ? "" : "s"} nested under it, ` +
+      `and ${n === 1 ? "it goes" : "they all go"} too:\n\n` +
+      lines.join("\n") + `\n\nDelete all ${n + 1} of them?`;
+  }
+  if (!confirm(message + "\n\nThis can't be undone.")) return;
+  // An "add a subtask" box open on a task that is about to stop existing has
+  // nowhere left to put what you type.
+  if (subtaskDraftFor === id || doomed.some((t) => t.id === subtaskDraftFor))
+    subtaskDraftFor = null;
+  try {
+    applyState(await api(`/tasks/${id}`, { method: "DELETE" }));
+    toast(n ? `Deleted “${task.title}” and ${n} subtask${n === 1 ? "" : "s"}.`
+            : `Deleted “${task.title}”.`);
+  } catch (e) { toast(e.message, true); }
 }
 
 function render() {

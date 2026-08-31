@@ -123,6 +123,38 @@ def test_update_and_delete(client):
     assert client.delete(f"/api/tasks/{tid}").status_code == 404
 
 
+def test_delete_takes_the_whole_subtree(client):
+    """What the list warns about before deleting a container: the nesting goes
+    too, at every depth, whether or not a step was already finished."""
+    state = create(client, title="move house")
+    parent = find(state, "move house")["id"]
+    state = create(client, title="book a van", parent_id=parent)
+    child = find(state, "book a van")["id"]
+    state = create(client, title="compare quotes", parent_id=child)
+    grandchild = find(state, "compare quotes")["id"]
+    client.patch(f"/api/tasks/{grandchild}", json={"status": "done"})
+
+    state = client.delete(f"/api/tasks/{parent}").json()
+    assert state["tasks"] == []
+    for title in ("move house", "book a van", "compare quotes"):
+        assert find(state, title) is None
+    # Gone from the database, not merely absent from the tree.
+    assert client.delete(f"/api/tasks/{grandchild}").status_code == 404
+
+
+def test_delete_subtask_leaves_its_parent_alone(client):
+    state = create(client, title="parent")
+    parent = find(state, "parent")["id"]
+    create(client, title="step one", parent_id=parent)
+    state = create(client, title="step two", parent_id=parent)
+    step_one = find(state, "step one")["id"]
+
+    state = client.delete(f"/api/tasks/{step_one}").json()
+    kept = find(state, "parent")
+    assert kept is not None
+    assert [s["title"] for s in kept["subtasks"]] == ["step two"]
+
+
 def test_manual_subtask_under_any_task(client):
     state = create(client, title="parent")
     parent = find(state, "parent")
