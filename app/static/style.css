@@ -35,7 +35,64 @@ body {
   background: var(--bg);
 }
 .topbar h1 { font-size: 20px; margin: 0; letter-spacing: .5px; }
-.topbar-actions { display: flex; gap: 8px; }
+.topbar-actions { display: flex; gap: 8px; align-items: center; }
+
+/* ---- level & XP meter ----
+   The one permanently visible piece of gamification: a level, a bar, and the
+   number that just landed on it. It sits with the header buttons rather than
+   floating over the page, because it is a readout, not a notification. */
+.xp-meter[hidden] { display: none; }
+.xp-meter {
+  position: relative; flex: none; width: 132px;
+  display: flex; flex-direction: column; justify-content: center; gap: 3px;
+  padding: 4px 8px; border: 1px solid var(--border);
+  border-radius: var(--radius); background: var(--panel);
+}
+.xp-line {
+  display: flex; justify-content: space-between; align-items: baseline;
+  gap: 6px; font-size: 11px; color: var(--muted); line-height: 1.2;
+}
+.xp-level { color: var(--text); font-weight: 600; letter-spacing: .3px; }
+.xp-level b { color: var(--accent); }
+.xp-count { font-variant-numeric: tabular-nums; }
+.xp-track {
+  height: 6px; border-radius: 20px; background: var(--panel-2); overflow: hidden;
+}
+.xp-fill {
+  height: 100%; width: 0; border-radius: 20px;
+  background: linear-gradient(90deg, var(--accent), var(--good));
+  transition: width .6s cubic-bezier(.22, .61, .36, 1);
+}
+/* Passing a level is the one moment the meter is allowed to shout. */
+.xp-meter.levelup { animation: levelup 1.2s ease-out; }
+@keyframes levelup {
+  0%   { box-shadow: 0 0 0 0 rgba(124, 156, 255, .7); border-color: var(--accent); }
+  60%  { box-shadow: 0 0 0 10px rgba(124, 156, 255, 0); border-color: var(--good); }
+  100% { box-shadow: 0 0 0 0 rgba(124, 156, 255, 0); }
+}
+.xp-gain[hidden] { display: none; }
+/* Below the meter rather than above it: the header is the top of the window,
+   and a number that rises off the top edge is a number nobody sees. */
+.xp-gain {
+  position: absolute; right: 6px; top: 100%; margin-top: 3px; z-index: 2;
+  pointer-events: none; font-size: 12px; font-weight: 700; color: var(--good);
+  white-space: nowrap; text-shadow: 0 1px 4px rgba(0, 0, 0, .6);
+}
+.xp-gain.rise { animation: xp-rise 1.6s ease-out forwards; }
+@keyframes xp-rise {
+  0%   { opacity: 0; transform: translateY(8px) scale(.9); }
+  18%  { opacity: 1; transform: translateY(2px) scale(1.06); }
+  35%  { transform: translateY(0) scale(1); }
+  100% { opacity: 0; transform: translateY(-12px); }
+}
+
+/* Motion is the reward here, so it is also the thing to drop first for
+   anyone who has asked the system for less of it. The numbers still land. */
+@media (prefers-reduced-motion: reduce) {
+  .xp-fill { transition: none; }
+  .xp-meter.levelup { animation: none; border-color: var(--good); }
+  .xp-gain.rise { animation: none; opacity: 1; }
+}
 
 main { max-width: 780px; margin: 0 auto; padding: 18px 14px 80px; }
 
@@ -153,6 +210,12 @@ textarea { resize: vertical; }
 .badge.soon { color: var(--warn); border-color: var(--warn); }
 .badge.next-badge { color: var(--accent); border-color: var(--accent); font-weight: 600; }
 .badge.folded { color: var(--muted); font-style: italic; }
+/* The score, on the task itself. Tabular figures so a column of them lines
+   up as you read down the list. */
+.badge.score-badge {
+  color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums;
+}
+.badge.xp-badge { color: var(--good); border-color: var(--good); font-weight: 600; }
 /* The overdue badge is a button — it is the one badge you always want to act
    on rather than read. */
 .badge.nudge-badge { cursor: pointer; background: transparent; }
@@ -583,6 +646,10 @@ body.calendar-mode main { max-width: 1180px; }
   .granularity { display: none; }
   .focus-pill-title { display: none; }
   .focus-pill { max-width: 130px; }
+  /* The level and the bar survive a phone; the exact fraction does not — the
+     header is already fighting for room at this width. */
+  .xp-meter { width: 64px; padding: 4px 6px; }
+  .xp-count { display: none; }
   .cal-nav h2 { font-size: 15px; margin-left: 4px; }
   .cal-chip-time { display: none; }
   .cal-month-grid .cal-chip-title { display: none; }

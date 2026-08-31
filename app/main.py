@@ -208,9 +208,10 @@ def _derive_all(projects: list[dict], by_project: dict[str, list[dict]],
             for p in projects}
 
 
-def _state(project_id: str | None = None) -> dict:
+def _state(project_id: str | None = None, xp_gained: int = 0) -> dict:
     """Everything the page renders: the open tab's task tree, the tab strip,
-    and the cross-project deadline list the alarms run off.
+    the cross-project deadline list the alarms run off, and where the XP
+    total stands.
 
     Only the active project's tasks are sent as a tree — a tab you are not
     looking at is not on screen — but deadlines are gathered from every
@@ -252,6 +253,11 @@ def _state(project_id: str | None = None) -> dict:
         "projects": [{**p, "open_tasks": counts.get(p["id"], 0)} for p in projects],
         "active_project_id": active_id,
         "alarm_tasks": alarm_tasks,
+        # Levels ride along with every state read so a reload never shows a
+        # stale bar. `gained` is only ever non-zero on the reply to the call
+        # that earned it, which is the page's cue to animate rather than
+        # silently jump.
+        "xp": {**logic.level_progress(db.get_xp()), "gained": xp_gained},
     }
 
 
@@ -377,6 +383,61 @@ def _require_project(project_id: str) -> dict:
     if not project:
         raise HTTPException(404, "Project not found")
     return project
+
+
+def _project_derived(project_id: str) -> dict[str, dict]:
+    """Derived fields for one project's tasks — the same numbers the page is
+    already showing, planned against every project's shared day book."""
+    settings = db.get_settings()
+    ratios = db.completion_ratios()
+    projects = db.list_projects() or [db.ensure_project()]
+    by_project: dict[str, list[dict]] = {p["id"]: [] for p in projects}
+    for t in db.list_tasks():
+        by_project.setdefault(t["project_id"], []).append(t)
+    return _derive_all(projects, by_project, settings, ratios).get(project_id, {})
+
+
+def _finish(task_id: str, fields: dict | None = None) -> int:
+    """Mark a task and everything still open under it done, and pay the XP out.
+
+    The scores are read *before* anything is marked done, because finishing a
+    task drops its urgency — and so its score — to nothing: what it pays has
+    to be what it was worth while you still had it to do.
+
+    Only leaves pay. A container's score is borrowed from the steps beneath it
+    (see `logic._rollup_score`), so paying for both would pay twice for one
+    afternoon's work; completing a parent finishes those steps, and they are
+    what pays. A task that has already been paid for never pays again, however
+    often it is reopened and finished — the XP you earned stays earned, and
+    nothing is farmable by ticking the same box twice.
+    """
+    task = db.get_task(task_id)
+    if task is None:
+        return 0
+    derived = _project_derived(task["project_id"])
+    awards: list[tuple[str, int]] = []
+    for tid in [task_id, *db.descendant_ids(task_id)]:
+        row = db.get_task(tid)
+        if row is None or row["status"] not in logic.ACTIVE_STATUSES:
+            continue                      # already finished, or discarded
+        if row["xp_awarded"] is not None:
+            continue                      # paid for once already
+        d = derived.get(tid)
+        if d is None or d["has_subtasks"]:
+            continue                      # a container pays through its steps
+        awards.append((tid, logic.task_xp(d["score"])))
+
+    db.update_task(task_id, {**(fields or {}), "status": "done"})
+    for tid in db.descendant_ids(task_id):
+        child = db.get_task(tid)
+        if child and child["status"] in ("todo", "in_progress"):
+            db.update_task(tid, {"status": "done"})
+
+    gained = 0
+    for tid, amount in awards:
+        db.award_xp(tid, amount)
+        gained += amount
+    return gained
 
 
 def _freeze_manual_order() -> None:
@@ -548,12 +609,12 @@ def update_task(task_id: str, body: TaskUpdate):
         fields["deadline"] = None
     if fields.get("status") == "in_progress":
         fields["started_at"] = db.now_iso()
-    db.update_task(task_id, fields)
     if fields.get("status") == "done":
-        for tid in db.descendant_ids(task_id):
-            child = db.get_task(tid)
-            if child and child["status"] in ("todo", "in_progress"):
-                db.update_task(tid, {"status": "done"})
+        # One way in to "done", whichever door it came through, so a task
+        # ticked from the list and one patched by hand pay the same XP.
+        rest = {k: v for k, v in fields.items() if k != "status"}
+        return _state(xp_gained=_finish(task_id, rest))
+    db.update_task(task_id, fields)
     return _state()
 
 
@@ -684,15 +745,10 @@ def complete_task(task_id: str, body: CompleteRequest):
         started = logic.parse_dt(task["started_at"])
         if started:
             actual = max(1, round((datetime.now(timezone.utc) - started).total_seconds() / 60))
-    fields: dict = {"status": "done"}
+    fields: dict = {}
     if actual is not None:
         fields["actual_time"] = actual
-    db.update_task(task_id, fields)
-    for tid in db.descendant_ids(task_id):
-        child = db.get_task(tid)
-        if child and child["status"] in ("todo", "in_progress"):
-            db.update_task(tid, {"status": "done"})
-    return _state()
+    return _state(xp_gained=_finish(task_id, fields))
 
 
 @app.post("/api/compile")

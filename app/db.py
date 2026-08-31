@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     collapsed     INTEGER NOT NULL DEFAULT 0,
     order_index   INTEGER NOT NULL DEFAULT 0,
     started_at    TEXT,
+    xp_awarded    INTEGER,
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL
 );
@@ -88,6 +89,14 @@ CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id);
 CREATE TABLE IF NOT EXISTS settings (
     k TEXT PRIMARY KEY,
     v TEXT NOT NULL
+);
+-- Lifetime XP, in its own one-row table rather than in `settings`, because it
+-- is not a preference: the page may never write it, and tidying up an old
+-- finished task must never cost you a level.
+CREATE TABLE IF NOT EXISTS progress (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    xp         INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
 );
 """
 
@@ -128,6 +137,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE tasks ADD COLUMN collapsed INTEGER NOT NULL DEFAULT 0"
         )
+    if "xp_awarded" not in cols:
+        # Nothing finished before XP existed pays out retroactively: the
+        # column starts null everywhere, which reads as "never awarded", and
+        # the running total in `progress` starts at zero to match.
+        conn.execute("ALTER TABLE tasks ADD COLUMN xp_awarded INTEGER")
     if "project_id" not in cols:
         conn.execute(
             "ALTER TABLE tasks ADD COLUMN project_id TEXT "
@@ -480,6 +494,36 @@ def get_settings() -> dict:
         else:
             merged[key] = value
     return merged
+
+
+# ---------- progress (lifetime XP) ----------
+
+def get_xp() -> int:
+    """Lifetime XP. Absent row means none earned yet, which is level 1."""
+    with connect() as conn:
+        row = conn.execute("SELECT xp FROM progress WHERE id = 1").fetchone()
+    return int(row["xp"]) if row else 0
+
+
+def award_xp(task_id: str, amount: int) -> int:
+    """Pay `amount` out for finishing `task_id`, and hand back the new total.
+
+    Both halves in one transaction: the task remembers what it paid, so it can
+    never pay twice, and the running total is the only thing levels are read
+    from, so it survives that task being edited, reopened or deleted later.
+    """
+    amount = max(0, int(amount))
+    ts = now_iso()
+    with connect() as conn:
+        conn.execute("UPDATE tasks SET xp_awarded = ? WHERE id = ?", (amount, task_id))
+        conn.execute(
+            "INSERT INTO progress (id, xp, updated_at) VALUES (1, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET xp = xp + excluded.xp, "
+            "updated_at = excluded.updated_at",
+            (amount, ts),
+        )
+        row = conn.execute("SELECT xp FROM progress WHERE id = 1").fetchone()
+    return int(row["xp"]) if row else 0
 
 
 def update_settings(changes: dict) -> dict:

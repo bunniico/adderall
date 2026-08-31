@@ -8,6 +8,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi.testclient import TestClient
 
+from app import logic
+
 
 @pytest.fixture()
 def client(monkeypatch, tmp_path):
@@ -1251,3 +1253,91 @@ def test_day_cap_settings_roundtrip(client):
     assert res["day_start"] == 7
     assert res["timezone"] == "America/New_York"
     assert res["capacity"]["minutes"] == 300
+
+
+# ---- XP: what finishing something pays out ----
+
+def test_state_carries_the_level_and_xp(client):
+    state = client.get("/api/state").json()
+    assert state["xp"] == {"total": 0, "level": 1, "into_level": 0,
+                           "level_span": 100, "to_next": 100, "progress": 0.0,
+                           "gained": 0}
+
+
+def test_completing_a_task_pays_out_its_score(client):
+    state = create(client, title="a real task", impact=9, effort=2,
+                   estimated_time=20)
+    task = find(state, "a real task")
+    score = task["score"]
+    assert score is not None
+    state = client.post(f"/api/tasks/{task['id']}/complete", json={}).json()
+    expected = round(score)
+    assert state["xp"]["gained"] == expected
+    assert state["xp"]["total"] == expected
+    # ...and the task remembers what it paid, for the Done list to show.
+    assert find(state, "a real task")["xp_awarded"] == expected
+
+
+def test_a_task_never_pays_twice(client):
+    state = create(client, title="once", impact=5, effort=5)
+    tid = find(state, "once")["id"]
+    first = client.post(f"/api/tasks/{tid}/complete", json={}).json()["xp"]["total"]
+    assert first > 0
+    # Reopened and finished again — the XP stands, but it is not paid again.
+    client.patch(f"/api/tasks/{tid}", json={"status": "todo"})
+    again = client.post(f"/api/tasks/{tid}/complete", json={}).json()["xp"]
+    assert again["gained"] == 0
+    assert again["total"] == first
+
+
+def test_a_container_pays_through_its_steps_not_twice(client):
+    state = create(client, title="project")
+    tid = find(state, "project")["id"]
+    state = client.post(f"/api/tasks/{tid}/breakdown", json={}).json()
+    steps = find(state, "project")["subtasks"]
+    assert len(steps) == 3
+    expected = sum(round(s["score"]) for s in steps)
+    state = client.post(f"/api/tasks/{tid}/complete", json={}).json()
+    # The parent's own score is the mean of the steps; paying for it as well
+    # would pay twice for one afternoon.
+    assert state["xp"]["gained"] == expected
+    assert find(state, "project")["xp_awarded"] is None
+    assert all(s["xp_awarded"] for s in find(state, "project")["subtasks"])
+
+
+def test_finishing_by_patch_pays_the_same_as_the_button(client):
+    state = create(client, title="patched", impact=7, effort=3)
+    task = find(state, "patched")
+    state = client.patch(f"/api/tasks/{task['id']}", json={"status": "done"}).json()
+    assert state["xp"]["gained"] == round(task["score"])
+
+
+def test_discarding_pays_nothing(client):
+    state = create(client, title="dropped")
+    tid = find(state, "dropped")["id"]
+    state = client.patch(f"/api/tasks/{tid}", json={"status": "discarded"}).json()
+    assert state["xp"]["total"] == 0
+    assert find(state, "dropped")["xp_awarded"] is None
+
+
+def test_xp_survives_deleting_the_task_that_earned_it(client):
+    state = create(client, title="gone soon", impact=8, effort=2)
+    tid = find(state, "gone soon")["id"]
+    earned = client.post(f"/api/tasks/{tid}/complete", json={}).json()["xp"]["total"]
+    assert earned > 0
+    state = client.delete(f"/api/tasks/{tid}").json()
+    assert state["xp"]["total"] == earned
+
+
+def test_enough_finished_tasks_raise_the_level(client):
+    total = 0
+    for i in range(6):
+        state = create(client, title=f"task {i}", impact=10, effort=0,
+                       estimated_time=10)
+        tid = find(state, f"task {i}")["id"]
+        total = client.post(f"/api/tasks/{tid}/complete", json={}).json()["xp"]["total"]
+    xp = client.get("/api/state").json()["xp"]
+    assert xp["total"] == total
+    assert xp["level"] > 1                     # six real tasks is a level or two
+    assert xp["level"] == logic.level_progress(total)["level"]
+    assert xp["into_level"] + xp["to_next"] == xp["level_span"]

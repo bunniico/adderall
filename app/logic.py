@@ -508,6 +508,61 @@ def priority_score(impact: int | None, effort: int | None, urgency_value: float,
     return round(raw * 10, 1)
 
 
+# ---------------------------------------------------------------------------
+# XP: what finishing something is worth
+# ---------------------------------------------------------------------------
+# The score already says what a task deserves, so it is also what the task
+# pays. One number, not two: nothing extra to learn, and nothing to farm —
+# the only way to earn more is to do the work that was worth more. Finishing
+# a hard, urgent, important thing lands a bigger number than clearing three
+# more trivia off the list, which is the whole point.
+#
+# Levels sit steadily further apart — 100 XP to reach level 2, another 200 to
+# reach 3, another 300 to reach 4 — so the bar never stops moving, but the
+# first few come fast enough to be worth having at all.
+XP_PER_LEVEL = 100
+
+
+def task_xp(score: float) -> int:
+    """What one finished task pays out: its score, rounded.
+
+    Never nothing. A task with no impact, no deadline and no estimate still
+    scores something, and a payout of zero would read as "that didn't count"
+    for work that was, in fact, done.
+    """
+    return max(1, int(round(score)))
+
+
+def level_threshold(level: int) -> int:
+    """Total XP needed to have reached `level`. Everyone starts at level 1."""
+    level = max(1, int(level))
+    return XP_PER_LEVEL * (level - 1) * level // 2
+
+
+def level_progress(total_xp: int) -> dict:
+    """Where a running XP total puts you, and how far into the level it is.
+
+    `progress` is the 0-1 fill of the bar; `into_level` and `level_span` are
+    the same thing as numbers, because "180 / 300" says something the bar
+    alone doesn't.
+    """
+    total = max(0, int(total_xp))
+    level = 1
+    while total >= level_threshold(level + 1):
+        level += 1
+    floor = level_threshold(level)
+    span = level_threshold(level + 1) - floor
+    into = total - floor
+    return {
+        "total": total,
+        "level": level,
+        "into_level": into,
+        "level_span": span,
+        "to_next": span - into,
+        "progress": round(into / span, 4),
+    }
+
+
 def sort_mode(settings: dict) -> tuple[str, bool]:
     """(field, descending) — how the list is currently being read.
 
