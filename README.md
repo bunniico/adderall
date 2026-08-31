@@ -116,6 +116,33 @@ until you provide it. Put the workspace ID in ⚙ Settings → Workspace ID, or
 set `ANTHROPIC_WORKSPACE_ID`. You can find the ID in the Claude Console URL:
 `platform.claude.com/workspaces/<id>`. Ordinary keys don't need this.
 
+### Seeing what the AI is doing
+
+Every Claude call writes what it sent and what came back to the container's
+stdout, so `docker compose logs -f` (or `docker logs -f <container>`) shows the
+prompt, the model's thinking summary when it thought, and the JSON it returned:
+
+```
+2026-08-30 17:22:41,903 INFO    app.ai | AI call → tier=deep model=claude-opus-5 max_tokens=16000 effort=high thinking=adaptive
+2026-08-30 17:22:41,903 INFO    app.ai | AI input:
+Turn this braindump into a list of discrete, actionable tasks. …
+2026-08-30 17:23:04,118 INFO    app.ai | AI response ← model=claude-opus-5 stop_reason=end_turn input_tokens=612 output_tokens=1840
+2026-08-30 17:23:04,118 INFO    app.ai | AI thinking:
+The car items are three steps toward one outcome, so they should nest …
+2026-08-30 17:23:04,119 INFO    app.ai | AI output:
+{"tasks": [{"title": "Book the car in for its MOT", …
+```
+
+Two environment variables tune it, both already wired into
+`docker-compose.yml`:
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `ADDERALL_LOG_LEVEL` | `INFO` | `DEBUG` also logs the (constant) system prompt; `WARNING` keeps only failures. |
+| `ADDERALL_AI_LOG_CHARS` | `4000` | Characters of any one prompt or completion a log line carries. `0` means no limit. |
+
+API keys are never logged.
+
 ## What it does
 
 - **Projects in tabs** — a row of tabs across the top, one list of tasks
