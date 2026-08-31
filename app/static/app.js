@@ -773,22 +773,42 @@ function taskNode(task, isSub) {
     if (dl && dl.overdue) badges.appendChild(nudgeBadge(task, dl, dlSrc));
     else if (dl) add(dl.label + (dlSrc === "auto" ? " (auto)" : ""), dl.cls);
     if (task.quadrant) add(QUAD_LABEL[task.quadrant], "quad-" + task.quadrant);
+    // A task you will see again next week reads differently from a one-off
+    // with the same date on it, so the rhythm is on the task, in words.
+    if (task.recurrence) {
+      const rb = add("🔁 " + task.recurrence.summary,
+                     task.recurrence.active ? "repeat-badge" : "repeat-badge over");
+      rb.title = task.recurrence.active
+        ? `Repeats ${task.recurrence.summary}. Only one copy is on your list ` +
+          `at a time — finish this one and the next turns up when it's due.`
+        : `This was the last one — the repeat has run its course.`;
+    }
     if (collapsed)
       add(`${subs.length} subtask${subs.length === 1 ? "" : "s"} hidden`, "folded");
     if (badges.children.length) el.appendChild(badges);
     // The progress bar stays out in the open when a task is folded: a rolled
     // up "40m left · 60%" is the whole point of hiding the steps.
     if (task.has_subtasks) el.appendChild(progressBar(task));
-  } else if (task.xp_awarded && settings?.gamification) {
+  } else if ((task.xp_awarded && settings?.gamification) || task.recurrence) {
     // What it paid, kept next to it. The Done list is the only place the
-    // XP total can be traced back to the work that earned it.
+    // XP total can be traced back to the work that earned it — and the one
+    // place you can see a repeating job's history as a run of finished copies.
     const badges = document.createElement("div");
     badges.className = "task-badges";
-    const b = document.createElement("span");
-    b.className = "badge xp-badge";
-    b.textContent = `+${task.xp_awarded} XP`;
-    b.title = "What finishing this one paid out — its score at the time.";
-    badges.appendChild(b);
+    if (task.xp_awarded && settings?.gamification) {
+      const b = document.createElement("span");
+      b.className = "badge xp-badge";
+      b.textContent = `+${task.xp_awarded} XP`;
+      b.title = "What finishing this one paid out — its score at the time.";
+      badges.appendChild(b);
+    }
+    if (task.recurrence) {
+      const b = document.createElement("span");
+      b.className = "badge repeat-badge";
+      b.textContent = "🔁";
+      b.title = `One of a repeating job — ${task.recurrence.summary}.`;
+      badges.appendChild(b);
+    }
     el.appendChild(badges);
   }
 
@@ -874,6 +894,14 @@ async function deleteTask(id) {
       `“${task.title}” has ${n} subtask${n === 1 ? "" : "s"} nested under it, ` +
       `and ${n === 1 ? "it goes" : "they all go"} too:\n\n` +
       lines.join("\n") + `\n\nDelete all ${n + 1} of them?`;
+  }
+  if (task.recurrence && task.recurrence.active) {
+    // Deleting one copy of a repeating job deletes that copy. Saying so is
+    // the difference between clearing today's chore and quietly discovering
+    // next week that you cancelled it.
+    message += `\n\n“${task.title}” repeats ${task.recurrence.summary}. ` +
+      `Deleting this copy skips this one — the next still comes. ` +
+      `Use Repeat → Doesn't repeat in the task to stop it for good.`;
   }
   if (!confirm(message + "\n\nThis can't be undone.")) return;
   // An "add a subtask" box open on a task that is about to stop existing has
@@ -1414,6 +1442,10 @@ function openDetail(id) {
   }
   select.value = task.project_id || state.active_project_id;
   $("d-project-row").hidden = projects.length < 2;
+  // Only a top-level task repeats: a step that came back on its own schedule
+  // while the thing containing it did not would be a plan nobody could read.
+  $("d-repeat-block").hidden = !!task.parent_id;
+  loadRepeat(task);
   updateDetailDerived();
   $("modal-detail").showModal();
 }
@@ -1449,6 +1481,9 @@ function updateDetailDerived() {
 }
 
 async function saveDetail() {
+  const task0 = findAnyTask(detailTaskId);
+  const hadRule = task0?.recurrence?.active ? task0.recurrence.rule : null;
+  const repeats = !$("d-repeat-block").hidden;
   const fields = {
     title: $("d-title").value.trim() || undefined,
     description: $("d-description").value,
@@ -1467,6 +1502,14 @@ async function saveDetail() {
   const id = detailTaskId;
   $("modal-detail").close();
   await patchTask(id, fields);
+  if (repeats) {
+    // After the field save, so the rhythm is timed off the deadline you just
+    // set rather than the one you were replacing.
+    try {
+      const state = await saveRepeat(id, hadRule);
+      if (state) applyState(state);
+    } catch (e) { toast(e.message, true); }
+  }
   if (moving) {
     const name = (state.projects || []).find((p) => p.id === targetProject)?.name;
     try {
@@ -1476,6 +1519,291 @@ async function saveDetail() {
       toast(`Moved to “${name}” — it's waiting in that tab.`);
     } catch (e) { toast(e.message, true); }
   }
+}
+
+/* ---------------- repeat ----------------
+ * Four shapes cover what people actually repeat — daily, weekly, monthly,
+ * yearly — so those are the presets, and "Custom…" is those same four with
+ * their knobs turned up (every 3 weeks on Mon & Thu; the last Friday of every
+ * second month). One rule format underneath, four ways in.
+ *
+ * There is deliberately no date arithmetic here. The dates under the controls
+ * come from `/api/recurring/preview`, the badge's wording comes down with the
+ * task, and both are the same server-side describer — so the dialog, the list
+ * and the schedule can never end up telling three different stories about one
+ * rule. */
+
+const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const REPEAT_UNITS = { daily: "days", weekly: "weeks", monthly: "months",
+                       yearly: "years" };
+const NTH_LABELS = [[1, "1st"], [2, "2nd"], [3, "3rd"], [4, "4th"], [5, "5th"],
+                    [-1, "last"]];
+let repeatPreviewTimer = null;
+let repeatPickedDays = [];   // weekday chips, kept while the panel is hidden
+
+/* One-time fill of the selects that never change. */
+function fillRepeatOptions() {
+  const monthday = $("d-repeat-monthday");
+  if (monthday.options.length) return;
+  for (let day = 1; day <= 31; day++) {
+    const opt = document.createElement("option");
+    opt.value = String(day);
+    opt.textContent = String(day);
+    monthday.appendChild(opt);
+  }
+  // The last day, whatever length the month turns out to be — which is what
+  // "the end of the month" means for a bill, February included.
+  const last = document.createElement("option");
+  last.value = "-1";
+  last.textContent = "last day";
+  monthday.appendChild(last);
+
+  const nth = $("d-repeat-nth");
+  for (const [value, label] of NTH_LABELS) {
+    const opt = document.createElement("option");
+    opt.value = String(value);
+    opt.textContent = label;
+    nth.appendChild(opt);
+  }
+  const weekday = $("d-repeat-weekday");
+  WEEKDAY_LABELS.forEach((name, i) => {
+    const opt = document.createElement("option");
+    opt.value = String(i);
+    opt.textContent = name;
+    weekday.appendChild(opt);
+  });
+
+  const chips = $("d-repeat-weekdays");
+  WEEKDAY_LABELS.forEach((name, i) => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "weekday-chip";
+    chip.dataset.day = String(i);
+    chip.textContent = name;
+    chip.setAttribute("aria-pressed", "false");
+    chip.addEventListener("click", () => {
+      chip.classList.toggle("on");
+      chip.setAttribute("aria-pressed", chip.classList.contains("on") ? "true" : "false");
+      onRepeatChanged();
+    });
+    chips.appendChild(chip);
+  });
+}
+
+function repeatChipDays() {
+  return [...$("d-repeat-weekdays").querySelectorAll(".weekday-chip.on")]
+    .map((c) => Number(c.dataset.day));
+}
+
+function setRepeatChipDays(days) {
+  for (const chip of $("d-repeat-weekdays").querySelectorAll(".weekday-chip")) {
+    const on = days.includes(Number(chip.dataset.day));
+    chip.classList.toggle("on", on);
+    chip.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+}
+
+/* Which frequency the controls currently describe. "Custom…" defers to the
+ * unit dropdown; every other choice is the frequency itself. */
+function repeatFreq() {
+  const picked = $("d-repeat-freq").value;
+  if (!picked) return "";
+  return picked === "custom" ? $("d-repeat-unit").value : picked;
+}
+
+/* The rule the controls are currently describing, in the shape the API takes.
+ * Null when the task doesn't repeat. */
+function repeatRule() {
+  const freq = repeatFreq();
+  if (!freq) return null;
+  const custom = $("d-repeat-freq").value === "custom";
+  const rule = {
+    freq,
+    interval: custom ? Math.max(1, Number($("d-repeat-interval").value) || 1) : 1,
+    weekdays: freq === "weekly" ? repeatChipDays() : [],
+    monthly_mode: document.querySelector("input[name=d-monthly-mode]:checked")?.value
+                  || "day_of_month",
+    month_day: null,
+    nth: null,
+    weekday: null,
+    time: $("d-repeat-time").value || null,
+    count: null,
+    until: null,
+    from_completion: $("d-repeat-from-completion").checked,
+  };
+  if (freq === "monthly" || freq === "yearly") {
+    if (rule.monthly_mode === "nth_weekday") {
+      rule.nth = Number($("d-repeat-nth").value);
+      rule.weekday = Number($("d-repeat-weekday").value);
+    } else {
+      rule.month_day = Number($("d-repeat-monthday").value);
+    }
+  }
+  const ends = $("d-repeat-end").value;
+  if (ends === "count") rule.count = Math.max(1, Number($("d-repeat-count").value) || 1);
+  if (ends === "until") rule.until = $("d-repeat-until").value || null;
+  return rule;
+}
+
+/* Show only the controls this frequency has anything to say about. */
+function syncRepeatControls() {
+  const picked = $("d-repeat-freq").value;
+  const freq = repeatFreq();
+  $("d-repeat-detail").hidden = !freq;
+  $("d-repeat-every-row").hidden = picked !== "custom";
+  $("d-repeat-unit").value = freq || "daily";
+  $("d-repeat-weekdays").hidden = freq !== "weekly";
+  $("d-repeat-monthly").hidden = !(freq === "monthly" || freq === "yearly");
+  const ends = $("d-repeat-end").value;
+  $("d-repeat-count-row").hidden = ends !== "count";
+  $("d-repeat-until-row").hidden = ends !== "until";
+  if (freq === "weekly" && !repeatChipDays().length) {
+    // Weekly with nothing ticked repeats the day the task already falls on,
+    // which is what the server would do anyway — so show it rather than
+    // leaving the row looking unanswered.
+    setRepeatChipDays(repeatPickedDays.length ? repeatPickedDays : [defaultRepeatDay()]);
+  }
+}
+
+/* What day a fresh rule should default to: the task's own deadline if it has
+ * one, otherwise today. The first occurrence of a rule set on a dated task is
+ * that date, so seeding from anywhere else would put "every month on the 31st"
+ * on a task due on the 1st and make the dialog contradict itself. */
+function repeatSeedDate() {
+  const task = findAnyTask(detailTaskId);
+  const iso = task?.deadline_source === "user" ? task.deadline : null;
+  return new Date(iso || Date.now());
+}
+
+function defaultRepeatDay() {
+  return repeatSeedDate().getDay();
+}
+
+function onRepeatChanged() {
+  syncRepeatControls();
+  const days = repeatChipDays();
+  if (days.length) repeatPickedDays = days;
+  clearTimeout(repeatPreviewTimer);
+  const rule = repeatRule();
+  if (!rule) {
+    $("d-repeat-preview").textContent = "";
+    return;
+  }
+  // Debounced: typing "12" in the interval box is two keystrokes, not two
+  // schedules worth asking about.
+  repeatPreviewTimer = setTimeout(() => previewRepeat(rule), 250);
+}
+
+async function previewRepeat(rule) {
+  const forTask = detailTaskId;
+  try {
+    const body = await api("/recurring/preview", {
+      method: "POST", body: JSON.stringify({ ...rule, task_id: forTask }),
+    });
+    if (detailTaskId !== forTask) return;   // the dialog moved on
+    const dates = (body.occurrences || []).map((iso) =>
+      new Date(iso).toLocaleString(undefined,
+        { weekday: "short", month: "short", day: "numeric",
+          hour: "2-digit", minute: "2-digit" }));
+    $("d-repeat-preview").textContent = dates.length
+      ? `${body.summary} — next: ${dates.join(" · ")}`
+      : body.summary;
+  } catch (e) {
+    $("d-repeat-preview").textContent = e.message;
+  }
+}
+
+/* Put a task's saved rule (if any) back into the controls. */
+function loadRepeat(task) {
+  fillRepeatOptions();
+  const rule = task?.recurrence?.active ? task.recurrence.rule : null;
+  repeatPickedDays = [];
+  if (!rule) {
+    $("d-repeat-freq").value = "";
+    $("d-repeat-interval").value = 1;
+    $("d-repeat-time").value = "";
+    $("d-repeat-end").value = "";
+    $("d-repeat-count").value = 10;
+    $("d-repeat-until").value = "";
+    $("d-repeat-from-completion").checked = false;
+    const seed = repeatSeedDate();
+    $("d-repeat-monthday").value = String(seed.getDate());
+    $("d-repeat-nth").value = String(Math.floor((seed.getDate() - 1) / 7) + 1);
+    $("d-repeat-weekday").value = String(seed.getDay());
+    document.querySelector("input[name=d-monthly-mode][value=day_of_month]").checked = true;
+    setRepeatChipDays([]);
+    $("d-repeat-preview").textContent = "";
+    syncRepeatControls();
+    return;
+  }
+  // Anything with a knob turned up is shown as Custom, so the dialog never
+  // presents a rule it couldn't reproduce: "Weekly" with an interval of 3
+  // would be a lie about what is stored.
+  const plain = rule.interval === 1;
+  $("d-repeat-freq").value = plain ? rule.freq : "custom";
+  $("d-repeat-unit").value = rule.freq;
+  $("d-repeat-interval").value = rule.interval;
+  setRepeatChipDays(rule.weekdays || []);
+  repeatPickedDays = rule.weekdays || [];
+  document.querySelector(
+    `input[name=d-monthly-mode][value=${rule.monthly_mode || "day_of_month"}]`
+  ).checked = true;
+  $("d-repeat-monthday").value = String(rule.month_day ?? repeatSeedDate().getDate());
+  $("d-repeat-nth").value = String(rule.nth ?? 1);
+  $("d-repeat-weekday").value = String(rule.weekday ?? defaultRepeatDay());
+  $("d-repeat-time").value = rule.time || "";
+  $("d-repeat-end").value = rule.count ? "count" : (rule.until ? "until" : "");
+  $("d-repeat-count").value = rule.count || 10;
+  $("d-repeat-until").value = rule.until || "";
+  $("d-repeat-from-completion").checked = !!rule.from_completion;
+  syncRepeatControls();
+  $("d-repeat-preview").textContent = task.recurrence.summary;
+  onRepeatChanged();
+}
+
+/* Save whatever the repeat controls now say, if it differs from what the task
+ * already had. Returns the state the server sent back, or null for "nothing to
+ * do" — `saveDetail` needs to know which, because it applies whichever reply
+ * came last. */
+async function saveRepeat(taskId, hadRule) {
+  const rule = repeatRule();
+  if (!rule && !hadRule) return null;
+  if (!rule) {
+    const state = await api(`/tasks/${taskId}/repeat`, { method: "DELETE" });
+    toast("This no longer repeats — the task itself is untouched.");
+    return state;
+  }
+  if (hadRule && JSON.stringify(normalizedForCompare(hadRule)) ===
+                 JSON.stringify(normalizedForCompare(rule))) {
+    return null;   // the controls say exactly what is already stored
+  }
+  const state = await api(`/tasks/${taskId}/repeat`, {
+    method: "PUT", body: JSON.stringify(rule),
+  });
+  return state;
+}
+
+/* Rules come back from the server carrying every field, including the ones
+ * this frequency ignores; the controls only fill in the ones that matter. Line
+ * them up before comparing so re-saving a dialog you only opened doesn't count
+ * as a change and quietly re-time the series. */
+function normalizedForCompare(rule) {
+  const freq = rule.freq;
+  const monthly = freq === "monthly" || freq === "yearly";
+  const nth = monthly && rule.monthly_mode === "nth_weekday";
+  return {
+    freq,
+    interval: rule.interval || 1,
+    weekdays: freq === "weekly" ? [...(rule.weekdays || [])].sort() : [],
+    monthly_mode: monthly ? (rule.monthly_mode || "day_of_month") : "day_of_month",
+    month_day: monthly && !nth ? (rule.month_day ?? null) : null,
+    nth: nth ? (rule.nth ?? null) : null,
+    weekday: nth ? (rule.weekday ?? null) : null,
+    time: rule.time || null,
+    count: rule.count || null,
+    until: rule.until || null,
+    from_completion: !!rule.from_completion,
+  };
 }
 
 /* ---------------- thankless modal ---------------- */
@@ -2196,6 +2524,19 @@ function wire() {
     $("s-granularity-val").textContent = $("s-granularity").value);
 
   // detail modal
+  fillRepeatOptions();
+  for (const id of ["d-repeat-freq", "d-repeat-unit", "d-repeat-interval",
+                    "d-repeat-time", "d-repeat-end", "d-repeat-count",
+                    "d-repeat-until", "d-repeat-monthday", "d-repeat-nth",
+                    "d-repeat-weekday", "d-repeat-from-completion"]) {
+    // `input` covers all of them — selects, checkboxes and text alike — so
+    // one listener per control rather than a change/input pair that would
+    // fire the same preview twice.
+    $(id).addEventListener("input", onRepeatChanged);
+  }
+  for (const radio of document.querySelectorAll("input[name=d-monthly-mode]"))
+    radio.addEventListener("change", onRepeatChanged);
+
   $("d-impact").addEventListener("input", updateDetailDerived);
   $("d-effort").addEventListener("input", updateDetailDerived);
   $("d-estimate").addEventListener("input", updateDetailDerived);

@@ -1016,3 +1016,388 @@ def nudge_plan(tasks: list[dict], derived: dict[str, dict], task_id: str,
             moves[kid["id"]] = (own.replace(microsecond=0) + delta).isoformat(
                 timespec="seconds")
     return moves
+
+
+# ---------------------------------------------------------------------------
+# Recurrence: work that comes back
+# ---------------------------------------------------------------------------
+# Some things are not tasks, they are rhythms — bins on Tuesday, rent on the
+# first, the standup every weekday morning. Retyping them is the friction that
+# makes people stop using a list at all, and leaving one ticked-off task lying
+# there as a reminder is worse: it is a lie about what is still to do.
+#
+# Four shapes cover essentially everything a person actually repeats — daily,
+# weekly, monthly, yearly — so those are the presets. "Custom" is not a fifth
+# kind of rule: it is the same four with their knobs exposed (every N of them,
+# on chosen weekdays, on the last Friday rather than the 12th). One rule
+# format, four entry points into it, which means one thing to test and one
+# thing to explain.
+#
+# Everything here is pure: a rule plus the instant of the previous occurrence
+# in, the instant of the next one out. Days, weekdays and "the 1st" are all
+# local ideas, so the arithmetic happens in the local zone and hands back UTC
+# instants, exactly like the day planner above.
+
+RECUR_FREQS = ("daily", "weekly", "monthly", "yearly")
+RECUR_MONTHLY_MODES = ("day_of_month", "nth_weekday")
+RECUR_MAX_INTERVAL = 365       # "every 400 days" is a date, not a rhythm
+RECUR_MAX_COUNT = 1000
+RECUR_MAX_LEAD_DAYS = 30       # how far ahead an occurrence may be materialized
+RECUR_DEFAULT_LEAD_DAYS = 1    # tomorrow's copy shows up tonight
+# Weekdays are 0=Sunday..6=Saturday, matching JavaScript's `Date.getDay()` and
+# the `week_start` setting, so the page never has to translate.
+WEEKDAY_NAMES = ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
+MONTH_NAMES = ("January", "February", "March", "April", "May", "June", "July",
+               "August", "September", "October", "November", "December")
+# Weekly candidates are scanned a day at a time; this is the ceiling on that
+# walk, generous enough for "every 52 weeks on a Tuesday" and finite enough
+# that a malformed rule can never spin.
+RECUR_SCAN_DAYS = 366 * 2
+RECUR_SCAN_MONTHS = 12 * 20
+
+
+def _js_weekday(d: date) -> int:
+    """0=Sunday..6=Saturday — the convention the whole app speaks."""
+    return (d.weekday() + 1) % 7
+
+
+def _month_len(year: int, month: int) -> int:
+    if month == 12:
+        return 31
+    return (date(year, month + 1, 1) - timedelta(days=1)).day
+
+
+def _add_months(year: int, month: int, months: int) -> tuple[int, int]:
+    index = (year * 12 + (month - 1)) + months
+    return index // 12, index % 12 + 1
+
+
+def _parse_time(value) -> tuple[int, int] | None:
+    """"HH:MM" → (hour, minute). Anything unusable is simply no opinion."""
+    if not isinstance(value, str):
+        return None
+    parts = value.strip().split(":")
+    if len(parts) != 2:
+        return None
+    try:
+        hour, minute = int(parts[0]), int(parts[1])
+    except ValueError:
+        return None
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    return hour, minute
+
+
+def _parse_date(value) -> date | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return date.fromisoformat(value.strip()[:10])
+    except ValueError:
+        return None
+
+
+def normalize_rule(raw: dict | None) -> dict | None:
+    """Clean a rule from the page into the one shape everything else reads.
+
+    Rules arrive from a UI, get stored as JSON, and are then trusted by the
+    date arithmetic below, so this is the only place that has to be paranoid:
+    every field is clamped to something the maths can survive, and anything
+    nonsensical falls back to the sane default rather than raising. A rule the
+    app cannot understand is `None` — "this does not repeat" — because the one
+    outcome worse than the wrong repeat is a task that will not save.
+    """
+    if not isinstance(raw, dict):
+        return None
+    freq = str(raw.get("freq") or "").strip().lower()
+    if freq not in RECUR_FREQS:
+        return None
+
+    rule: dict = {"freq": freq}
+    try:
+        interval = int(raw.get("interval") or 1)
+    except (TypeError, ValueError):
+        interval = 1
+    rule["interval"] = max(1, min(RECUR_MAX_INTERVAL, interval))
+
+    weekdays: list[int] = []
+    for day in (raw.get("weekdays") or []):
+        try:
+            day = int(day)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= day <= 6 and day not in weekdays:
+            weekdays.append(day)
+    rule["weekdays"] = sorted(weekdays) if freq == "weekly" else []
+
+    mode = str(raw.get("monthly_mode") or "day_of_month").strip().lower()
+    rule["monthly_mode"] = mode if mode in RECUR_MONTHLY_MODES else "day_of_month"
+
+    month_day = raw.get("month_day")
+    try:
+        month_day = int(month_day) if month_day is not None else None
+    except (TypeError, ValueError):
+        month_day = None
+    # -1 means "the last day", whatever length the month turns out to be.
+    if month_day is not None and not (month_day == -1 or 1 <= month_day <= 31):
+        month_day = None
+    rule["month_day"] = month_day
+
+    nth = raw.get("nth")
+    try:
+        nth = int(nth) if nth is not None else None
+    except (TypeError, ValueError):
+        nth = None
+    if nth is not None and not (nth == -1 or 1 <= nth <= 5):
+        nth = None
+    rule["nth"] = nth
+
+    weekday = raw.get("weekday")
+    try:
+        weekday = int(weekday) if weekday is not None else None
+    except (TypeError, ValueError):
+        weekday = None
+    rule["weekday"] = weekday if weekday is not None and 0 <= weekday <= 6 else None
+
+    rule["time"] = None
+    parsed_time = _parse_time(raw.get("time"))
+    if parsed_time:
+        rule["time"] = f"{parsed_time[0]:02d}:{parsed_time[1]:02d}"
+
+    count = raw.get("count")
+    try:
+        count = int(count) if count is not None else None
+    except (TypeError, ValueError):
+        count = None
+    rule["count"] = max(1, min(RECUR_MAX_COUNT, count)) if count is not None else None
+
+    until = _parse_date(raw.get("until"))
+    rule["until"] = until.isoformat() if until else None
+
+    # A rule only carries the fields its frequency actually uses. The page
+    # sends every control it has, whichever ones are on screen, and a stored
+    # weekly rule that also remembers "the 3rd Thursday" would come back and
+    # repopulate a dialog with a monthly answer nobody gave.
+    if freq not in ("monthly", "yearly"):
+        rule["monthly_mode"] = "day_of_month"
+        rule["month_day"] = rule["nth"] = rule["weekday"] = None
+    elif rule["monthly_mode"] == "nth_weekday":
+        rule["month_day"] = None
+    else:
+        rule["nth"] = rule["weekday"] = None
+
+    rule["from_completion"] = bool(raw.get("from_completion"))
+
+    try:
+        lead = int(raw.get("lead_days", RECUR_DEFAULT_LEAD_DAYS))
+    except (TypeError, ValueError):
+        lead = RECUR_DEFAULT_LEAD_DAYS
+    rule["lead_days"] = max(0, min(RECUR_MAX_LEAD_DAYS, lead))
+    return rule
+
+
+def _ordinal(n: int) -> str:
+    if n == -1:
+        return "last"
+    suffix = "th" if 11 <= n % 100 <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
+def _join(names: list[str]) -> str:
+    if len(names) <= 1:
+        return names[0] if names else ""
+    return ", ".join(names[:-1]) + " & " + names[-1]
+
+
+def describe_rule(rule: dict | None, anchor: datetime | None = None,
+                  tz: tzinfo | None = None) -> str:
+    """The rule in words, for the badge on the task and the repeat dialog.
+
+    Computed on the server and shipped with the task so the badge, the dialog
+    and the calendar cannot drift into describing the same rule three
+    different ways. `anchor` fills in whatever the rule leaves implicit — a
+    monthly rule with no day repeats on the day the series started — so the
+    sentence says what will actually happen rather than what was typed.
+    """
+    rule = normalize_rule(rule)
+    if not rule:
+        return ""
+    tz = tz or timezone.utc
+    local = anchor.astimezone(tz) if anchor else None
+    n = rule["interval"]
+    freq = rule["freq"]
+
+    if freq == "daily":
+        head = "every day" if n == 1 else f"every {n} days"
+    elif freq == "weekly":
+        days = rule["weekdays"] or ([_js_weekday(local.date())] if local else [])
+        names = _join([WEEKDAY_NAMES[d] for d in sorted(days)])
+        every = "every week" if n == 1 else f"every {n} weeks"
+        head = f"{every} on {names}" if names else every
+        # "every week on Mon, Wed & Fri" is what a week of standups looks like;
+        # a bare "every week" only happens before a day has been chosen.
+    else:
+        every = ("every month" if freq == "monthly" else "every year") if n == 1 else (
+            f"every {n} months" if freq == "monthly" else f"every {n} years")
+        if rule["monthly_mode"] == "nth_weekday":
+            nth = rule["nth"] if rule["nth"] is not None else (
+                _nth_of_month(local.date()) if local else 1)
+            weekday = rule["weekday"] if rule["weekday"] is not None else (
+                _js_weekday(local.date()) if local else 0)
+            head = f"{every} on the {_ordinal(nth)} {WEEKDAY_NAMES[weekday]}"
+        else:
+            day = rule["month_day"] if rule["month_day"] is not None else (
+                local.day if local else 1)
+            head = f"{every} on the {_ordinal(day)}"
+        if freq == "yearly" and local:
+            head += f" of {MONTH_NAMES[local.month - 1]}"
+
+    bits = [head]
+    if rule["time"]:
+        bits.append(f"at {rule['time']}")
+    if rule["from_completion"]:
+        bits.append("counted from when you finish it")
+    if rule["count"]:
+        bits.append(f"{rule['count']} times")
+    if rule["until"]:
+        until = _parse_date(rule["until"])
+        bits.append(f"until {until.strftime('%-d %b %Y')}" if until else "")
+    return " · ".join(b for b in bits if b)
+
+
+def _nth_of_month(d: date) -> int:
+    """Which Tuesday of the month a date is: 1-5, counting from the start."""
+    return (d.day - 1) // 7 + 1
+
+
+def _nth_weekday_date(year: int, month: int, weekday: int, nth: int) -> date | None:
+    """The nth `weekday` of a month, or None when the month has no fifth one.
+
+    -1 is the last, which every month has. A missing fifth Friday returns
+    nothing rather than sliding into the next month: "the 5th Friday" of a
+    month that has four is a month this rule skips, which is what anyone
+    picking it means.
+    """
+    length = _month_len(year, month)
+    matches = [day for day in range(1, length + 1)
+               if _js_weekday(date(year, month, day)) == weekday]
+    if not matches:
+        return None
+    if nth == -1:
+        return date(year, month, matches[-1])
+    if 1 <= nth <= len(matches):
+        return date(year, month, matches[nth - 1])
+    return None
+
+
+def _month_day_date(year: int, month: int, day: int) -> date:
+    """A day-of-month, clamped to months that are too short to hold it.
+
+    The 31st in a 30-day month becomes the 30th, and -1 is always the last
+    day. Clamping (rather than skipping) is what "monthly on the 31st" means
+    to the person who set it: a bill due at the end of the month is due at the
+    end of every month, February included.
+    """
+    length = _month_len(year, month)
+    if day == -1:
+        return date(year, month, length)
+    return date(year, month, min(day, length))
+
+
+def _at_time(day: date, rule: dict, anchor_local: datetime, tz: tzinfo) -> datetime:
+    """A local date plus the rule's time of day, as a UTC instant."""
+    fixed = _parse_time(rule.get("time"))
+    hour, minute = fixed if fixed else (anchor_local.hour, anchor_local.minute)
+    return datetime.combine(day, time(hour, minute), tzinfo=tz).astimezone(timezone.utc)
+
+
+def next_occurrence(rule: dict | None, after: datetime,
+                    anchor: datetime | None = None,
+                    tz: tzinfo | None = None) -> datetime | None:
+    """The first occurrence strictly after `after`, or None once the rule ends.
+
+    `anchor` is the instant the series is phased from — its first occurrence —
+    and is what makes "every 3 weeks" mean the same three weeks forever
+    instead of drifting each time an occurrence is generated. It defaults to
+    `after`, which is the right answer for a rule counted from completion:
+    "three days after you finish" is phased on finishing.
+
+    Returns UTC. `until` is honoured here (an occurrence past it is no
+    occurrence at all); `count` is the series' business, since only it knows
+    how many have actually been handed out.
+    """
+    rule = normalize_rule(rule)
+    if not rule:
+        return None
+    tz = tz or timezone.utc
+    anchor = anchor or after
+    anchor_local = anchor.astimezone(tz)
+    after_local = after.astimezone(tz)
+    limit = _parse_date(rule["until"])
+
+    def ship(day: date) -> datetime | None:
+        if limit and day > limit:
+            return None
+        return _at_time(day, rule, anchor_local, tz)
+
+    freq, step = rule["freq"], rule["interval"]
+
+    if freq == "daily":
+        base = anchor_local.date()
+        gap = (after_local.date() - base).days
+        k = max(0, gap // step)
+        for _ in range(RECUR_SCAN_DAYS):
+            candidate = base + timedelta(days=k * step)
+            when = ship(candidate)
+            if when is None:
+                return None
+            if when > after:
+                return when
+            k += 1
+        return None
+
+    if freq == "weekly":
+        days = rule["weekdays"] or [_js_weekday(anchor_local.date())]
+        # Phase is measured in whole weeks from the anchor's week, on an
+        # ISO (Monday-based) grid. Which day the *calendar* starts on is a
+        # display preference and has no business shifting a repeat.
+        base_week = anchor_local.date() - timedelta(days=anchor_local.date().weekday())
+        cursor = after_local.date()
+        for _ in range(RECUR_SCAN_DAYS):
+            if _js_weekday(cursor) in days:
+                week = cursor - timedelta(days=cursor.weekday())
+                if ((week - base_week).days // 7) % step == 0:
+                    when = ship(cursor)
+                    if when is None:
+                        return None
+                    if when > after:
+                        return when
+            cursor += timedelta(days=1)
+        return None
+
+    # monthly and yearly are the same walk over months, a year being twelve
+    # of them: step forward, resolve the day inside the month, keep the first
+    # result that is actually in the future.
+    months_per_step = step if freq == "monthly" else step * 12
+    base_year, base_month = anchor_local.year, anchor_local.month
+    gap = (after_local.year * 12 + after_local.month) - (base_year * 12 + base_month)
+    k = max(0, gap // months_per_step)
+    for _ in range(RECUR_SCAN_MONTHS):
+        year, month = _add_months(base_year, base_month, k * months_per_step)
+        if rule["monthly_mode"] == "nth_weekday":
+            nth = rule["nth"] if rule["nth"] is not None else _nth_of_month(anchor_local.date())
+            weekday = (rule["weekday"] if rule["weekday"] is not None
+                       else _js_weekday(anchor_local.date()))
+            day = _nth_weekday_date(year, month, weekday, nth)
+        else:
+            wanted = rule["month_day"] if rule["month_day"] is not None else anchor_local.day
+            day = _month_day_date(year, month, wanted)
+        k += 1
+        if day is None:
+            continue  # a month with no fifth Friday is a month this rule skips
+        if limit and day > limit:
+            return None
+        when = _at_time(day, rule, anchor_local, tz)
+        if when > after:
+            return when
+    return None

@@ -420,7 +420,9 @@ function eventChip(e, opts = {}) {
 
   const title = document.createElement("span");
   title.className = "cal-chip-title";
-  title.textContent = e.title;
+  // A block you will see again next week reads differently from a one-off on
+  // the same date, and on a chip there is only room to say so with a mark.
+  title.textContent = (e.recurrence?.active ? "🔁 " : "") + e.title;
   open.appendChild(title);
 
   const score = document.createElement("span");
@@ -451,6 +453,7 @@ function chipTooltip(e) {
   bits.push(`${e.project_name} · ${fmtMinutes(e.length_min)}`);
   if (e.quadrant) bits.push(CAL_QUAD_ICON[e.quadrant] + " " + e.quadrant.replace("_", " "));
   bits.push(`score ${Math.round(e.score ?? 0)}`);
+  if (e.recurrence) bits.push("repeats " + e.recurrence.summary);
   if (e.deadline_source === "auto") bits.push("deadline assigned by the app");
   if (e.has_subtasks) bits.push(`${e.subtask_count} subtask${e.subtask_count === 1 ? "" : "s"}`);
   return bits.join(" · ");

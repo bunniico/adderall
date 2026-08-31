@@ -65,6 +65,23 @@ CREATE TABLE IF NOT EXISTS projects (
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL
 );
+-- A repeating job: the rule, a snapshot of what to copy, and where in the
+-- rhythm it has got to. It deliberately outlives its tasks — deleting the
+-- copy on your list is how you clear today's chore, not how you cancel the
+-- chore forever, and that only works if the series is not hanging off it.
+CREATE TABLE IF NOT EXISTS series (
+    id            TEXT PRIMARY KEY,
+    project_id    TEXT REFERENCES projects(id) ON DELETE CASCADE,
+    rule          TEXT NOT NULL,
+    template      TEXT NOT NULL,
+    anchor_at     TEXT NOT NULL,
+    last_at       TEXT,
+    next_at       TEXT,
+    made          INTEGER NOT NULL DEFAULT 0,
+    active        INTEGER NOT NULL DEFAULT 1,
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS tasks (
     id            TEXT PRIMARY KEY,
     title         TEXT NOT NULL,
@@ -82,10 +99,12 @@ CREATE TABLE IF NOT EXISTS tasks (
     order_index   INTEGER NOT NULL DEFAULT 0,
     started_at    TEXT,
     xp_awarded    INTEGER,
+    series_id     TEXT REFERENCES series(id) ON DELETE SET NULL,
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id);
+CREATE INDEX IF NOT EXISTS idx_series_next ON series(active, next_at);
 CREATE TABLE IF NOT EXISTS settings (
     k TEXT PRIMARY KEY,
     v TEXT NOT NULL
@@ -103,7 +122,7 @@ CREATE TABLE IF NOT EXISTS progress (
 TASK_FIELDS = {
     "title", "description", "parent_id", "project_id", "deadline", "estimated_time",
     "actual_time", "impact", "effort", "status", "ack_thankless", "collapsed",
-    "order_index", "started_at",
+    "order_index", "started_at", "series_id",
 }
 
 
@@ -142,6 +161,15 @@ def _migrate(conn: sqlite3.Connection) -> None:
         # column starts null everywhere, which reads as "never awarded", and
         # the running total in `progress` starts at zero to match.
         conn.execute("ALTER TABLE tasks ADD COLUMN xp_awarded INTEGER")
+    if "series_id" not in cols:
+        # Nothing repeated before this column existed, so every existing task
+        # is a one-off: null everywhere is exactly right, and no series rows
+        # means the sweep below has nothing to do on first boot.
+        conn.execute(
+            "ALTER TABLE tasks ADD COLUMN series_id TEXT "
+            "REFERENCES series(id) ON DELETE SET NULL"
+        )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_series ON tasks(series_id)")
     if "project_id" not in cols:
         conn.execute(
             "ALTER TABLE tasks ADD COLUMN project_id TEXT "
@@ -481,6 +509,124 @@ def completed_history(days: int = 45) -> list[dict]:
         ).fetchall()
     return [{"finished_at": r["updated_at"],
              "minutes": r["actual_time"] or r["estimated_time"]} for r in rows]
+
+
+# ---------- series (work that comes back) ----------
+# A series is the rhythm; the tasks it makes are the occurrences. Exactly one
+# occurrence is ever open at a time — a fortnight away from a daily chore
+# should leave you one thing to do, not fourteen — so the row also remembers
+# where in the rhythm it has got to, and the sweep in `recurring.py` reads
+# `next_at` to decide when the next copy is due.
+
+
+def _row_to_series(row: sqlite3.Row) -> dict:
+    series = dict(row)
+    series["active"] = bool(series["active"])
+    series["rule"] = json.loads(series["rule"])
+    series["template"] = json.loads(series["template"])
+    return series
+
+
+def create_series(project_id: str, rule: dict, template: dict, anchor_at: str,
+                  next_at: str | None, made: int = 0) -> dict:
+    series_id = new_id()
+    ts = now_iso()
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO series (id, project_id, rule, template, anchor_at, "
+            "last_at, next_at, made, active, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+            (series_id, project_id, json.dumps(rule), json.dumps(template),
+             anchor_at, anchor_at, next_at, made, ts, ts),
+        )
+    return get_series(series_id)
+
+
+def get_series(series_id: str | None) -> dict | None:
+    if not series_id:
+        return None
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM series WHERE id = ?", (series_id,)).fetchone()
+    return _row_to_series(row) if row else None
+
+
+SERIES_FIELDS = {"project_id", "rule", "template", "anchor_at", "last_at",
+                 "next_at", "made", "active"}
+
+
+def update_series(series_id: str, fields: dict) -> dict | None:
+    cols = {k: v for k, v in fields.items() if k in SERIES_FIELDS}
+    if not cols:
+        return get_series(series_id)
+    for key in ("rule", "template"):
+        if key in cols and not isinstance(cols[key], str):
+            cols[key] = json.dumps(cols[key])
+    if "active" in cols:
+        cols["active"] = 1 if cols["active"] else 0
+    cols["updated_at"] = now_iso()
+    sets = ", ".join(f"{k} = ?" for k in cols)
+    with connect() as conn:
+        cur = conn.execute(
+            f"UPDATE series SET {sets} WHERE id = ?", [*cols.values(), series_id]
+        )
+        if cur.rowcount == 0:
+            return None
+    return get_series(series_id)
+
+
+def delete_series(series_id: str) -> bool:
+    """Forget a rhythm entirely. Occurrences already on the list stay — they
+    are real tasks you may still want to do; they simply stop coming back."""
+    with connect() as conn:
+        cur = conn.execute("DELETE FROM series WHERE id = ?", (series_id,))
+        return cur.rowcount > 0
+
+
+def list_series(active_only: bool = True) -> list[dict]:
+    sql = "SELECT * FROM series"
+    if active_only:
+        sql += " WHERE active = 1"
+    sql += " ORDER BY created_at"
+    with connect() as conn:
+        rows = conn.execute(sql).fetchall()
+    return [_row_to_series(r) for r in rows]
+
+
+def due_series(cutoff_iso: str) -> list[dict]:
+    """Active series whose next occurrence is due at or before `cutoff_iso`.
+
+    Instants are stored as ISO-8601 UTC to the second, which sorts
+    lexicographically, so the comparison can happen in SQLite.
+    """
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM series WHERE active = 1 AND next_at IS NOT NULL "
+            "AND next_at <= ? ORDER BY next_at",
+            (cutoff_iso,),
+        ).fetchall()
+    return [_row_to_series(r) for r in rows]
+
+
+def series_occurrences(series_id: str, open_only: bool = False) -> list[dict]:
+    """Every task this series has produced, oldest first."""
+    sql = "SELECT * FROM tasks WHERE series_id = ?"
+    if open_only:
+        sql += " AND status IN ('todo', 'in_progress')"
+    sql += " ORDER BY created_at"
+    with connect() as conn:
+        rows = conn.execute(sql, (series_id,)).fetchall()
+    return [_row_to_task(r) for r in rows]
+
+
+def has_open_occurrence(series_id: str) -> bool:
+    """Is one of these already sitting on the list, waiting to be done?"""
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM tasks WHERE series_id = ? "
+            "AND status IN ('todo', 'in_progress') LIMIT 1",
+            (series_id,),
+        ).fetchone()
+    return row is not None
 
 
 def get_settings() -> dict:

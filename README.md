@@ -327,6 +327,31 @@ API keys are never logged.
   you have never hit isn't a plan, it's a daily notification that you failed,
   which is the exact failure mode this app exists to avoid. The warning always
   says which number it is using and why.
+- **Work that comes back** — some things are not tasks, they are rhythms: bins
+  on Tuesday, rent on the first, the standup every weekday morning. Any
+  top-level task can repeat **daily**, **weekly**, **monthly** or **yearly**,
+  and **Custom…** is those same four with their knobs turned up — every 3 days,
+  every other week on Mon & Thu, the last Friday of every second month, the
+  31st (clamped, so a bill at the end of the month is at the end of February
+  too). Give it a time of day or leave it to land at the end of your working
+  day; end it after a number of times, on a date, or never; and tick **count
+  from when I finish it** when "every 3 days" means three days after you
+  actually do it rather than three days after it was due. The dialog shows the
+  next four real dates as you type, because *27 Feb · 24 Apr · 26 Jun* says
+  what "the last Friday of every second month" means far better than the rule
+  does.
+- **One copy at a time** — the single decision the whole feature is built
+  around. A daily chore you ignored for a fortnight comes back as **one** row,
+  not fourteen: that pile is the thing this app exists to prevent, and it is
+  also a lie — you are one bin-day behind, not fourteen. So a rhythm whose date
+  came round again while the last copy was still sitting there quietly steps to
+  the next one instead of stacking. Finish a copy and the next is timed from
+  there; clearing a month-old backlog hands you the next one, never last
+  month's. Editing this week's copy — a better title, a truer estimate, one more
+  step — is how you edit the series, subtasks and all, and a step you dropped
+  stays dropped. Discarding or deleting one copy skips that one; **Repeat →
+  Doesn't repeat** is how you end the job itself, and the delete confirmation
+  says so rather than letting you find out next week.
 - **Transition alarms** — three staged cues before any deadline (stop what
   you're doing → get ready → go), with different sounds and configurable
   lead times.
@@ -347,8 +372,13 @@ API keys are never logged.
    color, elapsed and remaining both shown, staged alarms instead of one.
 4. **Deterministic where possible, AI only where needed.** All scheduling,
    buffering, urgency, priority scores, the XP curve, day-capacity learning,
-   rollups, focus traversal, matrix math and deadline-nudging is local code (`app/logic.py`, fully unit-tested). The AI only does language work
-   and returns minimal structured JSON.
+   rollups, focus traversal, matrix math, recurrence dates and deadline-nudging
+   is local code (`app/logic.py`, fully unit-tested). The AI only does language
+   work and returns minimal structured JSON. The front end has no date
+   arithmetic at all: even the "next four dates" preview in the repeat dialog
+   is the server's answer, so the dialog, the badge on the task and the
+   schedule itself cannot drift into telling three different stories about one
+   rule.
 5. **Low friction.** No accounts, one command, zero configuration required.
 
 ## AI model routing
@@ -375,20 +405,42 @@ pytest
 urgency, priority scores, XP and levels, backward scheduling, load-aware
 placement, the learned day cap, subtree rollups, focus traversal, next-task
 ordering, list sorting, deadline nudging);
+`tests/test_recurrence.py` covers recurrence end to end — the date arithmetic
+(interval phase, weekday sets, month-length clamping, nth and last weekdays,
+DST, end conditions) and then the app around it, with the sweep driven by hand
+so the tests own the clock;
 `tests/test_api.py` covers the API with the AI stubbed out.
+
+### The recurring-task sweep
+
+The scheduled job runs inside the app process: once at startup, then every
+`ADDERALL_RECUR_INTERVAL` seconds (3600 by default). It is a sweep on a timer
+rather than a job pinned to midnight on purpose — this runs on a laptop that
+sleeps and a box that gets unplugged, and a job that only works if the process
+happens to be awake at 00:00 is a job that silently stops working. The pass is
+idempotent, so whether it last ran an hour ago or three weeks ago it brings
+every rhythm to the same place.
+
+Set `ADDERALL_RECUR_INTERVAL=0` to turn the background job off and drive
+`POST /api/recurring/run` from a real cron instead; that route runs exactly the
+same pass and hands back the page.
 
 ## Layout
 
 ```
 app/
-  main.py     FastAPI routes + static hosting
-  db.py       SQLite persistence (schema + migrations, settings, lifetime
-              XP, project and task CRUD)
-  logic.py    deterministic scheduling core — no AI, no I/O
-  ai.py       Claude API broker (breakdown / annotate / compile)
-  static/     single-page front end (vanilla JS, no build step)
-                app.js is the task list, focus mode and settings;
-                calendar.js is the day/week/month views and nudging
-tests/        pytest suite
-data/         SQLite database (created at runtime, gitignored)
+  main.py       FastAPI routes + static hosting
+  db.py         SQLite persistence (schema + migrations, settings, lifetime
+                XP, project, task and series CRUD)
+  logic.py      deterministic scheduling core — no AI, no I/O
+  recurring.py  what the app does with a recurrence rule: templates, one open
+                occurrence at a time, and the sweep
+  scheduler.py  the background timer that runs that sweep
+  ai.py         Claude API broker (breakdown / annotate / compile)
+  static/       single-page front end (vanilla JS, no build step)
+                  app.js is the task list, repeat controls, focus mode
+                  and settings; calendar.js is the day/week/month views
+                  and nudging
+tests/          pytest suite
+data/           SQLite database (created at runtime, gitignored)
 ```

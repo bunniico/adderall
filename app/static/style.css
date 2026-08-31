@@ -170,7 +170,7 @@ input, textarea, select {
   padding: 8px 10px; width: 100%;
 }
 input[type="range"] { padding: 0; accent-color: var(--accent); }
-input[type="checkbox"] { width: auto; accent-color: var(--accent); }
+input[type="checkbox"], input[type="radio"] { width: auto; accent-color: var(--accent); }
 textarea { resize: vertical; }
 
 #add-form { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; }
@@ -216,6 +216,11 @@ textarea { resize: vertical; }
   color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums;
 }
 .badge.xp-badge { color: var(--good); border-color: var(--good); font-weight: 600; }
+/* A rhythm, not a deadline: it says what will happen again, so it reads in
+   the same quiet register as the quadrant rather than competing with the
+   date next to it. */
+.badge.repeat-badge { color: var(--major_project); border-color: var(--major_project); }
+.badge.repeat-badge.over { color: var(--muted); border-color: var(--border); }
 /* The overdue badge is a button — it is the one badge you always want to act
    on rather than read. */
 .badge.nudge-badge { cursor: pointer; background: transparent; }
@@ -654,3 +659,50 @@ body.calendar-mode main { max-width: 1180px; }
   .cal-chip-time { display: none; }
   .cal-month-grid .cal-chip-title { display: none; }
 }
+
+
+/* ---- repeat controls ----
+   Four presets and a Custom… that opens the same rule up. The panel only ever
+   shows the controls the chosen frequency has something to say about, so a
+   daily task is one dropdown and a "last Friday of every second month" is the
+   handful of fields that actually describe it. */
+.repeat-block { margin-top: 4px; }
+.repeat-block legend { color: var(--text); }
+/* Every rule in this block sets a `display`, which would otherwise beat the
+   `hidden` attribute the panel is driven by — the same reason the rest of
+   this sheet spells out `[hidden]` next to each layout it introduces. */
+.repeat-block[hidden], #d-repeat-detail[hidden],
+.repeat-monthly[hidden], .weekday-picker[hidden],
+.modal-body label[hidden] { display: none; }
+
+.repeat-every {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  flex-direction: row;
+}
+.repeat-every input[type="number"] { width: 5.5em; }
+.repeat-every select { width: auto; }
+.repeat-monthly { display: grid; gap: 8px; margin: 4px 0; }
+.repeat-monthly label.row { flex-wrap: wrap; }
+.repeat-monthly select { width: auto; padding: 6px 8px; }
+
+/* The weekday picker is chips rather than seven checkboxes: "Mon Wed Fri" is
+   a shape you read at a glance, and each chip is a real touch target. */
+.weekday-picker { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+.weekday-chip {
+  padding: 6px 10px; min-width: 48px; font-size: 13px;
+  background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 999px; color: var(--muted); cursor: pointer;
+}
+.weekday-chip:hover, .weekday-chip:focus-visible {
+  color: var(--text); border-color: var(--accent);
+}
+.weekday-chip.on {
+  background: var(--accent); border-color: var(--accent);
+  color: #10131c; font-weight: 600;
+}
+
+/* The dates the rule actually produces, straight from the server — three real
+   Tuesdays say what "every 2 weeks on Tue" means far better than the rule
+   does. */
+.repeat-preview { margin: 8px 0 0; font-size: 13px; line-height: 1.6; }
+.repeat-note { margin: 10px 0 0; font-size: 12px; font-style: italic; }
