@@ -1466,3 +1466,49 @@ def test_nudging_a_parent_and_its_child_at_once_gives_each_its_own_start(client)
     assert datetime.fromisoformat(kid["deadline"]) == c_at
     # Its start kept its own one-hour lead, measured from its own new deadline.
     assert c_at - datetime.fromisoformat(kid["start_at"]) == timedelta(hours=1)
+
+
+# ---------------- the daily AI budget ----------------
+
+def test_the_budget_round_trips_and_the_spend_is_reported(client):
+    from app import db
+    assert client.get("/api/settings").json()["daily_budget_usd"] == 0.0
+    settings = client.put("/api/settings", json={"daily_budget_usd": 2.0}).json()
+    assert settings["daily_budget_usd"] == 2.0
+    assert settings["spend"] == {"today": 0.0, "budget": 2.0, "stage": 0,
+                                 "note": "", "tiers": {"fast": "fast",
+                                                       "balanced": "balanced",
+                                                       "deep": "deep"}}
+    db.record_spend("deep", "claude-opus-5", 1.60)
+    spend = client.get("/api/settings").json()["spend"]
+    assert spend["today"] == 1.6
+    assert spend["stage"] == 2
+    assert spend["tiers"] == {"fast": "fast", "balanced": "fast",
+                              "deep": "balanced"}
+
+
+def test_the_page_is_told_about_the_throttle_on_every_read(client):
+    """The badge has to appear the moment it is true, not the next time
+    someone opens the settings dialog."""
+    from app import db
+    assert client.get("/api/state").json()["spend"]["stage"] == 0
+    db.update_settings({"daily_budget_usd": 1.0})
+    db.record_spend("deep", "claude-opus-5", 1.0)
+    spend = client.get("/api/state").json()["spend"]
+    assert spend["stage"] == 3
+    assert spend["note"] == "the daily budget is spent — everything runs on the fast model"
+
+
+def test_the_derived_spend_is_never_written_back(client):
+    """The page echoes the whole settings object back on save; `spend` is a
+    reading, not a preference."""
+    settings = client.get("/api/settings").json()
+    saved = client.put("/api/settings", json=settings).json()
+    assert saved["spend"]["today"] == 0.0
+    assert "spend" not in db_settings_keys()
+
+
+def db_settings_keys():
+    from app import db
+    with db.connect() as conn:
+        return {r["k"] for r in conn.execute("SELECT k FROM settings").fetchall()}

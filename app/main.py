@@ -254,6 +254,28 @@ def _capacity(settings: dict | None = None) -> dict:
     return logic.capacity_plan(settings or db.get_settings(), db.completed_history())
 
 
+def _spend(settings: dict | None = None) -> dict:
+    """What the AI has cost today, against the budget, and what that is doing.
+
+    Every field here is derived — today's rows summed, the ladder in
+    `logic` read — so the page never has to work out where a number sits
+    between three thresholds, and the badge it draws says the same thing the
+    log line at the call site says.
+    """
+    settings = settings or db.get_settings()
+    budget = logic.daily_budget(settings)
+    today = db.spend_since(logic.spend_window_start(settings))
+    stage = logic.throttle_stage(today, budget)
+    return {
+        "today": round(today, 4),
+        "budget": budget,
+        "stage": stage,
+        "note": logic.THROTTLE_NOTES[stage],
+        "tiers": {tier: logic.throttled_tier(tier, stage)
+                  for tier in ("fast", "balanced", "deep")},
+    }
+
+
 def _derive_all(projects: list[dict], by_project: dict[str, list[dict]],
                 settings: dict, ratios: list[float],
                 forecast: list[dict] | None = None) -> dict[str, dict]:
@@ -334,6 +356,10 @@ def _state(project_id: str | None = None, xp_gained: int = 0) -> dict:
         # that earned it, which is the page's cue to animate rather than
         # silently jump.
         "xp": {**logic.level_progress(db.get_xp()), "gained": xp_gained},
+        # Rides along for the same reason the XP bar does: the badge that says
+        # the app has gone cheap for the day has to appear the moment it is
+        # true, not the next time someone opens the settings dialog.
+        "spend": _spend(settings),
     }
 
 
@@ -1234,6 +1260,9 @@ def get_settings():
     # Derived, not stored: what the day cap has actually learned to be, so the
     # dialog can show it next to the number you set.
     settings["capacity"] = _capacity()
+    # Likewise derived: what today has cost so far, and where that leaves the
+    # routing, next to the budget that decides it.
+    settings["spend"] = _spend(settings)
     return settings
 
 
@@ -1242,6 +1271,7 @@ def put_settings(body: SettingsUpdate):
     changes = body.model_dump()
     changes.pop("has_api_key", None)
     changes.pop("capacity", None)  # derived; the page only ever echoes it back
+    changes.pop("spend", None)     # likewise
     if changes.get("api_key") == "":
         changes.pop("api_key")  # empty field means "leave unchanged"
     _normalize_sort(changes)

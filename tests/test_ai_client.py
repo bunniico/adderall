@@ -1,9 +1,20 @@
 """Client construction: identity-linked keys need an anthropic-workspace-id."""
 
+import importlib
+
 import anthropic
 import pytest
 
 from app import ai
+
+
+@pytest.fixture(autouse=True)
+def temp_db(monkeypatch, tmp_path):
+    """Every call books what it cost, so these tests need somewhere to book it."""
+    monkeypatch.setenv("ADDERALL_DB", str(tmp_path / "test.db"))
+    from app import db
+    importlib.reload(db)
+    db.init()
 
 
 def test_workspace_header_from_settings(monkeypatch):
@@ -140,3 +151,99 @@ def test_failure_is_logged(monkeypatch, caplog):
     with caplog.at_level("WARNING", logger="app.ai"), pytest.raises(ai.AIUnavailable):
         ai._call({}, "fast", "hi", {"type": "object"})
     assert "AI call failed" in caplog.text
+
+
+# ---------- what a call costs, and what that costs it ----------
+
+MODELS = {"fast": "claude-haiku-4-5", "balanced": "claude-sonnet-5",
+          "deep": "claude-opus-5"}
+
+
+class CachedUsage:
+    input_tokens = 1000
+    output_tokens = 500
+    cache_creation_input_tokens = 400
+    cache_read_input_tokens = 2000
+
+
+def test_cost_is_tokens_times_the_list_price():
+    """1000 input and 500 output on Opus 5: $5 and $25 per million."""
+    class Usage:
+        input_tokens = 1000
+        output_tokens = 500
+    assert ai.usage_cost("claude-opus-5", Usage()) == pytest.approx(0.0175)
+    assert ai.usage_cost("claude-haiku-4-5", Usage()) == pytest.approx(0.0035)
+
+
+def test_cached_input_is_billed_off_the_input_rate():
+    """A write costs a quarter more than fresh input, a hit a tenth as much —
+    which is the only reason the cache-marked system prompt is worth having."""
+    # Sonnet 5 at $2/$10: (1000 + 400*1.25 + 2000*0.1) * 2 + 500 * 10, per 1M.
+    assert ai.usage_cost("claude-sonnet-5", CachedUsage()) == pytest.approx(0.00840)
+
+
+def test_an_unknown_model_is_costed_at_the_dearest_rate_known():
+    """A budget that guesses low is a budget that does not hold, so a name the
+    table has never seen is never cheaper than one it has."""
+    guess = ai.model_price("claude-something-new")
+    assert all(guess[0] >= known[0] and guess[1] >= known[1]
+               for known in ai.PRICES.values())
+
+
+def test_a_response_with_no_usage_costs_nothing():
+    assert ai.usage_cost("claude-opus-5", None) == 0.0
+
+
+def test_every_call_books_what_it_cost(monkeypatch):
+    from app import db
+    _fake_client(monkeypatch, FakeResponse([FakeBlock("text", text="{}")]))
+    ai._call({"models": MODELS}, "fast", "hi", {"type": "object"})
+    # FakeUsage is 12 in / 34 out on Haiku 4.5 — small, but not nothing.
+    assert db.spend_since("2000-01-01T00:00:00+00:00") == pytest.approx(0.000182)
+
+
+def test_without_a_budget_nothing_is_throttled(monkeypatch):
+    seen: dict = {}
+    _fake_client(monkeypatch, FakeResponse([FakeBlock("text", text="{}")]), seen)
+    ai._call({"models": MODELS}, "deep", "hi", {"type": "object"},
+             effort="high", thinking=True)
+    assert seen["model"] == "claude-opus-5"
+    assert seen["output_config"]["effort"] == "high"
+
+
+def test_spending_half_the_budget_moves_braindumps_off_the_deep_model(monkeypatch):
+    from app import db
+    db.update_settings({"daily_budget_usd": 1.0})
+    db.record_spend("deep", "claude-opus-5", 0.60)
+    seen: dict = {}
+    _fake_client(monkeypatch, FakeResponse([FakeBlock("text", text="{}")]), seen)
+    ai._call(db.get_settings() | {"models": MODELS}, "deep", "hi",
+             {"type": "object"}, effort="high", thinking=True)
+    assert seen["model"] == "claude-sonnet-5"
+
+
+def test_a_throttled_call_drops_thinking_and_effort_too(monkeypatch):
+    """The cheap tier's treatment as well as its model: those knobs are what
+    the dear tiers are for, and the fast tier's model rejects them outright."""
+    from app import db
+    db.update_settings({"daily_budget_usd": 1.0})
+    db.record_spend("deep", "claude-opus-5", 1.20)
+    seen: dict = {}
+    _fake_client(monkeypatch, FakeResponse([FakeBlock("text", text="{}")]), seen)
+    ai._call(db.get_settings() | {"models": MODELS}, "deep", "hi",
+             {"type": "object"}, effort="high", thinking=True)
+    assert seen["model"] == "claude-haiku-4-5"
+    assert "thinking" not in seen
+    assert "effort" not in seen["output_config"]
+
+
+def test_the_throttle_says_so_in_the_log(monkeypatch, caplog):
+    from app import db
+    db.update_settings({"daily_budget_usd": 1.0})
+    db.record_spend("deep", "claude-opus-5", 1.20)
+    _fake_client(monkeypatch, FakeResponse([FakeBlock("text", text="{}")]))
+    with caplog.at_level("INFO", logger="app.ai"):
+        ai._call(db.get_settings() | {"models": MODELS}, "balanced", "hi",
+                 {"type": "object"})
+    assert "throttled to fast" in caplog.text
+    assert "the daily budget is spent" in caplog.text

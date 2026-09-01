@@ -51,6 +51,7 @@ function applyState(newState) {
   renderTabs();
   render();
   renderXp();
+  renderThrottle();
   maybeShowThankless();
   scheduleTransitionAlarms();
   syncFocusWithState();
@@ -1092,6 +1093,26 @@ function celebrate() {
   setTimeout(() => { box.hidden = true; box.replaceChildren(); }, 2200);
 }
 
+/* ---------------- daily budget ----------------
+ * Nothing to see until the budget starts biting, and then one badge saying
+ * so. The server has already decided which tier answers which call; this only
+ * reports it, so the badge and the routing can never disagree. */
+
+function money(usd) {
+  return `$${Number(usd || 0).toFixed(2)}`;
+}
+
+function renderThrottle() {
+  const badge = $("throttle-badge");
+  const spend = state.spend;
+  if (!spend || !spend.stage) { badge.hidden = true; return; }
+  badge.hidden = false;
+  badge.textContent = `⚡ ${money(spend.today)} / ${money(spend.budget)}`;
+  badge.title = `Running cheap: ${spend.note}. Braindumps use the ` +
+    `${spend.tiers.deep} model, breakdowns the ${spend.tiers.balanced} one. ` +
+    `Resets at midnight.`;
+}
+
 /* ---------------- XP & levels ----------------
  * The bar in the corner is the same score you can read on every task, added
  * up: finish something worth 62 and the bar moves 62. It only ever animates
@@ -2093,6 +2114,11 @@ function openSettings() {
   $("s-granularity-val").textContent = settings.granularity;
   $("s-gamification").checked = settings.gamification;
   $("s-manual-order").checked = sortMode().field === "manual";
+  $("s-budget").value = settings.daily_budget_usd || "";
+  const spend = settings.spend;
+  $("s-spend-status").textContent = spend.budget
+    ? `${money(spend.today)} of ${money(spend.budget)} today`
+    : `${money(spend.today)} today`;
   $("s-api-key").value = "";
   $("s-key-status").textContent = settings.has_api_key ? "configured ✓" : "not set";
   // Not a secret, unlike the key — safe to show so it can be edited/cleared.
@@ -2123,6 +2149,7 @@ async function saveSettings() {
     granularity: Number($("s-granularity").value),
     gamification: $("s-gamification").checked,
     manual_order: $("s-manual-order").checked,
+    daily_budget_usd: Math.max(0, Number($("s-budget").value) || 0),
     workspace_id: $("s-workspace-id").value.trim(),
   };
   const key = $("s-api-key").value.trim();

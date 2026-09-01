@@ -10,6 +10,10 @@ the design doc:
     interactive, low effort for speed.
   - compile (braindump → task list)                 → deep tier (Opus),
     one batched call with adaptive thinking.
+
+Every call is costed against the price table below and booked, and a daily
+budget can pull the routing down a tier at a time as the day's spend climbs —
+see `_call`.
 """
 
 from __future__ import annotations
@@ -19,6 +23,8 @@ import logging
 import os
 
 import anthropic
+
+from . import db, logic
 
 LOG = logging.getLogger(__name__)
 
@@ -209,6 +215,74 @@ def _log_response(response) -> None:
             _log_text("AI output", block.text)
 
 
+# ---------- what a call cost ----------
+# List prices in dollars per million tokens, (input, output). Approximate on
+# purpose: this is here to keep a daily budget honest, not to reconcile an
+# invoice, and it will drift as Anthropic's price list changes. Cached input
+# is billed off the input rate — a write costs a quarter more than reading the
+# tokens fresh, a hit a tenth as much — which is the whole reason the system
+# prompt above is cache-marked.
+PRICES = {
+    "claude-fable-5-1": (10.0, 50.0),
+    "claude-fable-5": (10.0, 50.0),
+    "claude-opus-5": (5.0, 25.0),
+    "claude-opus-4-8": (5.0, 25.0),
+    "claude-opus-4-7": (5.0, 25.0),
+    "claude-opus-4-6": (5.0, 25.0),
+    "claude-sonnet-5": (2.0, 10.0),
+    "claude-sonnet-4-6": (3.0, 15.0),
+    "claude-haiku-4-5": (1.0, 5.0),
+}
+CACHE_WRITE_RATE = 1.25   # writing the cache, as a multiple of the input rate
+CACHE_READ_RATE = 0.10    # reading it back
+PER_MILLION = 1_000_000
+
+# What a model the table has never heard of costs: the dearest rate known, on
+# each axis separately. A budget that overestimates makes the app cautious;
+# one that underestimates makes the budget a lie, and the point of the number
+# is that it holds.
+UNKNOWN_PRICE = (max(price[0] for price in PRICES.values()),
+                 max(price[1] for price in PRICES.values()))
+
+
+def model_price(model: str) -> tuple[float, float]:
+    """(input, output) dollars per million tokens for `model`.
+
+    Anything off the table — a new release, or a name typed into the settings
+    — is costed at `UNKNOWN_PRICE`.
+    """
+    return PRICES.get(model, UNKNOWN_PRICE)
+
+
+def usage_cost(model: str, usage) -> float:
+    """What one response cost, in dollars, from the token counts it reports."""
+    if usage is None:
+        return 0.0
+    def tokens(field: str) -> int:
+        try:
+            return max(0, int(getattr(usage, field, 0) or 0))
+        except (TypeError, ValueError):
+            return 0
+    price_in, price_out = model_price(model)
+    billed_in = (tokens("input_tokens")
+                 + tokens("cache_creation_input_tokens") * CACHE_WRITE_RATE
+                 + tokens("cache_read_input_tokens") * CACHE_READ_RATE)
+    return (billed_in * price_in + tokens("output_tokens") * price_out) / PER_MILLION
+
+
+def throttle_stage(settings: dict) -> int:
+    """How far down the cheap end of the ladder today's spend has pushed us.
+
+    0 whenever no budget is set, which is the default and skips the query
+    entirely: an app nobody has given a number to does not go looking for one.
+    """
+    budget = logic.daily_budget(settings)
+    if budget <= 0:
+        return 0
+    spent = db.spend_since(logic.spend_window_start(settings))
+    return logic.throttle_stage(spent, budget)
+
+
 class AIUnavailable(Exception):
     """Raised when no API key is configured or the API call fails."""
 
@@ -274,11 +348,23 @@ def _call(settings: dict, tier: str, prompt: str, schema: dict,
     the model was asked and what it answered, so the prompt, any thinking it
     returns, and the raw JSON all go to stdout. `settings` never does: that
     dict carries the API key.
+
+    This is also the one place a call is routed, so it is where a daily budget
+    gets its way: `tier` is what the caller wanted and `served` is what today's
+    spend can afford. A throttled call is given the cheaper tier's treatment
+    entire — no thinking, no effort — because those are what the expensive
+    tiers are for, and because the cheap tier's model may reject them outright.
     """
-    model = settings.get("models", {}).get(tier) or "claude-haiku-4-5"
+    stage = throttle_stage(settings)
+    served = logic.throttled_tier(tier, stage)
+    if served != tier:
+        effort, thinking = None, False
+    model = settings.get("models", {}).get(served) or "claude-haiku-4-5"
     LOG.info(
-        "AI call → tier=%s model=%s max_tokens=%s effort=%s thinking=%s",
-        tier, model, max_tokens, effort or "default",
+        "AI call → tier=%s%s model=%s max_tokens=%s effort=%s thinking=%s",
+        tier, f" (throttled to {served}: {logic.THROTTLE_NOTES[stage]})"
+        if served != tier else "",
+        model, max_tokens, effort or "default",
         "adaptive" if thinking else "off",
     )
     # The system prompt is the same on every call, so it is not worth a line
@@ -292,6 +378,11 @@ def _call(settings: dict, tier: str, prompt: str, schema: dict,
         LOG.warning("AI call failed → tier=%s model=%s: %s", tier, model, exc)
         raise
     _log_response(response)
+    # Booked before the response is unpacked: a reply the app cannot parse was
+    # still generated, and still billed.
+    cost = usage_cost(model, getattr(response, "usage", None))
+    LOG.info("AI cost ≈ $%.4f (model=%s)", cost, model)
+    db.record_spend(served, model, cost)
     if response.stop_reason == "refusal":
         raise AIUnavailable("The model declined this request.")
     text = next((b.text for b in response.content if b.type == "text"), None)

@@ -327,6 +327,17 @@ dialog::backdrop { background: rgba(0,0,0,.6); }
 .quad-badge { font-weight: 600; }
 output { color: var(--text); font-weight: 600; }
 
+/* ---- throttle badge ----
+   The one thing that says the app has gone cheap for the day. Warn-coloured
+   rather than alarming: nothing is broken and nothing has stopped, the work
+   is simply being done by smaller models. */
+.throttle-badge[hidden] { display: none; }
+.throttle-badge {
+  font-size: 11px; font-weight: 600; white-space: nowrap;
+  color: var(--warn); border: 1px solid var(--warn); border-radius: 10px;
+  padding: 2px 8px; cursor: default;
+}
+
 /* ---- focus overlay (Taskmaster) ---- */
 .focus-overlay {
   position: fixed; inset: 0; background: var(--bg); z-index: 20;
