@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import logic
+from app import recurring as recurrence
 
 NY = ZoneInfo("America/New_York")
 
@@ -444,8 +445,12 @@ def test_the_sweep_makes_the_copy_when_the_day_comes(app):
     repeat(client, task["id"], freq="daily", lead_days=0)
     client.post(f"/api/tasks/{task['id']}/complete", json={})
     assert len(db.list_tasks()) == 1          # tomorrow is not today
-    recurring.sweep(datetime.now(timezone.utc) + timedelta(hours=12))
-    assert len(db.list_tasks()) == 1          # ...and half a day on, still not
+    # A lead of none means "on the day it is due", so any moment still on the
+    # day before leaves the list alone. Measured against the occurrence rather
+    # than against a fixed number of hours, because a lead is counted in days.
+    due = logic.parse_dt(db.list_series()[0]["next_at"])
+    recurring.sweep(due - timedelta(days=1))
+    assert len(db.list_tasks()) == 1          # ...and a day out, still not
     advance(db, recurring)
     tasks = db.list_tasks()
     assert len(tasks) == 2
@@ -672,3 +677,169 @@ def test_finishing_a_copy_still_pays_its_xp(app):
     repeat(client, task["id"], freq="daily")
     state = client.post(f"/api/tasks/{task['id']}/complete", json={}).json()
     assert state["xp"]["gained"] > 0
+
+
+# ---------------------------------------------------------------------------
+# the lead, counted in days
+# ---------------------------------------------------------------------------
+
+def test_a_lead_is_counted_in_days_not_in_hours():
+    """"One day of lead" is a day, the way anyone saying it means a day.
+
+    Measured as 24 hours instead, a chore due at six tomorrow evening is still
+    out of reach at ten this morning — so finishing today's copy leaves an
+    empty list and a rhythm that looks like it has stopped working.
+    """
+    rule = logic.normalize_rule({"freq": "daily", "lead_days": 1})
+    now = local(2026, 3, 4, 10, 0)                      # Wednesday morning
+    horizon = recurrence.lead_horizon(rule, now, NY)
+    assert horizon == local(2026, 3, 6, 0, 0)           # the end of Thursday
+    assert local(2026, 3, 5, 18, 0) < horizon           # tomorrow evening: yes
+    assert local(2026, 3, 6, 18, 0) > horizon           # the day after: not yet
+    none = logic.normalize_rule({"freq": "daily", "lead_days": 0})
+    assert recurrence.lead_horizon(none, now, NY) == local(2026, 3, 5, 0, 0)
+
+
+def test_finishing_todays_copy_puts_tomorrows_on_the_list(app):
+    """The whole promise of a daily rhythm: tick it off, and the next is there."""
+    client, main, db, _ = app
+    noon = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0,
+                                              microsecond=0)
+    task = add(client, deadline=noon.isoformat())
+    repeat(client, task["id"], freq="daily", lead_days=1)
+    client.post(f"/api/tasks/{task['id']}/complete", json={})
+    open_now = [t for t in db.list_tasks() if t["status"] == "todo"]
+    assert len(open_now) == 1
+    assert open_now[0]["id"] != task["id"]
+    assert logic.parse_dt(open_now[0]["deadline"]) == noon + timedelta(days=1)
+
+
+def test_a_lead_of_none_still_waits_for_the_day_itself(app):
+    """The other end of it: `lead_days=0` means the day it is due, and no
+    amount of the evening before counts as that day."""
+    client, main, db, recurring = app
+    noon = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0,
+                                              microsecond=0)
+    task = add(client, deadline=noon.isoformat())
+    repeat(client, task["id"], freq="daily", lead_days=0)
+    client.post(f"/api/tasks/{task['id']}/complete", json={})
+    assert len(db.list_tasks()) == 1
+    due = noon + timedelta(days=1)
+    recurring.sweep(due - timedelta(days=1, minutes=1))   # the day before: no
+    assert len(db.list_tasks()) == 1
+    recurring.sweep(due - timedelta(minutes=1))           # its own day: yes
+    assert len(db.list_tasks()) == 2
+
+
+# ---------------------------------------------------------------------------
+# the forecast: the rhythm the list cannot show you
+# ---------------------------------------------------------------------------
+
+def test_the_forecast_is_the_beats_no_copy_has_been_made_for(app):
+    client, main, db, recurring = app
+    task = add(client)
+    repeat(client, task["id"], freq="daily", time="09:00")
+    now = datetime.now(timezone.utc)
+    ahead = recurring.forecast(days=10)
+    assert len(ahead) >= 8
+    # Every one of them is ahead of us, in order, and none of them is the
+    # copy already on the list — that one is a real task with a real deadline
+    # and counting it twice is exactly what this must not do.
+    assert all(occ["at"] > now for occ in ahead)
+    assert ahead == sorted(ahead, key=lambda o: o["at"])
+    on_list = logic.parse_dt(db.list_tasks()[0]["deadline"])
+    assert all(occ["at"] != on_list for occ in ahead)
+
+
+def test_the_forecast_stops_where_the_rule_does(app):
+    client, main, db, recurring = app
+    task = add(client)
+    repeat(client, task["id"], freq="daily", count=3)
+    # One copy is on the list already, so two beats are still owed.
+    assert len(recurring.forecast(days=30)) == 2
+
+
+def test_a_stopped_rhythm_forecasts_nothing(app):
+    client, main, db, recurring = app
+    task = add(client)
+    repeat(client, task["id"], freq="daily")
+    assert recurring.forecast(days=10)
+    client.delete(f"/api/tasks/{task['id']}/repeat")
+    assert recurring.forecast(days=10) == []
+
+
+def test_the_forecast_carries_the_length_of_the_work(app):
+    """A rhythm's future is only useful to a calendar if it has a size."""
+    client, main, db, recurring = app
+    task = add(client, estimated_time=60)
+    repeat(client, task["id"], freq="daily")
+    occ = recurring.forecast(days=3)[0]
+    assert occ["minutes"] >= 60          # its estimate, plus the time tax
+    assert occ["template"]["title"] == "take the bins out"
+
+
+def test_a_rhythm_with_steps_is_worth_its_steps_and_not_twice(app):
+    """A container is worth exactly the work inside it — counting both it and
+    its steps would book every repeating plan twice over."""
+    client, main, db, recurring = app
+    parent = add(client, title="weekly review", estimated_time=15)
+    for title in ("read the notes", "write the plan"):
+        client.post("/api/tasks", json={"title": title, "annotate": False,
+                                        "parent_id": parent["id"],
+                                        "estimated_time": 30})
+    repeat(client, parent["id"], freq="weekly", weekdays=[1])
+    occ = recurring.forecast(days=21)[0]
+    assert len(occ["template"]["subtasks"]) == 2
+    assert occ["minutes"] == 78          # two half-hours, +30% time tax, once
+
+
+def test_the_calendar_draws_the_copies_that_do_not_exist_yet(app):
+    """The complaint this answers: a week of eight-hour days looked empty,
+    because only one copy of a repeating job is ever on the list."""
+    client, *_ = app
+    task = add(client, estimated_time=480)
+    repeat(client, task["id"], freq="daily", time="17:00")
+    events = client.get("/api/calendar").json()["events"]
+    real = [e for e in events if not e["projected"]]
+    ahead = [e for e in events if e["projected"]]
+    assert len(real) == 1
+    assert len(ahead) > 20
+    first = ahead[0]
+    assert first["title"] == "take the bins out"
+    assert first["length_min"] >= 480
+    assert first["status"] == "planned"
+    assert first["deadline_source"] == "recurring"
+    assert first["recurrence"]["summary"] == "every day · at 17:00"
+    # Clicking one has to reach something real: the copy on the list.
+    assert first["source_task_id"] == task["id"]
+    # And they are the *same* job, so no forecast lands on the day the real
+    # copy already occupies.
+    assert real[0]["deadline"] not in {e["deadline"] for e in ahead}
+
+
+def test_new_work_is_scheduled_around_the_days_a_rhythm_owns(app):
+    """The other half of the complaint: the scheduler booked work into days
+    that were already going to be eight hours of the same job."""
+    client, *_ = app
+    work = add(client, title="work", estimated_time=480)
+    repeat(client, work["id"], freq="weekly", weekdays=[1, 2, 3, 4, 5],
+           time="17:00")
+    add(client, title="fix the sink", estimated_time=60)
+    events = client.get("/api/calendar").json()["events"]
+    sink = next(e for e in events if e["title"] == "fix the sink")
+    booked = {e["deadline"][:10] for e in events if e["title"] == "work"}
+    assert sink["deadline"][:10] not in booked
+
+
+def test_the_forecast_does_not_move_a_deadline_you_set(app):
+    """Booking the future must not shove a fixed point off its day."""
+    client, *_ = app
+    task = add(client, estimated_time=480)
+    repeat(client, task["id"], freq="daily", time="17:00")
+    when = (datetime.now(timezone.utc) + timedelta(days=3)).replace(
+        microsecond=0).isoformat()
+    fixed = add(client, title="dentist", deadline=when, estimated_time=60)
+    events = {e["title"]: e for e in client.get("/api/calendar").json()["events"]}
+    assert logic.parse_dt(events["dentist"]["deadline"]) == logic.parse_dt(when)
+    assert events["dentist"]["deadline_source"] == "user"
+    assert fixed["id"]

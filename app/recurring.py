@@ -17,7 +17,7 @@ one instead of stacking.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 
 from . import db, logic
 
@@ -118,6 +118,23 @@ def _end_of_working_day(now: datetime, settings: dict, tz) -> datetime:
     local = now.astimezone(tz)
     return (datetime.combine(local.date(), datetime.min.time(), tzinfo=tz)
             + timedelta(minutes=minute))
+
+
+def lead_horizon(rule: dict, now: datetime, tz) -> datetime:
+    """The last instant an occurrence may be copied onto the list early.
+
+    Counted in whole local **days**, not in 24-hour blocks. `lead_days = 1`
+    means "tomorrow's copy is welcome today", and it has to mean that whatever
+    hour tomorrow's copy is due at: measured as 24 hours, a daily chore that
+    lands at six in the evening is still eight hours out of reach when you
+    finish today's at ten in the morning, so finishing one leaves you looking
+    at an empty list and a rhythm that appears to have stopped. Days are also
+    simply what people mean — "the day before" is a day, not a duration.
+    """
+    last_day = now.astimezone(tz).date() + timedelta(days=rule["lead_days"])
+    # The end of that day, exclusive: an occurrence at midnight belongs to the
+    # day after it, and is one day too early to be made real yet.
+    return datetime.combine(last_day, time.min, tzinfo=tz) + timedelta(days=1)
 
 
 def first_occurrence(rule: dict, task: dict | None = None,
@@ -347,7 +364,7 @@ def materialize(series: dict, now: datetime | None = None,
     if rule["count"] is not None and series["made"] >= rule["count"]:
         _exhaust(series["id"])
         return None
-    if due > now + timedelta(days=rule["lead_days"]):
+    if due >= lead_horizon(rule, now, tz):
         return None  # real, just not yet: the sweep will come back to it
 
     anchor = logic.parse_dt(series["anchor_at"]) or due
@@ -393,7 +410,9 @@ def sweep(now: datetime | None = None) -> dict:
     """
     now = now or datetime.now(timezone.utc)
     settings = db.get_settings()
-    cutoff = _iso(now + timedelta(days=logic.RECUR_MAX_LEAD_DAYS))
+    # One day wider than the widest lead, because a lead is counted in local
+    # days: 30 days of lead can reach just short of 31 days of clock.
+    cutoff = _iso(now + timedelta(days=logic.RECUR_MAX_LEAD_DAYS + 1))
     created: list[dict] = []
     for series in db.due_series(cutoff):
         try:
@@ -406,6 +425,110 @@ def sweep(now: datetime | None = None) -> dict:
     if created:
         log.info("recurring: sweep created %d task(s)", len(created))
     return {"ran_at": _iso(now), "created": created}
+
+
+# ---------- the rhythm the list cannot show you ----------
+# One open copy at a time is the right answer for a list and the wrong one for
+# a calendar. A week that will really be eight hours of work a day looks empty
+# until each morning makes it real, so the calendar shows a fortnight of free
+# afternoons and the scheduler cheerfully books work into every one of them.
+# The forecast below is the missing half: the beats a rhythm still owes, as
+# real dates with real lengths, made of nothing — no tasks, no rows, nothing to
+# tick off. They are what the calendar draws in outline and what the day book
+# counts, so both plan against the week you are actually going to have.
+
+# Far enough ahead to cover the planner's own search window: a day book that
+# can only see ninety days of a daily job will happily promise you day
+# ninety-one, which is a promise made out of the horizon rather than the work.
+FORECAST_DAYS = logic.PLACEMENT_SEARCH_DAYS + 20
+# Per series, so one runaway rule cannot make the page pay for it.
+FORECAST_MAX = 400
+
+
+def template_minutes(template: dict, buffer: float) -> int:
+    """How long one occurrence of a rhythm will take, buffer included.
+
+    Its steps if it has them, its own estimate if not — the same leaves-only
+    sum `logic._tree_minutes` does for a real task tree, because a container
+    is worth exactly the work inside it and counting both would book every
+    repeating plan twice over.
+    """
+    kids = template.get("subtasks") or []
+    if kids:
+        return sum(template_minutes(kid, buffer) for kid in kids)
+    return max(1, int(logic.buffered_estimate(template.get("estimated_time"), buffer)
+                      or logic.DEFAULT_ESTIMATE_MIN))
+
+
+def forecast(now: datetime | None = None, settings: dict | None = None,
+             ratios: list[float] | None = None, days: int = FORECAST_DAYS,
+             series: list[dict] | None = None) -> list[dict]:
+    """Every occurrence the active rhythms still owe, out to `days` ahead.
+
+    Each one is a plain dict — when it falls, how long it will take, which
+    series and project it belongs to, and the template it will be made from —
+    and none of them exist as tasks. Only beats still ahead are included, and
+    only ones no copy has been made for: the occurrence already on your list
+    is a real task with a real deadline, and would otherwise be counted twice.
+    """
+    now = now or datetime.now(timezone.utc)
+    settings = settings or db.get_settings()
+    tz = _tz(settings)
+    buf = logic.effective_buffer(settings, ratios or [])
+    horizon = now + timedelta(days=max(0, days))
+    out: list[dict] = []
+
+    for row in (series if series is not None else db.list_series(active_only=True)):
+        rule = logic.normalize_rule(row["rule"])
+        cursor = logic.parse_dt(row["next_at"])
+        if not rule or cursor is None or not row["active"]:
+            continue
+        anchor = logic.parse_dt(row["anchor_at"]) or cursor
+        template = row["template"] or {}
+        minutes = template_minutes(template, buf)
+        # A rhythm nobody has swept for a while still points at a date behind
+        # you. Walk it up to the present rather than drawing last Tuesday
+        # twice: the copy on the list is what "behind" looks like, and one
+        # copy is the whole promise.
+        steps = 0
+        while cursor is not None and cursor <= now and steps < CATCH_UP_STEPS:
+            cursor = logic.next_occurrence(rule, cursor, anchor=anchor, tz=tz)
+            steps += 1
+        made = row["made"]
+        index = 0
+        while (cursor is not None and cursor <= horizon and index < FORECAST_MAX
+               and (rule["count"] is None or made + index < rule["count"])):
+            index += 1
+            out.append({
+                # Stable across reloads and unique against every task id, so
+                # the day book can memoise it and the page can key on it.
+                "key": f"series:{row['id']}:{_iso(cursor)}",
+                "series_id": row["id"],
+                "project_id": row["project_id"],
+                "at": cursor,
+                "minutes": minutes,
+                "template": template,
+                "number": made + index,
+            })
+            cursor = logic.next_occurrence(rule, cursor, anchor=anchor, tz=tz)
+
+    out.sort(key=lambda occ: occ["at"])
+    return out
+
+
+def reserve_forecast(planner, occurrences: list[dict]) -> None:
+    """Book what the rhythms already owe onto the day book, before anything
+    the app schedules for itself is placed.
+
+    The same fixed-point-first pass `logic.reserve_fixed` makes for deadlines
+    you set, for the deadlines you have effectively already set by saying
+    "every weekday". A Tuesday that always holds eight hours of work has no
+    room for the thing you typed this morning, and the app should say so now
+    rather than let you find out on Tuesday.
+    """
+    for occ in occurrences:
+        if occ["minutes"]:
+            planner.reserve(occ["key"], occ["at"], occ["minutes"])
 
 
 # ---------- what the page is told ----------

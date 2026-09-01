@@ -471,6 +471,13 @@ body.calendar-mode main { max-width: 1180px; }
 .cal-chip.quad-thankless { border-left-color: var(--thankless); }
 .cal-chip.quad-none { border-left-color: var(--border); }
 .cal-chip.overdue { border-color: var(--bad); }
+/* A copy this repeat has not made yet: drawn as an outline, because it is a
+   real claim on the day and not yet a real task. Dashed and unfilled says
+   both halves of that at a glance. */
+.cal-chip.projected {
+  background: transparent; border-style: dashed;
+  border-left-style: solid; opacity: .8;
+}
 .cal-chip.done { opacity: .5; }
 .cal-chip.done .cal-chip-title { text-decoration: line-through; }
 .cal-chip-open {
@@ -544,6 +551,15 @@ body.calendar-mode main { max-width: 1180px; }
 .cal-block.quad-major_project { border-left-color: var(--major_project); }
 .cal-block.quad-thankless { border-left-color: var(--thankless); }
 .cal-block.overdue { border-color: var(--bad); }
+/* Same outline in the day grid, with the faintest of hatching so a big block
+   of repeating work reads as booked time rather than as an empty hole. */
+.cal-block.projected {
+  border-style: dashed; border-left-style: solid;
+  background:
+    repeating-linear-gradient(-45deg, transparent 0 7px,
+                              rgba(154, 161, 178, .07) 7px 14px),
+    var(--panel);
+}
 .cal-block.done { opacity: .5; }
 .cal-block.done .cal-block-title { text-decoration: line-through; }
 /* The time tax, drawn where it actually sits: the protected stretch right

@@ -164,8 +164,10 @@ API keys are never logged.
   **Week** and **Month** views. Unlike everything else in the app it spans
   *every* project at once, because "what is due this week" is a question about
   your whole life and not about whichever tab is open; a filter row narrows it
-  to one project, to one corner of the impact/effort matrix, or hides the
-  deadlines the app assigned itself. **Day** is a real time grid: each task is
+  to one project, to one corner of the impact/effort matrix, hides the
+  deadlines the app assigned itself, or hides the copies your repeating tasks
+  have not made yet (see **Repeats ahead** below — they are on by default,
+  because a week of standing commitments is most of what a week is). **Day** is a real time grid: each task is
   a block ending at its deadline and starting one buffered estimate earlier,
   with its **time tax drawn as a striped tail** so you can see that a "45m"
   job really occupies an hour, the free stretches between blocks labelled with
@@ -360,6 +362,12 @@ API keys are never logged.
   same way it does not over a deadline you set yourself: you still have to eat
   dinner on a day that is already full, and the calendar saying the day is
   overbooked is the honest answer rather than moving the meal.
+  The book holds **work that comes back** as well as work that exists: a
+  weekday that will be eight hours of the standing job is a full weekday, and
+  the app plans around it rather than finding out on the day. When genuinely
+  nothing has room — every day between here and the horizon already full —
+  the overflow goes to the emptiest day there is, after what is already booked
+  on it, rather than piling onto one afternoon at one instant.
   Everything about it is a preference: the length of a day, the hour it
   starts, and whether to spread work at all, all in ⚙ Settings.
 - **A day cap that learns** — the calendar warns when a day is booked past
@@ -396,7 +404,24 @@ API keys are never logged.
   step — is how you edit the series, subtasks and all, and a step you dropped
   stays dropped. Discarding or deleting one copy skips that one; **Repeat →
   Doesn't repeat** is how you end the job itself, and the delete confirmation
-  says so rather than letting you find out next week.
+  says so rather than letting you find out next week. Finish a copy and the
+  next one appears as soon as its day is close enough to be worth seeing — a
+  day of lead means a day, so ticking off this morning's chore puts tomorrow's
+  on the list before you close the laptop, whatever hour tomorrow's is due at.
+  When the next one is further off than that, the app says when it lands
+  rather than leaving you looking at an empty list wondering if the repeat
+  broke.
+- **Repeats ahead, on the calendar** — one copy at a time is the right answer
+  for a list and the wrong one for a calendar: a fortnight in which you will
+  work eight hours a day looked like a fortnight of free afternoons, because
+  thirteen of those days had no task on them yet. So the calendar draws the
+  copies each rhythm still owes — three months of them — as outlined blocks:
+  real dates, real lengths, nothing to tick off, and a click opens the copy
+  that *is* on your list. They count toward how full a day is, so the day cap
+  warns against the day you are actually going to have, and **the scheduler
+  books around them**: a new task is given a day that is not already eight
+  hours of the same job. Turn them off with **Repeats ahead** in the calendar
+  filters if you would rather see only what exists.
 - **Transition alarms** — three staged cues before any deadline (stop what
   you're doing → get ready → go), with different sounds and configurable
   lead times.
@@ -474,6 +499,13 @@ happens to be awake at 00:00 is a job that silently stops working. The pass is
 idempotent, so whether it last ran an hour ago or three weeks ago it brings
 every rhythm to the same place.
 
+A copy is made once its occurrence is within the rule's lead, which is counted
+in whole local days: one day of lead means "tomorrow's copy is welcome today",
+not "welcome 24 hours before it is due". The difference is the whole feature —
+measured in hours, a chore due at six tomorrow evening is out of reach until
+six tonight, so finishing this morning's leaves an empty list. Between sweeps,
+finishing, discarding or deleting a copy runs the same step immediately.
+
 Set `ADDERALL_RECUR_INTERVAL=0` to turn the background job off and drive
 `POST /api/recurring/run` from a real cron instead; that route runs exactly the
 same pass and hands back the page.
@@ -487,7 +519,8 @@ app/
                 XP, project, task and series CRUD)
   logic.py      deterministic scheduling core — no AI, no I/O
   recurring.py  what the app does with a recurrence rule: templates, one open
-                occurrence at a time, and the sweep
+                occurrence at a time, the sweep, and the forecast the calendar
+                and the day book plan against
   scheduler.py  the background timer that runs that sweep
   ai.py         Claude API broker (breakdown / annotate / compile)
   static/       single-page front end (vanilla JS, no build step)

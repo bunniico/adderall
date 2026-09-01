@@ -426,12 +426,33 @@ class DayPlanner:
             day += timedelta(days=1)
         return None
 
-    def _first_clear(self, day: date) -> tuple[date, int] | None:
+    def _emptiest(self, day: date) -> tuple[date, int]:
+        """The last resort: the least-booked day from `day` on, and the first
+        minute of it nothing has already claimed.
+
+        This used to be "the first day nothing has claimed at all", which is
+        the same answer on an empty book and a much worse one on a full book:
+        a diary with eight hours of work in every day of it — a job you do
+        every weekday, say — has no clear day in it, so everything that
+        overflowed landed on one afternoon at one instant, which is the pile
+        this planner exists to prevent. The emptiest day is the honest answer
+        instead: the work goes where there is least of it already, after
+        whatever is already booked there rather than on top of it, and each
+        thing placed makes its day that much less empty for the next. Ties go
+        to the earliest day, so a book with a clear day anywhere in it still
+        gets that day, exactly as before.
+        """
+        best: tuple[int, date] | None = None
         for _ in range(self.search_days + 1):
-            if not self.load(day):
-                return day, self.day_start
+            load = self.load(day)
+            if best is None or load < best[0]:
+                best = (load, day)
+            if not load:
+                break               # nothing is emptier than empty
             day += timedelta(days=1)
-        return None
+        chosen = best[1]
+        booked = self._merged(chosen)
+        return chosen, max(self.day_start, booked[-1][1] if booked else 0)
 
     # ---- what the scheduler calls ----
 
@@ -470,10 +491,10 @@ class DayPlanner:
                 if length <= self.capacity or pin is not None else None)
         if slot is None:
             # More than a whole day's worth of work in one piece (or nothing
-            # free for half a year): give it the first day nothing else has
-            # claimed and let it run past the end of the window. A twelve-hour
-            # job is a twelve-hour job, and pretending otherwise helps nobody.
-            slot = self._first_clear(day) or (day, self.day_start)
+            # free for half a year): give it the emptiest day there is and let
+            # it run past the end of the window. A twelve-hour job is a
+            # twelve-hour job, and pretending otherwise helps nobody.
+            slot = self._emptiest(day)
         chosen, start = slot
         end = self._instant(chosen, start + length)
         self.book(end - timedelta(minutes=length), end)

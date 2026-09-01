@@ -1199,13 +1199,40 @@ async function breakdown(id, btn) {
 }
 
 async function completeTask(id, actualMinutes) {
+  // Read the rhythm before the task is finished: what comes back after this
+  // one is the question ticking off a repeating task always raises, and by
+  // the time the reply lands this copy is on the Done list.
+  const repeat = findAnyTask(id)?.recurrence;
   try {
     applyState(await api(`/tasks/${id}/complete`, {
       method: "POST",
       body: JSON.stringify({ actual_time: actualMinutes }),
     }));
     celebrate();
+    if (repeat?.active) announceNextOccurrence(repeat.series_id, id);
   } catch (e) { toast(e.message, true); }
+}
+
+/* Ticking off a copy of a repeating job and seeing nothing take its place
+ * reads as a feature that has quietly stopped working — and most of the time
+ * nothing is wrong at all: the next one simply is not due yet, and "not yet"
+ * is invisible. So the app says which of the three it was. */
+function announceNextOccurrence(seriesId, doneId) {
+  const fresh = (state.tasks || []).find(
+    (t) => t.id !== doneId && t.recurrence?.series_id === seriesId &&
+           (t.status === "todo" || t.status === "in_progress"));
+  if (fresh) {
+    toast(`🔁 The next one is on your list${fresh.deadline
+      ? `, due ${new Date(fresh.deadline).toLocaleString()}` : ""}.`);
+    return;
+  }
+  const after = findTask(doneId)?.recurrence;
+  if (after && !after.active) {
+    toast("🔁 That was the last one — this repeat has run its course.");
+  } else if (after?.next_at) {
+    toast(`🔁 The next one is due ${new Date(after.next_at).toLocaleString()}` +
+          ` — it joins your list nearer the time, and it is already on the calendar.`);
+  }
 }
 
 async function patchTask(id, fields) {
