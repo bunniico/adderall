@@ -123,6 +123,8 @@
       </label>
       <label class="row"><input id="cal-auto" type="checkbox" checked>
         Auto-scheduled <span class="muted">— deadlines the app assigned</span></label>
+      <label class="row"><input id="cal-repeats" type="checkbox" checked>
+        Repeats ahead <span class="muted">— copies a repeating task will make</span></label>
       <label class="row"><input id="cal-done" type="checkbox"> Completed</label>
       <span id="cal-count" class="muted"></span>
     </div>
@@ -132,7 +134,10 @@
     <p class="cal-legend muted">
       Sorted by <b>score</b> — deadline pressure, impact, and how cheap it is to
       do in both effort and time, in one number. The striped tail of a block in
-      Day view is its time-tax buffer.
+      Day view is its time-tax buffer. Outlined blocks are <b>repeats ahead</b>:
+      copies a repeating task will make nearer the time. Only one copy is ever
+      on your list, but the days they will take are counted here and kept clear
+      when the app schedules anything new.
     </p>
   </section>
 </main>

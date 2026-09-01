@@ -41,7 +41,7 @@ const cal = {
   dayScroll: null,      // {key, top} — where you had scrolled the day grid
   renderedDay: null,    // the day the grid on screen was drawn for
   capacity: null,       // the day cap and how it got there (see capacityNote)
-  filters: { project: "", category: "", auto: true, done: false },
+  filters: { project: "", category: "", auto: true, done: false, repeats: true },
 };
 
 const CAL_QUAD_ICON = {
@@ -156,7 +156,31 @@ async function refreshCalendar() {
  * detail modal to work. */
 function calendarTask(id) {
   const e = cal.events.find((ev) => ev.id === id);
-  return e ? { ...e, subtasks: [] } : null;
+  // A forecast block is not a task: it has no row in the database and nothing
+  // the detail modal could save. Clicking one opens the copy that *is* on
+  // your list instead — see openProjected.
+  return e && !e.projected ? { ...e, subtasks: [] } : null;
+}
+
+/* Clicking a block that does not exist yet. The job it is a forecast of does
+ * exist — one copy of a repeating task is always on your list — so that is
+ * what opens: the place where changing the estimate, the steps or the rule
+ * changes every outline after it too. When there is no copy on the list (you
+ * finished this week's and the next is not due yet) there is genuinely
+ * nothing to open, so it says when it lands instead. */
+function openProjected(e) {
+  if (e.source_task_id && findAnyTask(e.source_task_id)) {
+    openDetail(e.source_task_id);
+    return;
+  }
+  const when = new Date(e.deadline);
+  toast(`“${e.title}” repeats ${e.recurrence?.summary || ""} — this one lands ` +
+        `${when.toLocaleString()}. It joins your list nearer the time.`);
+}
+
+function openEvent(e) {
+  if (e.projected) openProjected(e);
+  else openDetail(e.id);
 }
 
 function calEvents() {
@@ -166,6 +190,7 @@ function calEvents() {
     (!f.category ||
       (f.category === "__none" ? !e.quadrant : e.quadrant === f.category)) &&
     (f.auto || e.deadline_source !== "auto") &&
+    (f.repeats || !e.projected) &&
     (f.done || e.status !== "done"));
 }
 
@@ -323,6 +348,7 @@ function renderCalendarChrome() {
 
   $("cal-category").value = cal.filters.category;
   $("cal-auto").checked = cal.filters.auto;
+  $("cal-repeats").checked = cal.filters.repeats;
   $("cal-done").checked = cal.filters.done;
 }
 
@@ -342,8 +368,11 @@ function renderCalendar() {
   body.className = "cal-body cal-" + cal.view;
 
   const events = calEvents();
+  const ahead = events.filter((e) => e.projected).length;
+  const real = events.length - ahead;
   $("cal-count").textContent = cal.loaded
-    ? `${events.length} scheduled task${events.length === 1 ? "" : "s"}`
+    ? `${real} scheduled task${real === 1 ? "" : "s"}` +
+      (ahead ? ` · ${ahead} repeat${ahead === 1 ? "" : "s"} ahead` : "")
     : "loading…";
 
   renderOverdueRail(events);
@@ -400,7 +429,7 @@ function renderOverdueRail(events) {
 function eventChip(e, opts = {}) {
   const chip = document.createElement("div");
   chip.className = "cal-chip quad-" + (e.quadrant || "none") +
-    (opts.stacked ? " stacked" : "") +
+    (opts.stacked ? " stacked" : "") + (e.projected ? " projected" : "") +
     (e.status === "done" ? " done" : "") + (isOverdue(e) ? " overdue" : "");
 
   const open = document.createElement("button");
@@ -432,7 +461,7 @@ function eventChip(e, opts = {}) {
     `effort and time cost combined. Higher comes first.`;
   open.appendChild(score);
 
-  open.addEventListener("click", () => openDetail(e.id));
+  open.addEventListener("click", () => openEvent(e));
   chip.appendChild(open);
 
   if (opts.nudge && isOverdue(e)) {
@@ -451,6 +480,12 @@ function chipTooltip(e) {
   const bits = [e.title];
   if (e.path?.length) bits.push("in " + e.path.join(" › "));
   bits.push(`${e.project_name} · ${fmtMinutes(e.length_min)}`);
+  // Said first, because it changes what every other line here means: this is
+  // time the app has already spent on your behalf, not a task you can tick.
+  if (e.projected) {
+    bits.push("not on your list yet — a copy this repeat will make");
+    if (e.subtask_count) bits.push(`${e.subtask_count} step${e.subtask_count === 1 ? "" : "s"}`);
+  }
   if (e.quadrant) bits.push(CAL_QUAD_ICON[e.quadrant] + " " + e.quadrant.replace("_", " "));
   bits.push(`score ${Math.round(e.score ?? 0)}`);
   if (e.recurrence) bits.push("repeats " + e.recurrence.summary);
@@ -554,6 +589,11 @@ function dayScheduleSummary(events, day) {
     `${fmtMinutes(total)} booked of ${fmtMinutes(cap)}`,
   ];
   if (buffer > 0) bits.push(`${fmtMinutes(buffer)} of that is buffer`);
+  // Work that comes back is counted like any other commitment — that is the
+  // whole point of drawing it — but it is worth saying how much of the day is
+  // already spoken for by a rhythm rather than by anything you chose today.
+  const repeating = dayLoad(open.filter((e) => e.projected));
+  if (repeating > 0) bits.push(`${fmtMinutes(repeating)} of it repeating work`);
   const done = events.length - open.length;
   if (done) bits.push(`${done} done`);
 
@@ -617,6 +657,7 @@ function dayBlock(item, day) {
   const { e, startMin, endMin } = item;
   const el = document.createElement("div");
   el.className = "cal-block quad-" + (e.quadrant || "none") +
+    (e.projected ? " projected" : "") +
     (e.status === "done" ? " done" : "") + (isOverdue(e) ? " overdue" : "");
   const height = Math.max(CAL_MIN_BLOCK_PX, (endMin - startMin) * CAL_PX_PER_MIN);
   el.style.top = startMin * CAL_PX_PER_MIN + "px";
@@ -646,16 +687,17 @@ function dayBlock(item, day) {
     `${fmtClock(eventStart(e))} – ${fmtClock(eventEnd(e))}`;
   const title = document.createElement("span");
   title.className = "cal-block-title";
-  title.textContent = e.title;
+  title.textContent = (e.projected ? "🔁 " : "") + e.title;
   const meta = document.createElement("span");
   meta.className = "cal-block-meta";
   meta.textContent = [
     `${fmtMinutes(e.length_min)}`,
+    e.projected ? "repeats — not on your list yet" : null,
     bufferMin ? `incl. ${fmtMinutes(bufferMin)} buffer` : null,
     e.project_name && !cal.filters.project ? e.project_name : null,
   ].filter(Boolean).join(" · ");
   open.append(time, title, meta);
-  open.addEventListener("click", () => openDetail(e.id));
+  open.addEventListener("click", () => openEvent(e));
   el.appendChild(open);
 
   const score = document.createElement("span");
@@ -960,6 +1002,7 @@ function wireCalendar() {
   filter("cal-project", "project");
   filter("cal-category", "category");
   filter("cal-auto", "auto", "checked");
+  filter("cal-repeats", "repeats", "checked");
   filter("cal-done", "done", "checked");
 
   $("n-save").addEventListener("click", () => {

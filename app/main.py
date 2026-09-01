@@ -255,7 +255,8 @@ def _capacity(settings: dict | None = None) -> dict:
 
 
 def _derive_all(projects: list[dict], by_project: dict[str, list[dict]],
-                settings: dict, ratios: list[float]) -> dict[str, dict]:
+                settings: dict, ratios: list[float],
+                forecast: list[dict] | None = None) -> dict[str, dict]:
     """Derived fields for every project, planned against one shared day book.
 
     Two passes, deliberately. Everything already pinned to a time is booked
@@ -263,11 +264,21 @@ def _derive_all(projects: list[dict], by_project: dict[str, list[dict]],
     schedules itself. A task in one tab must never be dropped on top of a
     commitment in another: the calendar spans every project, and so does the
     day it is spending.
+
+    Work that comes back is booked in that first pass too. Only one copy of a
+    repeating job is ever on the list, so a week of eight-hour weekdays looks
+    like an empty week to a planner that can only see tasks — and it would
+    hand you Tuesday afternoon for something new every time. The rhythms'
+    future is a commitment you have already made; it goes in the book with the
+    rest of them (see `recurring.forecast`).
     """
     planner = logic.day_planner(settings, _capacity(settings)["minutes"])
     for project in projects:
         logic.reserve_fixed(planner, by_project.get(project["id"], []),
                             settings, ratios)
+    if forecast is None:
+        forecast = recurring.forecast(settings=settings, ratios=ratios)
+    recurring.reserve_forecast(planner, forecast)
     return {p["id"]: logic.compute(by_project.get(p["id"], []), settings, ratios,
                                    planner=planner)
             for p in projects}
@@ -326,6 +337,13 @@ def _state(project_id: str | None = None, xp_gained: int = 0) -> dict:
     }
 
 
+# How much of the rhythms' future the calendar draws — three months, which is
+# further than anyone pages. The day book looks further ahead still
+# (`recurring.FORECAST_DAYS`, which has to cover the planner's search window);
+# there is no sense in shipping all of that to a page nobody scrolls that far.
+CALENDAR_FORECAST_DAYS = 90
+
+
 def _calendar_events() -> list[dict]:
     """Every scheduled task across every project, with what a calendar needs.
 
@@ -347,7 +365,8 @@ def _calendar_events() -> list[dict]:
     for t in db.list_tasks():
         by_project.setdefault(t["project_id"], []).append(t)
 
-    all_derived = _derive_all(projects, by_project, settings, ratios)
+    forecast = recurring.forecast(settings=settings, ratios=ratios)
+    all_derived = _derive_all(projects, by_project, settings, ratios, forecast)
     events: list[dict] = []
     for project in projects:
         tasks = by_project.get(project["id"], [])
@@ -394,7 +413,87 @@ def _calendar_events() -> list[dict]:
                 # a one-off with the same date on it, so the calendar says so.
                 "recurrence": series.get(t["id"]),
                 "path": logic.ancestor_titles(tasks, t),
+                # A real task, as against one of the outlines below.
+                "projected": False,
             })
+    events.extend(_forecast_events(forecast, projects, by_project, settings, ratios))
+    return events
+
+
+def _forecast_events(forecast: list[dict], projects: list[dict],
+                     by_project: dict[str, list[dict]], settings: dict,
+                     ratios: list[float]) -> list[dict]:
+    """The rhythms' future, as blocks that do not exist yet.
+
+    A repeating job puts one copy on your list at a time, which is the right
+    answer for a list and leaves the calendar telling you a lie: a fortnight
+    of empty afternoons for a fortnight in which you will work every one of
+    them. These are the occurrences still to come — when they land, how long
+    they will take, whose they are — carrying everything a block needs to be
+    drawn and counted, and marked `projected` so the page can draw them as
+    the forecast they are. There is nothing to tick off and nothing to nudge:
+    a click opens the copy that *is* on your list, which is the thing you can
+    actually change.
+    """
+    now = datetime.now(timezone.utc)
+    buf = logic.effective_buffer(settings, ratios)
+    threshold = int(settings.get("matrix_threshold", 5))
+    names = {p["id"]: p["name"] for p in projects}
+    horizon = now + timedelta(days=CALENDAR_FORECAST_DAYS)
+
+    open_of: dict[str, str] = {}
+    for tasks in by_project.values():
+        for t in tasks:
+            if t.get("series_id") and t["status"] in logic.ACTIVE_STATUSES:
+                open_of.setdefault(t["series_id"], t["id"])
+
+    described: dict[str, dict | None] = {}
+    events: list[dict] = []
+    for occ in forecast:
+        if occ["at"] > horizon:
+            continue
+        sid = occ["series_id"]
+        if sid not in described:
+            described[sid] = recurring.describe(db.get_series(sid), settings)
+        template, length = occ["template"], occ["minutes"]
+        pressure = logic.urgency(occ["at"], length, now)
+        events.append({
+            "id": occ["key"],
+            "title": template.get("title") or "Recurring task",
+            # Deliberately not the template's description: there is nothing
+            # here to open and read, and one long note copied onto ninety
+            # outlines is ninety copies of it on the wire.
+            "description": "",
+            "parent_id": None,
+            "project_id": occ["project_id"],
+            "project_name": names.get(occ["project_id"], ""),
+            # Not a status a task can have: nothing here is a task yet.
+            "status": "planned",
+            "deadline": occ["at"].isoformat(timespec="seconds"),
+            "deadline_source": "recurring",
+            "start_at": None,
+            "estimated_time": template.get("estimated_time"),
+            "buffered_estimate": length,
+            "buffer_applied": buf,
+            "length_min": length,
+            "raw_length_min": max(1, round(length / (1.0 + buf))),
+            "impact": template.get("impact"),
+            "effort": template.get("effort"),
+            "quadrant": logic.quadrant(template.get("impact"),
+                                       template.get("effort"), threshold),
+            "urgency": pressure,
+            "score": logic.priority_score(template.get("impact"),
+                                          template.get("effort"), pressure, length),
+            # One outline stands for the whole tree it will be planted as, so
+            # the day it lands on is charged for it exactly once.
+            "has_subtasks": False,
+            "subtask_count": len(template.get("subtasks") or []),
+            "recurrence": described[sid],
+            "path": [],
+            "projected": True,
+            "occurrence": occ["number"],
+            "source_task_id": open_of.get(sid),
+        })
     return events
 
 
