@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import ai, db, logic, recurring, scheduler
+from . import ai, db, logic, recurring, scheduler, title_parse
 
 def _configure_logging() -> None:
     """Send the app's own logs to stdout, where `docker logs` reads them.
@@ -583,6 +583,38 @@ def _annotate_tasks(task_ids: list[str], want_scores: bool,
             db.update_task(t["id"], fields)
 
 
+def _parse_title_triggers(settings: dict, title: str) -> dict:
+    """A new task's title, read for a deadline and/or a repeat rule.
+
+    The local regex parser (`title_parse`) runs first — free, instant, exact
+    for the fixed vocabulary it knows. Only when it finds nothing, and the
+    setting allows it, does a fast-tier AI call get a second look at looser
+    phrasing; a failed or disabled call is simply "nothing found", same as an
+    empty regex pass. Either path returns the same shape.
+    """
+    parsed = title_parse.parse_title(title, datetime.now(timezone.utc), settings)
+    if parsed["matched"] or not settings.get("title_parsing_ai", True):
+        return parsed
+    try:
+        data = ai.extract_schedule(settings, title, _now_local(settings))
+    except (ai.AIUnavailable, Exception):
+        # Best effort, like every other AI call task creation makes — a
+        # missing key or a network hiccup must not stop the task being made.
+        return parsed
+    if not data["has_deadline"] and not data["has_repeat"]:
+        return parsed
+    deadline = None
+    if data["has_deadline"]:
+        when = datetime.now(timezone.utc) + timedelta(minutes=data["deadline_in_minutes"])
+        deadline = when.isoformat(timespec="seconds")
+    repeat = None
+    if data["has_repeat"]:
+        repeat = {"freq": data["repeat_freq"], "interval": data["repeat_interval"],
+                 "weekdays": data["repeat_weekdays"]}
+    return {"clean_title": data["clean_title"], "deadline": deadline,
+           "repeat": repeat, "matched": True}
+
+
 def _reveal(task_id: str | None) -> None:
     """Unfold a collapsed task, so whatever just landed inside it is on screen.
 
@@ -825,9 +857,23 @@ def create_task(body: TaskCreate):
         project_id = parent["project_id"]  # a subtask lives where its parent does
     fields = body.model_dump(exclude={"annotate"})
     fields["project_id"] = project_id
-    task = db.create_task(fields)
-    _reveal(body.parent_id)
     settings = db.get_settings()
+    repeat = None
+    if settings.get("title_parsing", True) and not fields.get("deadline"):
+        parsed = _parse_title_triggers(settings, body.title)
+        if parsed["matched"]:
+            fields["title"] = parsed["clean_title"]
+            if parsed["deadline"]:
+                fields["deadline"] = parsed["deadline"]
+            # Only a top-level task repeats — see PUT /tasks/{id}/repeat.
+            if parsed["repeat"] and not body.parent_id:
+                repeat = parsed["repeat"]
+    task = db.create_task(fields)
+    if repeat:
+        rule = logic.normalize_rule(repeat)
+        if rule:
+            recurring.start_series(task, rule, settings)
+    _reveal(body.parent_id)
     if body.annotate:
         _annotate_tasks([task["id"]], want_scores=settings["ai_scoring"],
                         want_start=settings["ai_start_times"])

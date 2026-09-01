@@ -2190,6 +2190,8 @@ function openSettings() {
   $("s-threshold-val").textContent = settings.matrix_threshold;
   $("s-ai-scoring").checked = settings.ai_scoring;
   $("s-ai-start-times").checked = settings.ai_start_times;
+  $("s-title-parsing").checked = settings.title_parsing !== false;
+  $("s-title-parsing-ai").checked = settings.title_parsing_ai !== false;
   $("s-alarms").checked = settings.alarms.enabled;
   $("s-stop-lead").value = settings.alarms.stop_lead;
   $("s-ready-lead").value = settings.alarms.ready_lead;
@@ -2228,6 +2230,8 @@ async function saveSettings() {
     matrix_threshold: Number($("s-threshold").value),
     ai_scoring: $("s-ai-scoring").checked,
     ai_start_times: $("s-ai-start-times").checked,
+    title_parsing: $("s-title-parsing").checked,
+    title_parsing_ai: $("s-title-parsing-ai").checked,
     alarms: {
       enabled: $("s-alarms").checked,
       stop_lead: Number($("s-stop-lead").value),
@@ -3065,6 +3069,7 @@ function wire() {
 async function boot() {
   loadSoundPrefs();
   Motion.wireClicks();
+  Motion.wireHover();
   // Decoding needs an AudioContext, which browsers withhold until the user has
   // done something. Not awaited: the built-in set covers every sound until the
   // custom ones are ready, so nothing is silent and nothing is blocked.

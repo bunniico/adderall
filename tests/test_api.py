@@ -52,6 +52,16 @@ def client(monkeypatch, tmp_path):
                                  {"title": "wrap it", "description": "", "subtasks": []},
                              ]},
                         ])
+    # The title-parsing AI fallback only runs when the local regex parser
+    # finds nothing; stubbed as "nothing found" so titles that happen not to
+    # match it are not silently given a schedule the test never asked for.
+    monkeypatch.setattr(main.ai, "extract_schedule",
+                        lambda settings, title, now_local: {
+                            "has_deadline": False, "deadline_in_minutes": 0,
+                            "has_repeat": False, "repeat_freq": "",
+                            "repeat_interval": 1, "repeat_weekdays": [],
+                            "clean_title": title,
+                        })
     return TestClient(main.app)
 
 
