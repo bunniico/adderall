@@ -225,6 +225,9 @@ function startRename(projectId) {
 }
 
 async function switchProject(projectId) {
+  // A different list is a different set of things; letting it cascade in is
+  // what makes switching tabs feel like moving rather than like a repaint.
+  drawn.clear();
   renamingProject = null;
   subtaskDraftFor = null;
   try {
@@ -490,6 +493,15 @@ function fmtMinutes(min) {
   return h ? `${h}h ${String(m).padStart(2, "0")}m` : `${m}m`;
 }
 
+/* Four steps of deadline pressure, and none of them red.
+ *
+ * The one that matters is the last. A date that has gone by is not new
+ * information — you already know, and you already feel bad about it — so
+ * shouting "OVERDUE" in high-contrast red buys nothing and costs the whole
+ * list: a page that makes you flinch is a page you stop opening, and a task
+ * app you have stopped opening has failed at the only thing it does. So a
+ * missed deadline states the fact quietly, in lavender, and the loudest thing
+ * on the badge is the offer to fix it. */
 function fmtDeadline(iso) {
   if (!iso) return null;
   const d = new Date(iso);
@@ -498,7 +510,7 @@ function fmtDeadline(iso) {
   const opts = { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" };
   const label = d.toLocaleString(undefined, opts);
   if (diffMin < 0)
-    return { label: `overdue · ${label}`, cls: "urgent", overdue: true };
+    return { label: `was due ${label}`, cls: "gentle", overdue: true };
   if (diffMin < 180) return { label: `due ${label}`, cls: "urgent" };
   if (diffMin < 60 * 24) return { label: `due ${label}`, cls: "soon" };
   return { label: `due ${label}`, cls: "" };
@@ -627,11 +639,17 @@ function progressBar(task) {
  * The fold is stored on the task, so the shape you left the list in is the
  * shape it comes back in, on this device and any other. */
 
+/* The one task whose steps have just been unfolded, so that render() animates
+ * that nest and leaves every other one alone. */
+let unfoldedNode = null;
+
 function twisty(task, count, collapsed) {
   const btn = document.createElement("button");
   btn.type = "button";
-  btn.className = "twisty";
-  btn.textContent = collapsed ? "▸" : "▾";
+  btn.className = "twisty" + (collapsed ? " folded" : "");
+  // One glyph that rotates, rather than two that swap: the turn says which
+  // direction the state went, which a substitution cannot.
+  btn.textContent = "▾";
   const label = `${count} subtask${count === 1 ? "" : "s"}`;
   btn.title = collapsed ? `Show ${label}` : `Hide ${label}`;
   btn.setAttribute("aria-expanded", String(!collapsed));
@@ -662,8 +680,13 @@ async function toggleCollapsed(id) {
   const collapsed = !task.collapsed;
   task.collapsed = collapsed;
   toggleFocusFor = id;
+  if (!collapsed) unfoldedNode = id;
   render();
-  toggleFocusFor = id;  // the reply rebuilds the list a second time
+  // The reply rebuilds the list a second time, throwing away the nodes the
+  // first render just animated — so both cues are armed twice, for the same
+  // reason and in the same place.
+  toggleFocusFor = id;
+  if (!collapsed) unfoldedNode = id;
   await patchTask(id, { collapsed });
 }
 
@@ -677,7 +700,10 @@ function taskNode(task, isSub) {
   // a task whose subtasks are all finished must not hide anything.
   const collapsed = !!task.collapsed && subs.length > 0;
   el.className = "task" + (active ? "" : " done-task") +
-    (task.id === state.next_task_id ? " next" : "");
+    (task.id === state.next_task_id ? " next" : "") +
+    // Drawn as a container rather than a row: it gets the lid, the heavier
+    // check-off, and the nest underneath.
+    (subs.length && !collapsed ? " has-kids" : "");
   el.dataset.id = task.id;
 
   const row = document.createElement("div");
@@ -697,7 +723,12 @@ function taskNode(task, isSub) {
   check.type = "checkbox";
   check.checked = task.status === "done";
   check.title = "Mark done";
-  check.addEventListener("change", () => completeTask(task.id, null));
+  check.addEventListener("change", () => {
+    // Only finishing something is worth celebrating. Un-ticking is a
+    // correction, and a correction that threw confetti would be insufferable.
+    if (check.checked) Motion.checkOff(el, () => completeTask(task.id, null));
+    else completeTask(task.id, null);
+  });
   row.appendChild(check);
 
   const title = document.createElement("span");
@@ -864,16 +895,21 @@ function scoreTitle(task) {
 }
 
 /* The overdue badge, as a button. Clicking it opens the nudge dialog on this
- * one task; the calendar's rail is where you move the whole pile at once. */
+ * one task; the calendar's rail is where you move the whole pile at once.
+ *
+ * The label carries the invitation rather than the verdict — "reschedule when
+ * ready" is the same click as "OVERDUE" would have been, minus the implication
+ * that you have done something wrong by not having done it yet. */
 function nudgeBadge(task, dl, dlSrc) {
   const btn = document.createElement("button");
-  btn.className = "badge urgent nudge-badge";
+  btn.className = "badge gentle nudge-badge";
   btn.type = "button";
-  btn.textContent = dl.label + (dlSrc === "auto" ? " (auto)" : "") + " ⏩";
-  btn.title = `Nudge “${task.title}” to a new deadline — it keeps its ` +
+  btn.textContent = dl.label + (dlSrc === "auto" ? " (auto)" : "") +
+    " · reschedule when ready";
+  btn.title = `Move “${task.title}” to a new deadline — it keeps its ` +
     `length (${fmtMinutes(task.length_min)} of buffered work)` +
     (task.has_subtasks ? ", and its subtasks slide with it" : "");
-  btn.setAttribute("aria-label", "Nudge " + task.title + " to a new deadline");
+  btn.setAttribute("aria-label", "Reschedule " + task.title);
   btn.addEventListener("click", () => openNudge([task]));
   return btn;
 }
@@ -931,6 +967,11 @@ async function deleteTask(id) {
       `Use Repeat → Doesn't repeat in the task to stop it for good.`;
   }
   if (!confirm(message + "\n\nThis can't be undone.")) return;
+  // The row has to still exist to be animated out of the list, so this is the
+  // one place the motion genuinely gates the work rather than riding alongside
+  // it. ~260ms, and the request goes out the moment it lands.
+  const node = document.querySelector(`.task[data-id="${cssEscape(id)}"]`);
+  if (node) await new Promise((done) => Motion.leave(node, done));
   // An "add a subtask" box open on a task that is about to stop existing has
   // nowhere left to put what you type.
   if (subtaskDraftFor === id || doomed.some((t) => t.id === subtaskDraftFor))
@@ -941,6 +982,12 @@ async function deleteTask(id) {
             : `Deleted “${task.title}”.`);
   } catch (e) { toast(e.message, true); }
 }
+
+/* Which task ids the list has already drawn. The list is rebuilt wholesale on
+ * every state change, so without this every row would re-animate every time
+ * anything at all happened. Cleared when the open project changes, because
+ * arriving at a different list should read as arriving. */
+const drawn = new Set();
 
 function render() {
   const list = $("task-list");
@@ -965,7 +1012,35 @@ function render() {
   doneList.replaceChildren();
   for (const t of finished) doneList.appendChild(taskNode(t, false));
 
+  Motion.enterNew(list, drawn);
+  // Steps that have just been unfolded get their own little cascade out from
+  // under the container's lid.
+  if (unfoldedNode) {
+    const wrap = list.querySelector(
+      `.task[data-id="${cssEscape(unfoldedNode)}"] > .subtasks`);
+    unfoldedNode = null;
+    if (wrap) Motion.unfold(wrap);
+  }
+  renderRail();
   restoreListFocus();
+}
+
+/* The rail. Two bars, both of them counting something the app already knows —
+ * there is no streak table and no weekly rollup on the server, and a number
+ * invented on the page to fill a card is worse than an empty card. */
+function renderRail() {
+  const mine = state.tasks || [];
+  const done = mine.filter((t) => t.status === "done").length;
+  const total = mine.filter((t) => t.status !== "discarded").length;
+  $("rail-streak").textContent = total ? `${done} / ${total}` : "nothing yet";
+  $("rail-streak-fill").style.width = (total ? (done / total) * 100 : 0) + "%";
+
+  const xp = state.xp;
+  const on = !!(xp && settings?.gamification);
+  $("rail-goal-label").textContent = on ? `Level ${xp.level}` : "Level";
+  $("rail-goal").textContent = on ? `${xp.into_level} / ${xp.level_span}` : "off";
+  $("rail-goal-fill").style.width = (on ? xp.progress * 100 : 0) + "%";
+  $("rail-xp").textContent = on ? `level ${xp.level} · ${xp.total} XP earned` : "";
 }
 
 /* The list is rebuilt wholesale on every state change, so anything the user
@@ -1081,13 +1156,20 @@ function celebrate() {
   const box = $("celebration");
   box.hidden = false;
   box.replaceChildren();
-  const colors = ["#5fd39a", "#7c9cff", "#ffc86b", "#ff9c5f", "#e8eaf0"];
+  // The theme's own colours, so the celebration belongs to the app rather
+  // than arriving from a party-supplies shop.
+  const colors = ["#67d8ea", "#8f7ce6", "#e8c46a", "#7fe0b0", "#eaf4ff"];
   for (let i = 0; i < 36; i++) {
     const c = document.createElement("div");
     c.className = "confetti";
     c.style.left = Math.random() * 100 + "vw";
     c.style.background = colors[i % colors.length];
     c.style.animationDelay = Math.random() * 0.4 + "s";
+    // Every piece gets its own sideways drift and its own spin. Identical
+    // arcs read as a machine firing; a spread of them reads as a handful of
+    // paper thrown in the air, which is the whole idea.
+    c.style.setProperty("--drift", (Math.random() * 240 - 120).toFixed(0) + "px");
+    c.style.setProperty("--spin", (360 + Math.random() * 720).toFixed(0) + "deg");
     box.appendChild(c);
   }
   setTimeout(() => { box.hidden = true; box.replaceChildren(); }, 2200);
@@ -1163,6 +1245,7 @@ function renderXp() {
       meter.classList.remove("levelup");
       void meter.offsetWidth;   // restart the flash if two levels land at once
       meter.classList.add("levelup");
+      Motion.play("levelup");
       toast(`Level ${xp.level}! ${xp.to_next} XP to the next one.`);
     }, XP_FILL_MS + 40);
   } else {
@@ -1200,6 +1283,9 @@ function xpFloat(amount) {
 /* ---------------- task actions ---------------- */
 
 async function addTask(title, parentId = null) {
+  // The box kicks as it lets go, so the eye is already travelling down to the
+  // list by the time the new row arrives there. Staging, in one line.
+  if (!parentId) Motion.kick($("add-form"), "sent");
   try {
     applyState(await api("/tasks", {
       method: "POST",
@@ -2113,6 +2199,10 @@ function openSettings() {
   $("s-granularity").value = settings.granularity;
   $("s-granularity-val").textContent = settings.granularity;
   $("s-gamification").checked = settings.gamification;
+  $("s-sound").checked = soundOn;
+  $("s-volume").value = Math.round(soundVolume * 100);
+  $("s-volume-val").textContent = Math.round(soundVolume * 100) + "%";
+  renderSoundSlots();
   $("s-manual-order").checked = sortMode().field === "manual";
   $("s-budget").value = settings.daily_budget_usd || "";
   const spend = settings.spend;
@@ -2152,6 +2242,12 @@ async function saveSettings() {
     daily_budget_usd: Math.max(0, Number($("s-budget").value) || 0),
     workspace_id: $("s-workspace-id").value.trim(),
   };
+  // Sound is device-local, so it is saved here and now rather than riding
+  // along with the request — it must stick even if the server call fails.
+  soundOn = $("s-sound").checked;
+  soundVolume = Number($("s-volume").value) / 100;
+  saveSoundPrefs();
+
   const key = $("s-api-key").value.trim();
   if (key) body.api_key = key;
   try {
@@ -2163,7 +2259,112 @@ async function saveSettings() {
   } catch (e) { toast(e.message, true); }
 }
 
-/* ---------------- sounds (WebAudio, distinct per meaning) ---------------- */
+/* ---------------- sounds ----------------
+ *
+ * Whether sound is on, how loud it is, and which files stand in for the
+ * built-in set all live in this browser rather than on the server. That is a
+ * deliberate split from every other setting in the app: the audio files
+ * themselves are held in IndexedDB because uploading a few hundred KB of
+ * personal taste would mean an endpoint, a quota and a migration for something
+ * nobody would want synced anyway — and once the files are per-device, having
+ * the volume follow you to a machine that has none of them would be worse than
+ * not syncing at all. So the whole sound config travels together, or not at all.
+ */
+
+const SOUND_KEY = "adderall.sound";
+
+let soundOn = true;
+let soundVolume = 0.55;
+
+function loadSoundPrefs() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SOUND_KEY) || "{}");
+    if (typeof saved.on === "boolean") soundOn = saved.on;
+    if (typeof saved.volume === "number") soundVolume = saved.volume;
+  } catch { /* first run, or storage the browser will not give us */ }
+  applySoundPrefs();
+}
+
+function applySoundPrefs() {
+  Motion.setEnabled(soundOn);
+  Motion.setVolume(soundVolume);
+}
+
+function saveSoundPrefs() {
+  applySoundPrefs();
+  try {
+    localStorage.setItem(SOUND_KEY, JSON.stringify({ on: soundOn, volume: soundVolume }));
+  } catch {}
+}
+
+/* One row per sound: what it is for, what is loaded, and the controls that
+ * change it. Rebuilt rather than patched, because picking a file, clearing one
+ * and failing to decode one all change the same three things. */
+function renderSoundSlots() {
+  const box = $("sound-slots");
+  box.replaceChildren();
+  for (const slot of Motion.SLOTS) {
+    const row = document.createElement("div");
+    row.className = "sound-slot";
+
+    const name = document.createElement("div");
+    name.className = "sound-slot-name";
+    name.innerHTML = "";
+    name.append(slot.label, Object.assign(document.createElement("small"),
+                                          { textContent: slot.hint }));
+
+    const own = Motion.customName(slot.id);
+    const file = document.createElement("span");
+    file.className = "sound-slot-file" + (own ? "" : " default");
+    file.textContent = own || "built-in";
+    file.title = own || "The synthesized default";
+
+    // A hidden input behind a real button: the native file control cannot be
+    // styled and reads as a foreign object dropped into the panel.
+    const picker = document.createElement("input");
+    picker.type = "file";
+    picker.accept = "audio/*";
+    picker.addEventListener("change", async () => {
+      const chosen = picker.files?.[0];
+      if (!chosen) return;
+      try {
+        await Motion.setCustom(slot.id, chosen);
+        Motion.play(slot.id);
+        renderSoundSlots();
+      } catch (err) {
+        toast(`Couldn't use that file: ${err.message || "this browser can't play it."}`, true);
+      }
+    });
+
+    const choose = document.createElement("button");
+    choose.type = "button";
+    choose.className = "ghost";
+    choose.textContent = own ? "Change…" : "Choose…";
+    choose.addEventListener("click", () => picker.click());
+
+    const preview = document.createElement("button");
+    preview.type = "button";
+    preview.className = "ghost no-click";   // it plays the slot, not the click
+    preview.textContent = "▶";
+    preview.title = "Hear it";
+    preview.addEventListener("click", () => Motion.play(slot.id));
+
+    row.append(name, file, picker, choose, preview);
+    if (own) {
+      const reset = document.createElement("button");
+      reset.type = "button";
+      reset.className = "ghost";
+      reset.textContent = "✕";
+      reset.title = "Back to the built-in sound";
+      reset.addEventListener("click", async () => {
+        await Motion.clearCustom(slot.id);
+        renderSoundSlots();
+      });
+      row.appendChild(reset);
+    }
+    box.appendChild(row);
+  }
+}
 
 let audioCtx = null;
 function beepPattern(freqs, dur = 0.18, gap = 0.12) {
@@ -2184,11 +2385,21 @@ function beepPattern(freqs, dur = 0.18, gap = 0.12) {
     }
   } catch {}
 }
+/* The three transition cues stay distinct from each other — the whole point
+ * of "stop / ready / go" is that you can tell which one fired without looking
+ * — so a custom alarm file replaces all three rather than one of them. One
+ * chosen sound that means "a deadline moved" beats three that are the same
+ * sound and therefore mean nothing. */
+const alarmCue = (pattern) => () => {
+  if (!soundOn) return;
+  if (Motion.customName("alarm")) Motion.play("alarm");
+  else pattern();
+};
 const SOUNDS = {
-  stop:  () => beepPattern([440, 440]),               // gentle double
-  ready: () => beepPattern([554, 659, 554]),          // rising triple
-  go:    () => beepPattern([880, 880, 880, 880], 0.3, 0.15), // insistent
-  wrap:  () => beepPattern([494, 392]),               // falling pair
+  stop:  alarmCue(() => beepPattern([440, 440])),               // gentle double
+  ready: alarmCue(() => beepPattern([554, 659, 554])),          // rising triple
+  go:    alarmCue(() => beepPattern([880, 880, 880, 880], 0.3, 0.15)), // insistent
+  wrap:  alarmCue(() => beepPattern([494, 392])),               // falling pair
 };
 
 /* ---------------- deadline transition alarms ----------------
@@ -2829,7 +3040,20 @@ function wire() {
   });
 
   document.querySelectorAll("[data-close]").forEach((btn) =>
-    btn.addEventListener("click", () => btn.closest("dialog").close()));
+    btn.addEventListener("click", () => Motion.closeDialog(btn.closest("dialog"))));
+
+  // Live, because a volume slider you cannot hear while dragging is a volume
+  // slider you set by trial and error.
+  $("s-volume").addEventListener("input", () => {
+    const v = Number($("s-volume").value);
+    $("s-volume-val").textContent = v + "%";
+    Motion.setVolume(v / 100);
+  });
+  $("s-volume").addEventListener("change", () => Motion.play("click"));
+  $("s-sound").addEventListener("change", () => {
+    Motion.setEnabled($("s-sound").checked);
+    if ($("s-sound").checked) Motion.play("complete");
+  });
 
   // Ask for notification permission on first interaction (needed for alarms).
   document.body.addEventListener("click", () => {
@@ -2839,6 +3063,12 @@ function wire() {
 }
 
 async function boot() {
+  loadSoundPrefs();
+  Motion.wireClicks();
+  // Decoding needs an AudioContext, which browsers withhold until the user has
+  // done something. Not awaited: the built-in set covers every sound until the
+  // custom ones are ready, so nothing is silent and nothing is blocked.
+  Motion.loadCustom();
   wire();
   restoreFocus();  // a session survives reloads — pick it back up
   try {
