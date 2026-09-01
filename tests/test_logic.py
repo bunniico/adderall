@@ -1214,3 +1214,59 @@ def test_tasks_without_start_times_are_placed_exactly_as_before():
         (NOW + timedelta(days=1)).date()
     assert logic.parse_dt(derived["slog"]["deadline"]).date() == \
         (NOW + timedelta(days=7)).date()
+
+
+# ---------------- the daily budget's throttle ----------------
+
+def test_no_budget_means_no_throttling_however_much_is_spent():
+    """0 is off, not "a budget of nothing" — the default has to be inert."""
+    assert logic.daily_budget({}) == 0.0
+    assert logic.throttle_stage(999.0, 0.0) == 0
+    assert logic.throttled_tier("deep", 0) == "deep"
+
+
+def test_the_ladder_steps_at_half_three_quarters_and_all_of_it():
+    assert logic.throttle_stage(0.0, 2.0) == 0
+    assert logic.throttle_stage(0.99, 2.0) == 0
+    assert logic.throttle_stage(1.0, 2.0) == 1     # half
+    assert logic.throttle_stage(1.49, 2.0) == 1
+    assert logic.throttle_stage(1.5, 2.0) == 2     # three quarters
+    assert logic.throttle_stage(2.0, 2.0) == 3     # spent
+    assert logic.throttle_stage(20.0, 2.0) == 3    # and no further down
+
+
+def test_each_step_swaps_the_tier_a_call_asked_for():
+    """Applied once to the requested tier, not cascaded, so the middle steps
+    are distinguishable: at three quarters a braindump is still on the
+    balanced model while an interactive breakdown has dropped to the fast
+    one."""
+    served = lambda stage: [logic.throttled_tier(t, stage)
+                            for t in ("deep", "balanced", "fast")]
+    assert served(0) == ["deep", "balanced", "fast"]
+    assert served(1) == ["balanced", "balanced", "fast"]
+    assert served(2) == ["balanced", "fast", "fast"]
+    assert served(3) == ["fast", "fast", "fast"]
+
+
+def test_the_fast_tier_is_the_floor():
+    """There is nothing cheaper to fall back to, so estimates and scores are
+    answered by the same model on a broke day as on a rich one."""
+    assert all(logic.throttled_tier("fast", stage) == "fast"
+               for stage in range(len(logic.THROTTLE_STEPS) + 1))
+
+
+def test_the_day_the_budget_covers_is_a_local_one():
+    """Half past eight in the evening in New York is already tomorrow in UTC;
+    the budget has to roll over at the user's midnight, not at theirs."""
+    late = datetime(2026, 8, 30, 1, 30, tzinfo=timezone.utc)  # 21:30 on the 29th
+    assert logic.spend_window_start({"timezone": "America/New_York"}, late) == \
+        "2026-08-29T04:00:00+00:00"
+    assert logic.spend_window_start({"timezone": ""}, late) == \
+        "2026-08-30T00:00:00+00:00"
+
+
+def test_an_unreadable_budget_reads_as_none_rather_than_crashing():
+    assert logic.daily_budget({"daily_budget_usd": "2.50"}) == 2.5
+    assert logic.daily_budget({"daily_budget_usd": None}) == 0.0
+    assert logic.daily_budget({"daily_budget_usd": "twopence"}) == 0.0
+    assert logic.daily_budget({"daily_budget_usd": -5}) == 0.0

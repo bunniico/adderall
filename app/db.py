@@ -47,6 +47,10 @@ DEFAULT_SETTINGS = {
                                # deadline | subtasks | created
     "sort_dir": "desc",        # asc | desc, for the one-field sorts
     "active_project": "",      # id of the project tab currently open
+    "daily_budget_usd": 0.0,   # approximate dollars of Claude API spend a day
+                               # is allowed to cost before the app starts
+                               # answering with cheaper models. 0 = no budget,
+                               # no throttling
     "api_key": "",             # optional; falls back to ANTHROPIC_API_KEY env
     "workspace_id": "",        # required for identity-linked keys; falls back
                                # to ANTHROPIC_WORKSPACE_ID env
@@ -116,6 +120,20 @@ CREATE TABLE IF NOT EXISTS settings (
     k TEXT PRIMARY KEY,
     v TEXT NOT NULL
 );
+-- What the AI has cost, one row per call. Approximate by construction: the
+-- tokens are the API's own count, but the prices are a table in `ai.py`, so
+-- this is the app's estimate of the bill, not the bill. Kept as rows rather
+-- than a running daily total because a total cannot be re-costed when a
+-- price changes, and because "what did that braindump cost me" is a fair
+-- question to be able to answer.
+CREATE TABLE IF NOT EXISTS spend (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    at      TEXT NOT NULL,
+    tier    TEXT NOT NULL,
+    model   TEXT NOT NULL,
+    usd     REAL NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_spend_at ON spend(at);
 -- Lifetime XP, in its own one-row table rather than in `settings`, because it
 -- is not a preference: the page may never write it, and tidying up an old
 -- finished task must never cost you a level.
@@ -683,6 +701,30 @@ def award_xp(task_id: str, amount: int) -> int:
         )
         row = conn.execute("SELECT xp FROM progress WHERE id = 1").fetchone()
     return int(row["xp"]) if row else 0
+
+
+# ---------- spend (what the AI has cost today) ----------
+
+def record_spend(tier: str, model: str, usd: float) -> None:
+    """Book one call's estimated cost. Called after every API response."""
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO spend (at, tier, model, usd) VALUES (?, ?, ?, ?)",
+            (now_iso(), tier, model, max(0.0, float(usd))),
+        )
+
+
+def spend_since(cutoff_iso: str) -> float:
+    """Estimated dollars spent since `cutoff_iso` — today's bill so far.
+
+    Instants are stored as ISO-8601 UTC to the second, which sorts
+    lexicographically, so the window can be applied in SQLite.
+    """
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(usd), 0) FROM spend WHERE at >= ?", (cutoff_iso,)
+        ).fetchone()
+    return float(row[0])
 
 
 def update_settings(changes: dict) -> dict:

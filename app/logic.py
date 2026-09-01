@@ -666,6 +666,78 @@ def level_progress(total_xp: int) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Throttling: staying inside a daily budget
+# ---------------------------------------------------------------------------
+# A daily budget is a number of dollars, but the lever it pulls is model
+# choice, because that is the only thing here that changes what a call costs
+# by a factor rather than a few percent. As the day's spend climbs, calls are
+# answered by cheaper models instead of being refused: an app that stops
+# working at 4pm is worse than one that gets a little blunter, and the tasks
+# it does are the ones that most need doing when money is tight.
+#
+# Each step is a substitution over the tier a call *asked* for, applied once —
+# so at the second step a braindump still gets the balanced model while an
+# interactive breakdown has already dropped to the fast one. The last step is
+# the floor: everything on the cheapest tier, and nothing below it.
+THROTTLE_STEPS = (
+    (0.50, {"deep": "balanced"}),
+    (0.75, {"deep": "balanced", "balanced": "fast"}),
+    (1.00, {"deep": "fast", "balanced": "fast"}),
+)
+
+THROTTLE_NOTES = (
+    "",
+    "half the daily budget spent — braindumps run on the balanced model",
+    "three quarters spent — breakdowns run on the fast model too",
+    "the daily budget is spent — everything runs on the fast model",
+)
+
+
+def daily_budget(settings: dict) -> float:
+    """The budget in dollars, or 0 when there isn't one. 0 means no throttling."""
+    try:
+        return max(0.0, float(settings.get("daily_budget_usd") or 0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def throttle_stage(spent: float, budget: float) -> int:
+    """How many steps down the ladder today's spend has pushed us: 0-3.
+
+    0 is normal routing. Without a budget there is nothing to be near, so
+    there is no stage above 0 however much has been spent.
+    """
+    if budget <= 0:
+        return 0
+    ratio = max(0.0, float(spent)) / budget
+    stage = 0
+    for index, (mark, _) in enumerate(THROTTLE_STEPS, start=1):
+        if ratio >= mark:
+            stage = index
+    return stage
+
+
+def throttled_tier(tier: str, stage: int) -> str:
+    """Which tier actually answers a call for `tier` at this stage."""
+    if stage <= 0:
+        return tier
+    return THROTTLE_STEPS[min(stage, len(THROTTLE_STEPS)) - 1][1].get(tier, tier)
+
+
+def spend_window_start(settings: dict, now: datetime | None = None) -> str:
+    """The instant today's spending started: local midnight, as a UTC stamp.
+
+    The budget is a *daily* one, and a day is a local idea here exactly as it
+    is for the day cap — a budget that rolled over at 1am would be no use to
+    anyone. Returned in the same ISO-8601 UTC form the rows are stored in, so
+    the comparison can happen in SQLite.
+    """
+    tz = resolve_tz(settings.get("timezone"))
+    local = (now or datetime.now(timezone.utc)).astimezone(tz)
+    midnight = datetime.combine(local.date(), time(0, 0), tzinfo=tz)
+    return midnight.astimezone(timezone.utc).isoformat(timespec="seconds")
+
 def sort_mode(settings: dict) -> tuple[str, bool]:
     """(field, descending) — how the list is currently being read.
 

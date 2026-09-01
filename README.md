@@ -472,6 +472,39 @@ timezone, format and end-of-month question on the app's side of the line —
 the same rule the rest of the app follows, where the AI makes the language
 judgment and the scheduling arithmetic all happens locally.
 
+### Throttling against a daily budget
+
+Set a **daily AI budget** in Settings and the routing above becomes a ceiling
+rather than a fixture. Every response is costed from the tokens it reports
+against a price table in `app/ai.py` and booked in the `spend` table, and the
+day's running total pulls the routing down a rung at a time:
+
+| Spent today | Estimates + scores | Task breakdown | Braindump compiler |
+|---|---|---|---|
+| under half | fast | balanced | deep |
+| half | fast | balanced | **balanced** |
+| three quarters | fast | **fast** | balanced |
+| all of it | fast | fast | **fast** |
+
+Each step substitutes the tier a call asked for, applied once rather than
+cascaded, which is why the middle rows differ: at three quarters a braindump
+is still worth the balanced model while an interactive breakdown is not. A
+throttled call also loses its thinking and its effort setting, because those
+are what the dearer tiers are for and the fast tier's model may reject them
+outright.
+
+The budget never refuses a call. An app that stops working at 4pm is worse
+than one that gets a little blunter, and the fast tier is the floor — spend
+past the budget and everything simply keeps running on it. The day is a local
+one, so the total rolls over at your midnight, not UTC's; the badge in the
+header appears only while a budget is actually biting. A budget of 0, the
+default, turns the whole mechanism off and costs not even a query.
+
+The figure is an estimate, not an invoice: the token counts are the API's own,
+but the prices are a hardcoded table that will drift, and a model the table has
+never heard of is costed at the dearest rate known — a budget that guesses low
+is a budget that does not hold.
+
 ## Development
 
 ```bash
@@ -482,7 +515,9 @@ pytest
 `tests/test_logic.py` covers the deterministic core (buffering, quadrants,
 urgency, priority scores, XP and levels, backward scheduling, load-aware
 placement, the learned day cap, subtree rollups, focus traversal, next-task
-ordering, list sorting, deadline nudging);
+ordering, list sorting, deadline nudging, the budget throttle's ladder);
+`tests/test_ai_client.py` covers the broker: client construction, logging, what
+a call costs and which model the budget lets it have;
 `tests/test_recurrence.py` covers recurrence end to end — the date arithmetic
 (interval phase, weekday sets, month-length clamping, nth and last weekdays,
 DST, end conditions) and then the app around it, with the sweep driven by hand
@@ -516,13 +551,14 @@ same pass and hands back the page.
 app/
   main.py       FastAPI routes + static hosting
   db.py         SQLite persistence (schema + migrations, settings, lifetime
-                XP, project, task and series CRUD)
+                XP, AI spend, project, task and series CRUD)
   logic.py      deterministic scheduling core — no AI, no I/O
   recurring.py  what the app does with a recurrence rule: templates, one open
                 occurrence at a time, the sweep, and the forecast the calendar
                 and the day book plan against
   scheduler.py  the background timer that runs that sweep
-  ai.py         Claude API broker (breakdown / annotate / compile)
+  ai.py         Claude API broker (breakdown / annotate / compile), model
+                prices, and the budget throttle applied at the call site
   static/       single-page front end (vanilla JS, no build step)
                   app.js is the task list, repeat controls, focus mode
                   and settings; calendar.js is the day/week/month views

@@ -24,6 +24,9 @@
       <div class="xp-track"><div id="xp-fill" class="xp-fill"></div></div>
       <span id="xp-gain" class="xp-gain" role="status" hidden></span>
     </div>
+    <!-- Only ever on screen when the daily budget has started pulling the
+         model routing down. On an ordinary day there is nothing here. -->
+    <span id="throttle-badge" class="throttle-badge" hidden></span>
     <button id="focus-pill" class="focus-pill" hidden
       title="Focus session still running — click to come back to it">
       <span class="focus-pill-dot">▶</span>
@@ -395,6 +398,15 @@
       Manual order <span class="muted">— keep the list exactly as you drag it, instead of
       sorting it. Turns itself on the first time you move a task; it is the same
       switch as <b>Manual</b> in the list's Sort control.</span></label>
+
+    <label>Daily AI budget <span id="s-spend-status" class="tag"></span>
+      <input id="s-budget" type="number" min="0" step="0.50" placeholder="0 — no budget">
+      <span class="muted">— roughly what a day of Claude API is allowed to
+        cost. Rather than stop working, the app answers with cheaper models as
+        the day's spend climbs: braindumps at half the budget, breakdowns at
+        three quarters, everything once it is spent. The figure is this app's
+        own estimate from the tokens each call reported, not your invoice.</span>
+    </label>
 
     <label>Anthropic API key <span id="s-key-status" class="tag"></span>
       <input id="s-api-key" type="password" placeholder="sk-ant-… (leave blank to keep current)">
