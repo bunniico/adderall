@@ -72,6 +72,25 @@ BREAKDOWN_SCHEMA = {
     "additionalProperties": False,
 }
 
+# No nullable fields — structured outputs carry types only (see the note on
+# BREAKDOWN_SCHEMA's neighbours below) — so "not found" is its own boolean
+# rather than a null, and the value fields are simply ignored when it is set.
+EXTRACT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "has_deadline": {"type": "boolean"},
+        "deadline_in_minutes": {"type": "integer"},
+        "has_repeat": {"type": "boolean"},
+        "repeat_freq": {"type": "string"},
+        "repeat_interval": {"type": "integer"},
+        "repeat_weekdays": {"type": "array", "items": {"type": "integer"}},
+        "clean_title": {"type": "string"},
+    },
+    "required": ["has_deadline", "deadline_in_minutes", "has_repeat", "repeat_freq",
+                "repeat_interval", "repeat_weekdays", "clean_title"],
+    "additionalProperties": False,
+}
+
 COMPILE_DEPTH = 3    # levels of nesting a braindump may produce
 
 
@@ -407,6 +426,52 @@ def breakdown(settings: dict, title: str, description: str, granularity: int,
     data = _call(settings, "balanced", prompt, BREAKDOWN_SCHEMA, effort="low")
     steps = [s.strip() for s in data.get("steps", []) if s.strip()]
     return steps[:MAX_STEPS]
+
+
+EXTRACT_GUIDANCE = (
+    "The title of a new task may say, in plain English, when it is due or how "
+    "often it repeats — 'renew the passport by mid-October', 'water the "
+    "plants every other day', 'call the dentist sometime next week'. Obvious "
+    "keyword phrasing ('tomorrow', 'every day', 'next monday') is already "
+    "handled elsewhere and will not reach you here — only loosely-worded "
+    "phrasing does, so read generously.\n"
+    "If you find a deadline, set has_deadline=true and deadline_in_minutes to "
+    "how many minutes from right now it falls (use the local time above). If "
+    "you find a repeat phrase, set has_repeat=true, repeat_freq to one of "
+    "daily/weekly/monthly/yearly, repeat_interval to 1 for a plain 'every X' "
+    "or N for 'every N Xs', and repeat_weekdays (0=Sunday..6=Saturday) only "
+    "when specific named weekdays were given, otherwise leave it empty. If "
+    "nothing schedule-related is in the title, set both has_deadline and "
+    "has_repeat to false. clean_title is always required: the title with "
+    "whatever schedule phrase you found removed and any leftover punctuation "
+    "tidied up, or the title completely unchanged if nothing was found."
+)
+
+
+def extract_schedule(settings: dict, title: str, now_local: str) -> dict:
+    """Fallback for `title_parse.parse_title`: phrasing too loose for the
+    local regex parser, read by the fast tier instead.
+
+    Only called when the regex pass already came up empty, so this is a rare
+    call rather than one on every task — the annotate call already happening
+    on task creation is where estimates and scores come from; this is purely
+    for schedule words the fixed vocabulary missed.
+    """
+    prompt = (f"The local date and time right now is {now_local}.\n\n"
+             + EXTRACT_GUIDANCE + f"\n\nTITLE: {title}")
+    data = _call(settings, "fast", prompt, EXTRACT_SCHEMA)
+    result = {"has_deadline": bool(data.get("has_deadline")),
+             "deadline_in_minutes": _clamp(data.get("deadline_in_minutes"),
+                                           0, MAX_START_MINUTES),
+             "has_repeat": bool(data.get("has_repeat")) and
+                          data.get("repeat_freq") in logic.RECUR_FREQS,
+             "repeat_freq": data.get("repeat_freq"),
+             "repeat_interval": _clamp(data.get("repeat_interval") or 1,
+                                       1, logic.RECUR_MAX_INTERVAL),
+             "repeat_weekdays": sorted({int(d) for d in data.get("repeat_weekdays", [])
+                                        if isinstance(d, int) and 0 <= d <= 6}),
+             "clean_title": (data.get("clean_title") or title).strip() or title}
+    return result
 
 
 # What the model is told a start time is for. Spelled out at length because

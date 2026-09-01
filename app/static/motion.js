@@ -96,10 +96,14 @@ const Motion = (() => {
                           .forEach((f, i) => chime(c, t + i * 0.075, f, { peak: 0.14, decay: 0.55 })),
     // Deliberately not a chime: an alarm has to survive being ignored.
     alarm:    (c, t) => [0, 0.22, 0.44].forEach((d) => chime(c, t + d, 880, { peak: 0.2, decay: 0.18 })),
+    // The same switch as `click`, just barely touched: high and quiet enough
+    // to read as a hint rather than a press, so it never competes with it.
+    hover:    (c, t) => click(c, t, { pitch: 900, peak: 0.045, cutoff: 2400 }),
   };
 
   const SLOTS = [
     { id: "click",    label: "Button press",  hint: "every press, everywhere" },
+    { id: "hover",    label: "Hover",         hint: "pointing at a button" },
     { id: "complete", label: "Task finished", hint: "checking something off" },
     { id: "levelup",  label: "Level up",      hint: "passing a level" },
     { id: "alarm",    label: "Alarm",         hint: "a deadline transition" },
@@ -295,6 +299,8 @@ const Motion = (() => {
     setTimeout(() => el.classList.remove(cls), 400);
   }
 
+  const INTERACTIVE_SELECTOR = "button, .weekday-chip, summary";
+
   /* Every button in the app clicks, without every button in the app having to
    * ask. Pointerdown rather than click, because the sound belongs to the press
    * — waiting for the release puts it a hundred milliseconds behind the finger
@@ -303,16 +309,41 @@ const Motion = (() => {
    * `.no-click` opts a control out, for the handful that play their own sound. */
   function wireClicks() {
     document.addEventListener("pointerdown", (e) => {
-      const el = e.target.closest("button, .weekday-chip, summary");
+      const el = e.target.closest(INTERACTIVE_SELECTOR);
       if (!el || el.disabled || el.classList.contains("no-click")) return;
       play(el.classList.contains("danger") || el.classList.contains("bad") ||
            el.classList.contains("close") ? "back" : "click");
     }, { passive: true });
   }
 
+  /* A hint of sound on the way to a press, not just on it. Mouse only — a
+   * touchscreen has no hover, and firing this off the synthetic pointerover
+   * a tap sends first would double it up with the click a moment later.
+   *
+   * `lastHoverEl` stops the same element re-triggering itself as the pointer
+   * crosses its children (pointerover bubbles); the timestamp gap on top of
+   * it stops a fast sweep across a whole row of buttons from playing all of
+   * them in a burst — a wash of clicks reads as noise, not as five hints. */
+  let lastHoverEl = null;
+  let lastHoverAt = 0;
+  const HOVER_MIN_GAP_MS = 45;
+
+  function wireHover() {
+    document.addEventListener("pointerover", (e) => {
+      if (e.pointerType && e.pointerType !== "mouse") return;
+      const el = e.target.closest(INTERACTIVE_SELECTOR);
+      if (!el || el.disabled || el.classList.contains("no-click") || el === lastHoverEl) return;
+      lastHoverEl = el;
+      const now = performance.now();
+      if (now - lastHoverAt < HOVER_MIN_GAP_MS) return;
+      lastHoverAt = now;
+      play("hover");
+    }, { passive: true });
+  }
+
   return {
     reduced, play, setEnabled, setVolume, loadCustom, setCustom, clearCustom,
     customName, SLOTS, enterNew, unfold, checkOff, leave, closeDialog, kick,
-    replay, wireClicks,
+    replay, wireClicks, wireHover,
   };
 })();

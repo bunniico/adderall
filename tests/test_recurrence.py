@@ -316,6 +316,13 @@ def app(monkeypatch, tmp_path):
     importlib.reload(main)
     monkeypatch.setattr(main.ai, "annotate",
                         lambda settings, tasks, want_scores=True: {})
+    monkeypatch.setattr(main.ai, "extract_schedule",
+                        lambda settings, title, now_local: {
+                            "has_deadline": False, "deadline_in_minutes": 0,
+                            "has_repeat": False, "repeat_freq": "",
+                            "repeat_interval": 1, "repeat_weekdays": [],
+                            "clean_title": title,
+                        })
     client = TestClient(main.app)
     client.put("/api/settings", json={"timezone": "UTC"})
     return client, main, db, recurring

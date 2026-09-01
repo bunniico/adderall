@@ -32,6 +32,10 @@ DEFAULT_SETTINGS = {
     "ai_scoring": True,        # let the AI seed impact/effort scores
     "ai_start_times": True,    # let the AI say when a task wants to begin —
                                # dinner tonight, that game some time next month
+    "title_parsing": True,     # read a deadline/repeat straight off a new
+                               # task's title, and tidy the trigger words out
+    "title_parsing_ai": True,  # when the title's phrasing is too loose for
+                               # the built-in parser, let the AI take a pass
     "alarms": {
         "enabled": True,
         "stop_lead": 30,       # minutes before deadline: "stop current activity"
