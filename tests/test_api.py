@@ -627,7 +627,9 @@ def test_breakdown_ai_failure_returns_502(client, monkeypatch):
 def test_index_served(client):
     res = client.get("/")
     assert res.status_code == 200
-    assert "adderall" in res.text
+    # Case-insensitive: this is a "the page is served" smoke check, and the
+    # wordmark's capitalisation is a design decision, not an API contract.
+    assert "adderall" in res.text.lower()
 
 
 # ---------------- projects (tabs) ----------------

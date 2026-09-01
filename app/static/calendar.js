@@ -382,11 +382,13 @@ function renderCalendar() {
   else renderMonthView(body, events);
 }
 
-/* ---- the overdue rail ----
- * A pile of deadlines that have already gone by is the single most
- * demoralizing thing a list like this can show you, and re-typing a date for
- * every one of them is exactly the friction that leaves it showing. So the
- * pile gets its own row, above every view, with one button that clears it. */
+/* ---- the rail of dates that have gone by ----
+ * A pile of missed deadlines is the single most demoralizing thing a list like
+ * this can show you, and re-typing a date for every one of them is exactly the
+ * friction that leaves it showing. So the pile gets its own row, above every
+ * view, with one button that clears it — and it is worded and coloured as a
+ * job to do rather than as a scolding, because the version that makes you
+ * wince is the version you close the tab on. */
 
 function renderOverdueRail(events) {
   const rail = $("cal-overdue");
@@ -398,11 +400,14 @@ function renderOverdueRail(events) {
   const head = document.createElement("div");
   head.className = "cal-overdue-head";
   const label = document.createElement("span");
-  label.textContent = `⏰ ${overdue.length} past due`;
+  label.textContent = overdue.length === 1
+    ? "1 waiting for a new date"
+    : `${overdue.length} waiting for new dates`;
   const nudgeAll = document.createElement("button");
   nudgeAll.className = "accent";
-  nudgeAll.textContent = overdue.length === 1 ? "Nudge it…" : "Nudge all…";
-  nudgeAll.title = "Move these onto new deadlines, each keeping its length";
+  nudgeAll.textContent = overdue.length === 1
+    ? "Reschedule it…" : "Reschedule all…";
+  nudgeAll.title = "Move these onto new dates, each keeping its length";
   nudgeAll.addEventListener("click", () => openNudge(overdue));
   head.append(label, nudgeAll);
 
@@ -468,7 +473,7 @@ function eventChip(e, opts = {}) {
     const btn = document.createElement("button");
     btn.className = "cal-chip-nudge";
     btn.textContent = "⏩";
-    btn.title = "Nudge this to a new deadline, same length";
+    btn.title = "Reschedule this when you're ready — it keeps its length";
     btn.setAttribute("aria-label", "Nudge " + e.title);
     btn.addEventListener("click", (ev) => { ev.stopPropagation(); openNudge([e]); });
     chip.appendChild(btn);
@@ -710,7 +715,7 @@ function dayBlock(item, day) {
     const btn = document.createElement("button");
     btn.className = "cal-chip-nudge cal-block-nudge";
     btn.textContent = "⏩";
-    btn.title = "Nudge this to a new deadline, same length";
+    btn.title = "Reschedule this when you're ready — it keeps its length";
     btn.setAttribute("aria-label", "Nudge " + e.title);
     btn.addEventListener("click", (ev) => { ev.stopPropagation(); openNudge([e]); });
     el.appendChild(btn);

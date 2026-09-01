@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Adderall</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⏳</text></svg>">
 </head>
@@ -11,17 +14,26 @@
 
 <div class="page-head">
 <header class="topbar">
-  <h1>⏳ adderall</h1>
+  <div class="brand">
+    <div class="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 16 16" width="13" height="13" fill="none"
+        stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">
+        <path d="M4 2h8M4 14h8M4.6 2.4c0 3 2.6 4.2 2.6 5.6s-2.6 2.6-2.6 5.6M11.4 2.4c0 3-2.6 4.2-2.6 5.6s2.6 2.6 2.6 5.6"/>
+      </svg>
+    </div>
+    <h1>Adderall</h1>
+    <div class="brand-tag">BETA</div>
+  </div>
   <div class="topbar-actions">
     <!-- Level and XP. Every task pays out its own score when you finish it,
          so the number on the badge and the number in the bar are the same
          number, read twice. -->
     <div id="xp-meter" class="xp-meter" hidden>
-      <div class="xp-line">
-        <span class="xp-level">Lv <b id="xp-level">1</b></span>
+      <span class="xp-level">Lv <b id="xp-level">1</b></span>
+      <div class="xp-track">
+        <div id="xp-fill" class="xp-fill"></div>
         <span id="xp-count" class="xp-count"></span>
       </div>
-      <div class="xp-track"><div id="xp-fill" class="xp-fill"></div></div>
       <span id="xp-gain" class="xp-gain" role="status" hidden></span>
     </div>
     <!-- Only ever on screen when the daily budget has started pulling the
@@ -52,6 +64,7 @@
   <div id="alarm-banner" class="alarm-banner" hidden></div>
 
   <div id="list-view">
+  <div class="list-main">
   <form id="add-form" autocomplete="off">
     <input id="add-title" type="text" placeholder="Add a task… (Enter to add)" maxlength="500" required>
     <label class="granularity" title="Breakdown granularity (1 = broad steps, 5 = tiny steps)">
@@ -91,6 +104,30 @@
     <summary>Done &amp; discarded</summary>
     <div id="done-list"></div>
   </details>
+  </div><!-- /.list-main -->
+
+  <!-- The rail. Everything here is something you glance at, never something
+       you work through, which is why it is allowed to disappear entirely on a
+       phone without the app losing anything. -->
+  <aside class="side-rail">
+    <div class="rail-card">
+      <!-- Placeholder. The companion has no behaviour yet; a hatched box that
+           admits that beats a mascot that stares at you doing nothing. -->
+      <div class="companion" aria-hidden="true">pixel companion<br>240 × 300</div>
+      <div class="companion-name">
+        <span>Bud · lv 4</span>
+        <span>happy</span>
+      </div>
+    </div>
+
+    <div class="rail-card">
+      <div class="rail-row"><span>Finished in this list</span><b id="rail-streak">—</b></div>
+      <div class="progress"><div id="rail-streak-fill" class="progress-fill"></div></div>
+      <div class="rail-row"><span id="rail-goal-label">Level</span><b id="rail-goal">—</b></div>
+      <div class="progress"><div id="rail-goal-fill" class="progress-fill"></div></div>
+      <div class="rail-foot" id="rail-xp"></div>
+    </div>
+  </aside>
   </div><!-- /#list-view -->
 
   <!-- Calendar: the one view that ignores the open tab, because "what is due
@@ -394,6 +431,24 @@
       Gamification <span class="muted">— the confetti when you finish something,
       and the level and XP bar in the corner</span></label>
 
+    <!-- Sounds. The built-in set is synthesized on the fly, so there is
+         nothing to download and nothing to load before the first click makes
+         a noise. Anything you pick here replaces one of them; the files stay
+         in this browser and are never uploaded anywhere. -->
+    <fieldset class="s-group">
+      <legend>🔉 Sounds</legend>
+      <label class="row"><input id="s-sound" type="checkbox">
+        Sound on <span class="muted">— a soft click on every press, and a
+        chime when something lands</span></label>
+      <label>Volume: <output id="s-volume-val"></output>
+        <input id="s-volume" type="range" min="0" max="100" value="55">
+      </label>
+      <div id="sound-slots" class="sound-slots"></div>
+      <p class="muted">Pick your own audio for any of these — mp3, wav, ogg,
+        anything this browser can play, up to 2 MB each. They're kept in this
+        browser only, so they don't follow you to another device.</p>
+    </fieldset>
+
     <label class="row"><input id="s-manual-order" type="checkbox">
       Manual order <span class="muted">— keep the list exactly as you drag it, instead of
       sorting it. Turns itself on the first time you move a task; it is the same
@@ -477,6 +532,7 @@
 
 <!-- calendar.js first: app.js boots as it is parsed, and that boot may open
      straight into the calendar. -->
+<script src="motion.js"></script>
 <script src="calendar.js"></script>
 <script src="app.js"></script>
 </body>
