@@ -31,7 +31,11 @@ SYSTEM = (
     "minutes for a distractible adult, not best-case minutes. Impact and "
     "effort are integers 0-10: impact = how much completing this improves the "
     "person's life or unblocks other work; effort = energy, friction, and "
-    "executive load, not just duration. Return only the requested JSON."
+    "executive load, not just duration. A start time says when the person "
+    "would sensibly begin a task, which is a judgment about the task itself: "
+    "'eat dinner' belongs to this evening, 'renew the passport' to some "
+    "weekday soon, 'finish that game' to whenever there is nothing better on. "
+    "Return only the requested JSON."
 )
 
 GRANULARITY_HINTS = {
@@ -50,6 +54,10 @@ GRANULARITY_HINTS = {
 MAX_STEPS = 16       # cap on subtasks from one breakdown
 MAX_COMPILED = 60    # cap on tasks from one braindump, subtasks included
 MAX_MINUTES = 60 * 24 * 30  # a month of minutes; anything larger is nonsense
+# How far ahead a suggested start time may sit: a year. "Some day" has to have
+# a day on it for the scheduler to place it at all, and a year out is already
+# far past the point where the answer is "not now" and nothing more.
+MAX_START_MINUTES = 60 * 24 * 365
 
 BREAKDOWN_SCHEMA = {
     "type": "object",
@@ -104,13 +112,20 @@ COMPILE_SCHEMA = {
 }
 
 
-def annotate_schema(want_scores: bool = True) -> dict:
+def annotate_schema(want_scores: bool = True, want_start: bool = False) -> dict:
     props: dict = {"id": {"type": "string"}, "minutes": {"type": "integer"}}
     required = ["id", "minutes"]
     if want_scores:
         props["impact"] = {"type": "integer"}
         props["effort"] = {"type": "integer"}
         required += ["impact", "effort"]
+    if want_start:
+        # Minutes from now, not a date. The model is told what the local time
+        # is and answers with an offset, which spares it — and this schema —
+        # every timezone, format and end-of-month trap there is; the app turns
+        # it back into an instant, which is the only thing it stores.
+        props["start_in_minutes"] = {"type": "integer"}
+        required.append("start_in_minutes")
     return {
         "type": "object",
         "properties": {
@@ -303,12 +318,41 @@ def breakdown(settings: dict, title: str, description: str, granularity: int,
     return steps[:MAX_STEPS]
 
 
-def annotate(settings: dict, tasks: list[dict], want_scores: bool = True) -> dict[str, dict]:
+# What the model is told a start time is for. Spelled out at length because
+# it is the one field here that is a scheduling decision rather than a
+# measurement, and a vague prompt gets "tomorrow" for everything.
+START_GUIDANCE = (
+    "Also give start_in_minutes: how many minutes from right now the person "
+    "should ideally BEGIN the task. This is not a deadline and not how long it "
+    "takes — it is which slot in the coming days or weeks the task belongs in, "
+    "and the app schedules the task from it.\n"
+    "- Anything that plainly belongs to today or this evening — meals, meds, "
+    "feeding the cat, an errand before the shops shut — goes within the next "
+    "few hours, at the hour it actually happens. Use the local time above to "
+    "work that offset out.\n"
+    "- Time-of-day-bound work with no urgency (a call that needs office hours) "
+    "goes to the next sensible slot in working hours.\n"
+    "- Ordinary tasks with no natural hour go somewhere in the next few days.\n"
+    "- Things that genuinely do not matter when they happen — a long game, a "
+    "hobby project, 'read that book' — go weeks or months out. Say so with a "
+    "large number rather than a small one: putting them near the front takes "
+    "the good hours away from work that needed them.\n"
+    "- 0 means start now, and should be rare."
+)
+
+
+def annotate(settings: dict, tasks: list[dict], want_scores: bool = True,
+             want_start: bool = False, now_local: str = "") -> dict[str, dict]:
     """Estimator + matrix seeding: one fast-tier call for a whole batch of
-    tasks, returning {id: {minutes, impact?, effort?}}. Raw minutes only —
-    the time-tax buffer is applied locally, never by the model."""
+    tasks, returning {id: {minutes, impact?, effort?, start_in_minutes?}}.
+
+    Raw minutes only — the time-tax buffer is applied locally, never by the
+    model — and start times come back as an offset from `now_local`, which is
+    the caller's own clock rendered for the prompt.
+    """
     if not tasks:
         return {}
+    want_start = want_start and bool(now_local)
     lines = []
     for t in tasks:
         desc = f" — {t['description']}" if t.get("description") else ""
@@ -316,11 +360,17 @@ def annotate(settings: dict, tasks: list[dict], want_scores: bool = True) -> dic
     fields = "estimated working minutes" + (
         ", impact 0-10, effort 0-10" if want_scores else ""
     )
-    prompt = (
+    prompt = ""
+    if want_start:
+        prompt += f"The local date and time right now is {now_local}.\n\n"
+    prompt += (
         f"For each task below, give {fields}. Estimate honestly; do not pad — "
-        f"a buffer is added separately.\n\n" + "\n".join(lines)
+        f"a buffer is added separately.\n"
     )
-    data = _call(settings, "fast", prompt, annotate_schema(want_scores))
+    if want_start:
+        prompt += START_GUIDANCE + "\n"
+    prompt += "\n" + "\n".join(lines)
+    data = _call(settings, "fast", prompt, annotate_schema(want_scores, want_start))
     valid_ids = {t["id"] for t in tasks}
     results: dict[str, dict] = {}
     for row in data.get("tasks", []):
@@ -333,6 +383,9 @@ def annotate(settings: dict, tasks: list[dict], want_scores: bool = True) -> dic
         if want_scores:
             clean["impact"] = _clamp(row.get("impact"), 0, 10)
             clean["effort"] = _clamp(row.get("effort"), 0, 10)
+        if want_start and row.get("start_in_minutes") is not None:
+            clean["start_in_minutes"] = _clamp(
+                row.get("start_in_minutes"), 0, MAX_START_MINUTES)
         results[row["id"]] = clean
     return results
 

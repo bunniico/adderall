@@ -454,6 +454,10 @@ function chipTooltip(e) {
   if (e.quadrant) bits.push(CAL_QUAD_ICON[e.quadrant] + " " + e.quadrant.replace("_", " "));
   bits.push(`score ${Math.round(e.score ?? 0)}`);
   if (e.recurrence) bits.push("repeats " + e.recurrence.summary);
+  // Where the block sits, said out loud: for anything the app scheduled
+  // itself the start time *is* the left edge of this block, and for a task
+  // with a deadline you set it is the intention the deadline overrode.
+  if (e.start_at) bits.push("starts " + new Date(e.start_at).toLocaleString());
   if (e.deadline_source === "auto") bits.push("deadline assigned by the app");
   if (e.has_subtasks) bits.push(`${e.subtask_count} subtask${e.subtask_count === 1 ? "" : "s"}`);
   return bits.join(" · ");

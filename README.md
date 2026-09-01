@@ -303,6 +303,46 @@ API keys are never logged.
   them (toggleable). Subtasks are backward-scheduled from their parent's
   deadline using buffered estimates. Urgency rises as remaining time shrinks
   relative to the (buffered) work left, and drives the "what next" ordering.
+- **Start times — when a thing wants to *begin*** — a deadline says when work
+  has to be finished, which for most of what people actually write down is the
+  harder question and the less useful answer. *Eat dinner* is a six o'clock
+  thing; it has no deadline in any meaningful sense, and a list that can only
+  say "due Thursday" has nothing to do with it. So every task can also carry a
+  **start time**, and that is what the scheduler places it from: the task lands
+  in the first slot that fits from that hour, on that day — after office hours
+  if that is when it happens, because the working window is where the app puts
+  work it chose the hour for *itself*, not a rule about when you are allowed to
+  eat. Set it in the task's dialog, where **Now · In an hour · This evening ·
+  Tomorrow morning · Next week · Some day** are one click each, because a
+  datetime picker is exactly the friction this app exists to remove.
+  It cuts both ways, and the second way is the point. A start time a few hours
+  out makes a task urgent on its own account — it climbs the list as its hour
+  approaches, whatever its deadline says — while **Some day** parks something
+  a month out where it stops competing for this afternoon. *Finish that game*
+  sinks to a score of 20 and stays there until it is nearly time; the evening
+  it was quietly taking is handed back to the work that needed it.
+  That handing-back is literal: when two tasks want the same day and the day
+  cannot hold both, the one that is worth more takes it and the other moves to
+  the next day with room. Placement used to follow whatever order the list
+  happened to be in, so the first thing you ever typed got first pick of every
+  afternoon; now the day is handed out by score — deadline *and* start
+  pressure, impact, effort, length — and a task with nothing to say about when
+  it should start sits at neutral, so a list that never touches the feature
+  schedules exactly as it did before. Nudging a task carries its start time
+  along with its deadline, so a plan pushed to next week keeps its shape at
+  both ends instead of claiming it should have begun last Tuesday.
+- **And the AI fills it in for you** — the field is only worth having if you
+  never have to touch it, so each new task gets a suggested start time from the
+  same fast batched call that estimates it: the model is told the local date
+  and hour and answers with an offset, which is what keeps every timezone and
+  date-format trap out of the loop. *Eat dinner* comes back as this evening,
+  *renew the passport* as a weekday soon, *finish that game* as weeks out —
+  and it is asked to say so with a big number rather than a small one, because
+  putting the things that do not matter near the front is how a list stops
+  being usable. Steps inside a task never get one: a step is scheduled inside
+  the slot its parent was given, which is what keeps a plan one readable block
+  rather than a scatter. Override any of it by hand, or turn the whole thing
+  off in ⚙ Settings.
 - **Deadlines that land on a day that can hold them** — an auto-assigned
   deadline used to be a horizon and nothing else, so fifteen things
   braindumped in one minute came back as fifteen blocks stacked on the same
@@ -314,7 +354,12 @@ API keys are never logged.
   a day is full. It only ever looks forward from the day the horizon asked
   for, so nothing is quietly pulled earlier, and nothing already overdue is
   quietly rescheduled out of the red. A whole task tree is placed as one
-  span, so a project's steps still tile the block its parent occupies.
+  span, so a project's steps still tile the block its parent occupies. A task
+  with a **start time** skips the horizon entirely — it already knows which
+  day and which hour it wants — and the cap does not get a veto over it, the
+  same way it does not over a deadline you set yourself: you still have to eat
+  dinner on a day that is already full, and the calendar saying the day is
+  overbooked is the honest answer rather than moving the meal.
   Everything about it is a preference: the length of a day, the hour it
   starts, and whether to spread work at all, all in ⚙ Settings.
 - **A day cap that learns** — the calendar warns when a day is booked past
@@ -373,8 +418,10 @@ API keys are never logged.
 4. **Deterministic where possible, AI only where needed.** All scheduling,
    buffering, urgency, priority scores, the XP curve, day-capacity learning,
    rollups, focus traversal, matrix math, recurrence dates and deadline-nudging
-   is local code (`app/logic.py`, fully unit-tested). The AI only does language
-   work and returns minimal structured JSON. The front end has no date
+   is local code (`app/logic.py`, fully unit-tested), start-time placement
+   included: the model says a task feels like an evening thing, and the app
+   works out which evening, which hour of it, and what moves. The AI only does
+   language work and returns minimal structured JSON. The front end has no date
    arithmetic at all: even the "next four dates" preview in the repeat dialog
    is the server's answer, so the dialog, the badge on the task and the
    schedule itself cannot drift into telling three different stories about one
@@ -387,12 +434,18 @@ Claude API only, routed by cost/quality (configurable in the DB settings):
 
 | Call | Default model | Thinking | Batched |
 |---|---|---|---|
-| Estimates + impact/effort scores | `claude-haiku-4-5` | off | yes — one call per batch of tasks |
+| Estimates + impact/effort scores + start times | `claude-haiku-4-5` | off | yes — one call per batch of tasks |
 | Task breakdown (Magic ToDo) | `claude-sonnet-5` | low effort | no (interactive) |
 | Braindump compiler | `claude-opus-5` | adaptive | yes — one call |
 
 Every call uses structured JSON output (`output_config.format`), so responses
 are compact and parse deterministically. The system prompt is cache-marked.
+
+The model never returns a date. Start times come back as `start_in_minutes`,
+an offset from a local clock the prompt states outright, which keeps every
+timezone, format and end-of-month question on the app's side of the line —
+the same rule the rest of the app follows, where the AI makes the language
+judgment and the scheduling arithmetic all happens locally.
 
 ## Development
 

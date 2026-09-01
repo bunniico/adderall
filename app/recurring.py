@@ -28,8 +28,10 @@ log = logging.getLogger(__name__)
 # a pathological rule can never hold the request open.
 CATCH_UP_STEPS = 500
 # Fields copied from one occurrence to the next. Deliberately not: status,
-# actual_time, started_at, xp_awarded or the deadline — every one of those is
-# about the occurrence you did, not about the job that comes back.
+# actual_time, started_at, xp_awarded, the deadline or the start time — every
+# one of those is about the occurrence you did, not about the job that comes
+# back. A rhythm that happens at a particular hour says so in its rule (the
+# `time` field), which is where the next copy's date and hour both come from.
 TEMPLATE_FIELDS = ("title", "description", "estimated_time", "impact", "effort")
 
 

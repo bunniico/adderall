@@ -63,6 +63,12 @@ NEUTRAL_SCORE = 5  # stand-in for an impact/effort the AI hasn't filled in yet
 # between six hours and eight is no difference at all — both are "not today".
 TIME_COST_HALFLIFE = 60
 
+# Minutes of lead time at which a start time scores a middling 5 — four hours,
+# an afternoon. "Eat dinner" set at lunchtime scores about 5 and climbs to 8 an
+# hour before, 10 when the hour arrives; "finish that game", set a month out,
+# scores the 0.5 floor and stays out of the way until it is nearly time.
+START_PRESSURE_HALFLIFE = 240
+
 # ---- how the list is sorted ----
 # "smart" is the app's own opinion (urgency, then quadrant); "manual" is the
 # order you dragged things into. The rest are plain one-field sorts, there for
@@ -122,19 +128,52 @@ def quadrant(impact: int | None, effort: int | None, threshold: int = 5) -> str 
     return "thankless"
 
 
-def urgency(deadline: datetime | None, buffered_min: int | None, now: datetime) -> float:
-    """0.5 (no deadline / distant) → 10 (overdue or no slack).
+def urgency(deadline: datetime | None, buffered_min: int | None, now: datetime,
+            start_at: datetime | None = None) -> float:
+    """0.5 (no deadline / distant) → 10 (overdue, no slack, or time to start).
 
     Rises as remaining time shrinks relative to the buffered estimate: a task
     whose remaining window is barely bigger than the work itself has no slack.
+
+    A task also becomes urgent simply because the hour it meant to begin at
+    has arrived — dinner at seven is a seven o'clock problem however long you
+    have to eat it — so the two readings are combined by taking whichever is
+    higher. `max` and not a sum, deliberately: an auto-scheduled task is
+    placed *at* its start time, so its deadline pressure and its start
+    pressure are two views of the same fact and adding them would count it
+    twice.
     """
+    pressure = start_pressure(start_at, now)
     if deadline is None:
-        return 0.5
+        return 0.5 if pressure is None else max(0.5, pressure)
     remaining_min = (deadline - now).total_seconds() / 60.0
     if remaining_min <= 0:
         return 10.0
     work = buffered_min if buffered_min and buffered_min > 0 else DEFAULT_ESTIMATE_MIN
-    return round(min(10.0, max(0.5, 10.0 * work / remaining_min)), 1)
+    value = round(min(10.0, max(0.5, 10.0 * work / remaining_min)), 1)
+    return value if pressure is None else max(value, pressure)
+
+
+def start_pressure(start_at: datetime | None, now: datetime) -> float | None:
+    """0.5 → 10: how loudly a task's own start time says "now" — or None.
+
+    None, not neutral, when there is no start time: a task that never said
+    when it wanted to begin is saying nothing, which has to read differently
+    from one that said "not for a fortnight".
+
+    The curve decays with the wait rather than falling in a straight line,
+    because that is the shape of the question the feature exists to answer:
+    something meant for the next hour or two is a today problem, something
+    four hours out is a maybe, and a fortnight out is not a problem at all.
+    A start time already gone by pegs the scale, exactly as a missed deadline
+    does — the work is ready and you are not doing it.
+    """
+    if start_at is None:
+        return None
+    lead = (start_at - now).total_seconds() / 60.0
+    if lead <= 0:
+        return 10.0
+    return round(max(0.5, 10.0 * START_PRESSURE_HALFLIFE / (START_PRESSURE_HALFLIFE + lead)), 1)
 
 
 # ---------------------------------------------------------------------------
@@ -266,6 +305,11 @@ class DayPlanner:
     def _local(self, when: datetime) -> datetime:
         return when.astimezone(self.tz)
 
+    def local_day(self, when: datetime) -> date:
+        """Which local day an instant falls on — the unit everything here
+        books against, and the one the caller has to rank by."""
+        return self._local(when).date()
+
     def _midnight(self, day: date) -> datetime:
         return datetime.combine(day, time(0, 0), tzinfo=self.tz)
 
@@ -306,27 +350,45 @@ class DayPlanner:
         """Minutes already committed on a local day, at whatever hour they sit."""
         return sum(end - start for start, end in self._merged(day))
 
-    def _floor(self, day: date, not_before: datetime | None) -> int:
+    def _floor(self, day: date, not_before: datetime | None,
+               base: int | None = None) -> int:
         """Earliest local minute a new block may start on this day.
 
         Only the day you are standing in is clamped: a slot at 9am is no use
         at four in the afternoon. Days that are wholly in the past are left
         alone, so work that is already overdue stays overdue instead of
         quietly rescheduling itself out of the red.
+
+        `base` is the bottom of the search — the top of the working window by
+        default, or the minute a start time asks for, which may well sit
+        outside it.
         """
+        floor = self.day_start if base is None else base
         if not_before is None:
-            return self.day_start
+            return floor
         local = self._local(not_before)
         if local.date() != day:
-            return self.day_start
+            return floor
         into_day = (local - self._midnight(day)).total_seconds() / 60.0
-        return max(self.day_start, int(math.ceil(into_day)))
+        return max(floor, int(math.ceil(into_day)))
 
-    def _gaps(self, day: date, floor: int) -> list[tuple[int, int]]:
-        """Free stretches of the working window, in local minutes."""
-        end_of_window = self.window_end
+    def _minute_of(self, day: date, when: datetime) -> int:
+        """`when` as a local minute of `day` — how a start time is booked."""
+        into_day = (self._local(when) - self._midnight(day)).total_seconds() / 60.0
+        return int(math.ceil(into_day))
+
+    def _gaps(self, day: date, floor: int,
+              until: int | None = None) -> list[tuple[int, int]]:
+        """Free stretches of the working window, in local minutes.
+
+        `until` moves the far end of that window, which is what lets a task
+        with a start time in the evening be placed at all: office hours are
+        where the app puts work it chose the hour for itself, not a rule about
+        when you are allowed to eat dinner.
+        """
+        end_of_window = self.window_end if until is None else until
         free: list[tuple[int, int]] = []
-        cursor = max(self.day_start, floor)
+        cursor = max(0, floor)
         for start, end in self._merged(day):
             if end <= cursor or start >= end_of_window:
                 continue
@@ -338,13 +400,27 @@ class DayPlanner:
             free.append((cursor, end_of_window))
         return free
 
-    def _first_fit(self, day: date, length: int,
-                   not_before: datetime | None) -> tuple[date, int] | None:
+    def _first_fit(self, day: date, length: int, not_before: datetime | None,
+                   pin: datetime | None = None) -> tuple[date, int] | None:
         """The first day from `day` onward with both room under the cap and a
-        gap long enough to hold the work in one piece."""
+        gap long enough to hold the work in one piece.
+
+        `pin` is the moment the task asked to begin at. On the day it falls
+        on, the search starts there rather than at the top of the working
+        window, the window stretches a day's worth past it so several pinned
+        things can run back to back, and the cap does not get a veto: a start
+        time is a commitment you made, like a deadline you set, and the cap
+        governs the work the app schedules for you. On every later day the
+        pin has nothing to say and the ordinary rules apply again.
+        """
         for _ in range(self.search_days + 1):
-            if self.capacity - self.load(day) >= length:
-                for start, end in self._gaps(day, self._floor(day, not_before)):
+            pinned = pin is not None and self._local(pin).date() == day
+            base = self._minute_of(day, pin) if pinned else None
+            floor = self._floor(day, not_before, base)
+            until = (min(24 * 60, max(self.window_end, floor + self.capacity))
+                     if pinned else None)
+            if pinned or self.capacity - self.load(day) >= length:
+                for start, end in self._gaps(day, floor, until):
                     if end - start >= length:
                         return day, start
             day += timedelta(days=1)
@@ -373,19 +449,25 @@ class DayPlanner:
         return deadline
 
     def place(self, key: str, target: datetime, length: int,
-              not_before: datetime | None = None) -> datetime:
+              not_before: datetime | None = None,
+              pin: datetime | None = None) -> datetime:
         """The deadline for `length` minutes of work wanted around `target`.
 
         Never earlier than the day the horizon asked for, and never onto a day
         that is already full while a later one has room. Repeat calls for the
         same task give the same answer, so a page reload doesn't reshuffle
         your week.
+
+        `pin` is the task's own start time, when it has one: the hour it wants
+        to begin at rather than a day for the app to choose within. See
+        `_first_fit` for what that buys it.
         """
         if key in self._placed:
             return self._placed[key]
         length = max(1, int(length))
         day = self._local(target).date()
-        slot = self._first_fit(day, length, not_before) if length <= self.capacity else None
+        slot = (self._first_fit(day, length, not_before, pin)
+                if length <= self.capacity or pin is not None else None)
         if slot is None:
             # More than a whole day's worth of work in one piece (or nothing
             # free for half a year): give it the first day nothing else has
@@ -675,15 +757,41 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
         }
     lengths = {t["id"]: derived[t["id"]]["buffered_estimate"] for t in tasks}
 
+    def auto_plan(task: dict) -> tuple[datetime, int, datetime, datetime | None]:
+        """(target, minutes, not_before, pin) for a top-level task the app is
+        scheduling itself. `minutes` is 0 when there is nothing left to book.
+
+        Two ways a task gets a day. A **start time** answers the question
+        outright — this begins at seven, so book seven — and doubles as the
+        floor, because a preference about when to start is not a licence to
+        start in the past. Without one the app falls back to the quadrant
+        horizon it has always used: a day, computed from when the task was
+        written down, with the hour left to the planner.
+        """
+        start = parse_dt(task.get("start_at"))
+        minutes = _tree_minutes(task, children, lengths)
+        if start is not None:
+            return start, minutes, max(now, start), start
+        created = parse_dt(task["created_at"]) or now
+        days = HORIZON_DAYS.get(derived[task["id"]]["quadrant"], 3)
+        return created + timedelta(days=days), minutes, now, None
+
     def resolve_deadline(task: dict, parent_deadline: datetime | None) -> tuple[datetime | None, str]:
         user_dl = parse_dt(task["deadline"])
         if user_dl:
+            # A deadline you set is the answer, and a start time alongside it
+            # is then an intention rather than a second opinion about the
+            # date: the block still ends where you said it must. It is not
+            # ignored — it is what `urgency` reads to know the hour has come.
             return user_dl, "user"
         if not auto_deadlines:
             return None, "none"
         if parent_deadline:
             # Backward scheduling: this child must finish early enough to leave
-            # room for the buffered estimates of every later sibling.
+            # room for the buffered estimates of every later sibling. A start
+            # time on a step is not consulted here — the parent's slot is the
+            # plan, and the steps tile it — but it still counts toward the
+            # step's urgency, so "not until Thursday" is heard either way.
             sibs = children.get(task["parent_id"], [])
             idx = next(i for i, s in enumerate(sibs) if s["id"] == task["id"])
             tail_min = sum(
@@ -692,20 +800,68 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
                 if s["status"] in ACTIVE_STATUSES
             )
             return parent_deadline - timedelta(minutes=tail_min), "auto"
-        created = parse_dt(task["created_at"]) or now
-        days = HORIZON_DAYS.get(derived[task["id"]]["quadrant"], 3)
-        target = created + timedelta(days=days)
-        if not spread:
-            return target, "auto"
-        # The horizon says which day this ought to land on. The planner says
-        # where in that day it actually fits — or, when the day is already
-        # spoken for, which of the following ones has room. The whole tree is
-        # placed as one span: its steps are backward-scheduled inside it just
-        # below, so the family occupies exactly the slot booked for it.
-        minutes = _tree_minutes(task, children, lengths)
+        target, minutes, floor, pin = auto_plan(task)
         if not minutes:
             return target, "auto"  # nothing left to do in here, nothing to book
-        return planner.place(task["id"], target, minutes, not_before=now), "auto"
+        if not spread:
+            # No day book to consult, so a start time is simply honoured:
+            # begin then, finish a buffered estimate later.
+            return (pin + timedelta(minutes=minutes)) if pin else target, "auto"
+        # The horizon (or the start time) says which day this ought to land on.
+        # The planner says where in that day it actually fits — or, when the
+        # day is already spoken for, which of the following ones has room. The
+        # whole tree is placed as one span: its steps are backward-scheduled
+        # inside it just below, so the family occupies exactly the slot booked
+        # for it.
+        return planner.place(task["id"], target, minutes,
+                             not_before=floor, pin=pin), "auto"
+
+    def prebook() -> None:
+        """Hand out the days before anything is drawn, best claim first.
+
+        Placement used to follow whatever order the list happened to be in, so
+        the first thing you ever typed got first pick of the afternoon and
+        something that needed to happen in an hour queued up behind it. Now
+        every top-level task the app is about to schedule is ranked, and they
+        take their slots in that order — which is what makes a start time
+        *push*: two things wanting the same day are separated by what they are
+        worth, so dinner takes the evening and the game that can wait moves to
+        whatever is left.
+
+        The ranking is the ordinary priority score, with start pressure
+        standing in for the deadline pressure nothing has yet. A task with no
+        start time sits at neutral, so this changes nothing for a list that
+        never uses the feature beyond breaking same-day ties by score.
+
+        Fixed points go in first, exactly as `reserve_fixed` does across every
+        project. Both are memoised on the task id, so when a shared planner has
+        already been through this list all of it is a no-op.
+        """
+        roots = children.get(None, [])
+        for task in roots:
+            dl = parse_dt(task["deadline"])
+            if dl is None:
+                continue
+            minutes = _tree_minutes(task, children, lengths)
+            if minutes:
+                planner.reserve(task["id"], dl, minutes)
+        if not auto_deadlines:
+            return
+        queue = []
+        for i, task in enumerate(roots):
+            if parse_dt(task["deadline"]) is not None:
+                continue
+            target, minutes, floor, pin = auto_plan(task)
+            if not minutes:
+                continue
+            rank = priority_score(
+                task["impact"], task["effort"],
+                start_pressure(pin, now) if pin is not None else float(NEUTRAL_SCORE),
+                minutes)
+            queue.append((planner.local_day(target), -rank, i,
+                          task["id"], target, minutes, floor, pin))
+        for _, _, _, key, target, minutes, floor, pin in sorted(queue):
+            planner.place(key, target, minutes, not_before=floor, pin=pin)
 
     def walk(parent_id: str | None, parent_deadline: datetime | None,
              prefix: tuple[int, ...]) -> None:
@@ -725,11 +881,14 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
             # (a task before its own subtasks) < [1].
             d["order_path"] = [*prefix, i]
             if task["status"] in ACTIVE_STATUSES:
-                d["urgency"] = urgency(dl, d["buffered_estimate"], now)
+                d["urgency"] = urgency(dl, d["buffered_estimate"], now,
+                                       parse_dt(task.get("start_at")))
             else:
                 d["urgency"] = 0.0
             walk(task["id"], dl, (*prefix, i))
 
+    if spread:
+        prebook()
     walk(None, None, ())
 
     # Roll subtree totals up: a parent's real cost is the sum of everything
@@ -749,7 +908,8 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
         # (usually meaningless) estimate and deadline.
         if d["has_subtasks"] and t["status"] in ACTIVE_STATUSES:
             d["urgency"] = urgency(parse_dt(d["rollup_deadline"]),
-                                   d["rollup_remaining"], now)
+                                   d["rollup_remaining"], now,
+                                   parse_dt(t.get("start_at")))
         # Length before score: how long a task takes is one of the four things
         # the score is made of, and for a container that is the work inside it.
         d["length_min"] = block_length(d)
@@ -975,16 +1135,22 @@ def ancestor_titles(tasks: list[dict], task: dict) -> list[str]:
 
 
 def nudge_plan(tasks: list[dict], derived: dict[str, dict], task_id: str,
-               new_deadline: datetime) -> dict[str, str]:
-    """The deadlines to write when a past-due task is pushed to a new date.
+               new_deadline: datetime) -> dict[str, dict[str, str]]:
+    """The fields to write when a past-due task is pushed to a new date.
 
-    Returns {task_id: iso}. The task itself lands exactly on `new_deadline`;
+    Returns {task_id: {"deadline": iso, "start_at": iso}}, the start time only
+    where the task has one. The task itself lands exactly on `new_deadline`;
     every task nested under it that carries a deadline *you* set slides by the
     same delta. That is what "the same length" means for anything bigger than
     one step: a plan spread over three days stays spread over three days
     instead of collapsing onto the new date. Auto-assigned deadlines are left
     alone — they are recomputed by backward scheduling from the new date on
     the very next read, which is the same shift by another route.
+
+    Start times slide with the deadlines, for the same reason and one more: a
+    task moved to tomorrow that still says it should have begun this morning
+    reads as urgent forever, because a start time that has gone by is exactly
+    what the scheduler treats as "you should be doing this now".
 
     A task with no deadline at all (auto-deadlines off, nothing set) has no
     delta to apply, so only the task itself is scheduled.
@@ -997,12 +1163,24 @@ def nudge_plan(tasks: list[dict], derived: dict[str, dict], task_id: str,
     # second too — otherwise a stray microsecond on one end of the subtraction
     # rounds a subtask a second away from where the plan put it.
     new_deadline = new_deadline.replace(microsecond=0)
-    moves = {task_id: new_deadline.isoformat(timespec="seconds")}
+    moves: dict[str, dict[str, str]] = {
+        task_id: {"deadline": new_deadline.isoformat(timespec="seconds")}
+    }
 
     current = parse_dt(derived.get(task_id, {}).get("deadline"))
     if current is None:
         return moves
     delta = new_deadline - current.replace(microsecond=0)
+
+    def slid(value: str | None) -> str | None:
+        when = parse_dt(value)
+        if when is None:
+            return None
+        return (when.replace(microsecond=0) + delta).isoformat(timespec="seconds")
+
+    own_start = slid(task.get("start_at"))
+    if own_start:
+        moves[task_id]["start_at"] = own_start
 
     children: dict[str | None, list[dict]] = {}
     for t in tasks:
@@ -1011,10 +1189,11 @@ def nudge_plan(tasks: list[dict], derived: dict[str, dict], task_id: str,
     while stack:
         kid = stack.pop()
         stack.extend(children.get(kid["id"], []))
-        own = parse_dt(kid["deadline"])
-        if own is not None:
-            moves[kid["id"]] = (own.replace(microsecond=0) + delta).isoformat(
-                timespec="seconds")
+        fields = {k: v for k, v in
+                  (("deadline", slid(kid["deadline"])),
+                   ("start_at", slid(kid.get("start_at")))) if v}
+        if fields:
+            moves[kid["id"]] = fields
     return moves
 
 

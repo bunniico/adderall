@@ -35,6 +35,7 @@ ALL_SCHEMAS = [
     ("compile", ai.COMPILE_SCHEMA),
     ("annotate_with_scores", ai.annotate_schema(True)),
     ("annotate_no_scores", ai.annotate_schema(False)),
+    ("annotate_with_start", ai.annotate_schema(True, want_start=True)),
 ]
 
 
@@ -63,6 +64,17 @@ def test_objects_disallow_additional_properties(name, schema):
 def test_annotate_schema_omits_scores_when_disabled():
     props = ai.annotate_schema(False)["properties"]["tasks"]["items"]["properties"]
     assert set(props) == {"id", "minutes"}
+
+
+def test_annotate_schema_asks_for_a_start_offset_only_when_wanted():
+    item = ai.annotate_schema(True, want_start=True)["properties"]["tasks"]["items"]
+    assert "start_in_minutes" in item["properties"]
+    assert "start_in_minutes" in item["required"]
+    # Minutes from now, never a date: no timezone or format for the model to
+    # get wrong, and no bound the schema is not allowed to carry.
+    assert item["properties"]["start_in_minutes"] == {"type": "integer"}
+    plain = ai.annotate_schema(True)["properties"]["tasks"]["items"]["properties"]
+    assert "start_in_minutes" not in plain
 
 
 # ---- the bounds the schema can no longer express are enforced in code ----
@@ -101,6 +113,58 @@ def test_annotate_without_scores_returns_minutes_only(monkeypatch):
     _fake_call(monkeypatch, {"tasks": [{"id": "a", "minutes": 20}]})
     got = ai.annotate({}, [{"id": "a", "title": "t"}], want_scores=False)
     assert got["a"] == {"id": "a", "minutes": 20}
+
+
+def test_annotate_clamps_a_start_offset_into_range(monkeypatch):
+    _fake_call(monkeypatch, {"tasks": [
+        {"id": "a", "minutes": 30, "impact": 5, "effort": 5,
+         "start_in_minutes": -90},
+        {"id": "b", "minutes": 30, "impact": 5, "effort": 5,
+         "start_in_minutes": 10 ** 9},
+    ]})
+    got = ai.annotate({}, [{"id": "a", "title": "t"}, {"id": "b", "title": "u"}],
+                      want_start=True, now_local="Monday 31 August 2026, 14:00")
+    assert got["a"]["start_in_minutes"] == 0                    # never the past
+    assert got["b"]["start_in_minutes"] == ai.MAX_START_MINUTES  # never past a year
+
+
+def test_annotate_ignores_a_start_offset_nobody_asked_for(monkeypatch):
+    _fake_call(monkeypatch, {"tasks": [
+        {"id": "a", "minutes": 30, "impact": 5, "effort": 5,
+         "start_in_minutes": 120},
+    ]})
+    got = ai.annotate({}, [{"id": "a", "title": "t"}])
+    assert "start_in_minutes" not in got["a"]
+
+
+def test_annotate_will_not_ask_for_a_start_without_a_clock_to_read(monkeypatch):
+    """"In two hours" is only meaningful if the model was told what hour it
+    is, so a missing local time turns the whole request off rather than
+    inviting a guess."""
+    seen = {}
+
+    def fake(settings, tier, prompt, schema, **kw):
+        seen["schema"] = schema
+        return {"tasks": [{"id": "a", "minutes": 30, "impact": 5, "effort": 5}]}
+
+    monkeypatch.setattr(ai, "_call", fake)
+    ai.annotate({}, [{"id": "a", "title": "t"}], want_start=True, now_local="")
+    item = seen["schema"]["properties"]["tasks"]["items"]["properties"]
+    assert "start_in_minutes" not in item
+
+
+def test_annotate_tells_the_model_what_time_it_is(monkeypatch):
+    seen = {}
+
+    def fake(settings, tier, prompt, schema, **kw):
+        seen["prompt"] = prompt
+        return {"tasks": []}
+
+    monkeypatch.setattr(ai, "_call", fake)
+    ai.annotate({}, [{"id": "a", "title": "eat dinner"}], want_start=True,
+                now_local="Monday 31 August 2026, 14:00 (BST)")
+    assert "Monday 31 August 2026, 14:00 (BST)" in seen["prompt"]
+    assert "start_in_minutes" in seen["prompt"]
 
 
 def test_breakdown_caps_step_count(monkeypatch):
