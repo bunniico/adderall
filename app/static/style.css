@@ -634,6 +634,10 @@ body.calendar-mode main { max-width: 1180px; }
 }
 .cal-more:hover { color: var(--accent); }
 
+/* "Starts …" on a task: the same weight as the deadline badge it sits beside,
+   in a calmer colour — it is information about later, not a thing on fire. */
+.badge.start-badge { border-color: var(--accent); color: var(--accent); }
+
 .nudge-presets { display: flex; flex-wrap: wrap; gap: 6px; }
 .nudge-presets button { flex: 1; min-width: 110px; font-size: 13px; padding: 6px 10px; }
 

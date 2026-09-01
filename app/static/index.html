@@ -148,9 +148,20 @@
       <textarea id="d-description" rows="2" placeholder="Anything specific about your situation — the AI uses this when breaking the task down"></textarea>
     </label>
     <div class="grid2">
+      <!-- When to begin, and when it has to be finished by. Two different
+           questions, and for most tasks the first one is the one you can
+           actually answer: dinner is a six o'clock thing whether or not it
+           has a deadline at all. -->
+      <label>Start at <span id="d-start-source" class="tag"></span>
+        <input id="d-start" type="datetime-local">
+      </label>
       <label>Deadline <span id="d-deadline-source" class="tag"></span>
         <input id="d-deadline" type="datetime-local">
       </label>
+    </div>
+    <div id="d-start-presets" class="nudge-presets"></div>
+    <p id="d-start-note" class="muted"></p>
+    <div class="grid2">
       <label>Raw estimate (minutes)
         <input id="d-estimate" type="number" min="1" placeholder="e.g. 45">
       </label>
@@ -338,6 +349,11 @@
 
     <label class="row"><input id="s-ai-scoring" type="checkbox">
       AI impact/effort suggestions</label>
+
+    <label class="row"><input id="s-ai-start-times" type="checkbox">
+      AI start times <span class="muted">— let the AI say when each new task
+      wants to begin. Dinner lands this evening, a game you'll get to
+      eventually lands weeks out, and the scheduler works from that.</span></label>
 
     <label class="row"><input id="s-alarms" type="checkbox">
       Transition alarms</label>

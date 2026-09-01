@@ -30,6 +30,8 @@ DEFAULT_SETTINGS = {
     "timezone": "",            # IANA name; the page reports its own on first
                                # load. Days — and the day cap — are local ideas
     "ai_scoring": True,        # let the AI seed impact/effort scores
+    "ai_start_times": True,    # let the AI say when a task wants to begin —
+                               # dinner tonight, that game some time next month
     "alarms": {
         "enabled": True,
         "stop_lead": 30,       # minutes before deadline: "stop current activity"
@@ -89,6 +91,11 @@ CREATE TABLE IF NOT EXISTS tasks (
     parent_id     TEXT REFERENCES tasks(id) ON DELETE CASCADE,
     project_id    TEXT REFERENCES projects(id) ON DELETE CASCADE,
     deadline      TEXT,
+    -- When you would like to *begin* this, as opposed to when it must be
+    -- finished by. Dinner is a six o'clock thing whatever its deadline says,
+    -- and a game you will get round to eventually is a next-month thing; the
+    -- scheduler reads this to decide which day and which hour a task lands on.
+    start_at      TEXT,
     estimated_time INTEGER,
     actual_time   INTEGER,
     impact        INTEGER,
@@ -120,7 +127,8 @@ CREATE TABLE IF NOT EXISTS progress (
 """
 
 TASK_FIELDS = {
-    "title", "description", "parent_id", "project_id", "deadline", "estimated_time",
+    "title", "description", "parent_id", "project_id", "deadline", "start_at",
+    "estimated_time",
     "actual_time", "impact", "effort", "status", "ack_thankless", "collapsed",
     "order_index", "started_at", "series_id",
 }
@@ -169,6 +177,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "ALTER TABLE tasks ADD COLUMN series_id TEXT "
             "REFERENCES series(id) ON DELETE SET NULL"
         )
+    if "start_at" not in cols:
+        # Nothing had a preferred start before this column existed, so null
+        # everywhere is exactly right: those tasks keep being placed off their
+        # quadrant horizon, the same as they were yesterday.
+        conn.execute("ALTER TABLE tasks ADD COLUMN start_at TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_series ON tasks(series_id)")
     if "project_id" not in cols:
         conn.execute(

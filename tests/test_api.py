@@ -20,11 +20,21 @@ def client(monkeypatch, tmp_path):
     importlib.reload(main)
 
     # Stub the AI so tests are hermetic.
+    # Start times come back only when they were asked for, and two hours out,
+    # so a stubbed one is always in the future rather than instantly overdue.
     monkeypatch.setattr(main.ai, "annotate",
-                        lambda settings, tasks, want_scores=True: {
-                            t["id"]: {"id": t["id"], "minutes": 30, "impact": 7, "effort": 3}
+                        lambda settings, tasks, want_scores=True,
+                               want_start=False, now_local="": {
+                            t["id"]: {"id": t["id"], "minutes": 30, "impact": 7,
+                                      "effort": 3,
+                                      **({"start_in_minutes": 120} if want_start else {})}
                             for t in tasks
                         })
+    # AI start times are on for real users and off by default here, so the
+    # scheduling tests below go on exercising the quadrant horizon rather than
+    # a stub that would pin every task in the suite to the same instant. The
+    # tests that are about start times turn the setting back on themselves.
+    db.update_settings({"ai_start_times": False})
     monkeypatch.setattr(main.ai, "breakdown",
                         lambda settings, title, desc, granularity, parents=None:
                         [f"step {i}" for i in range(1, 4)])
@@ -1345,3 +1355,114 @@ def test_enough_finished_tasks_raise_the_level(client):
     assert xp["level"] > 1                     # six real tasks is a level or two
     assert xp["level"] == logic.level_progress(total)["level"]
     assert xp["into_level"] + xp["to_next"] == xp["level_span"]
+
+
+# ---- start times, end to end ----
+
+def test_a_start_time_you_set_survives_the_round_trip(client):
+    # On a whole minute, because the planner books whole local minutes and a
+    # start time with seconds on it is rounded up to the next one.
+    at = (datetime.now(timezone.utc) + timedelta(hours=5)).replace(
+        second=0, microsecond=0)
+    when = at.isoformat()
+    task = find(create(client, title="eat dinner", start_at=when), "eat dinner")
+    assert task["start_at"] == when
+    # And it is what the task is scheduled from: the block begins there.
+    end = datetime.fromisoformat(task["deadline"])
+    assert end - timedelta(minutes=task["length_min"]) == at
+
+
+def test_a_start_time_can_be_changed_and_cleared(client):
+    task = find(create(client, title="thing", start_at=iso_in(hours=2)), "thing")
+    moved = iso_in(days=3)
+    state = client.patch(f"/api/tasks/{task['id']}", json={"start_at": moved}).json()
+    assert find(state, "thing")["start_at"] == moved
+
+    state = client.patch(f"/api/tasks/{task['id']}",
+                         json={"clear_start_at": True}).json()
+    assert find(state, "thing")["start_at"] is None
+
+
+def test_a_start_time_weeks_out_sinks_below_work_for_today(client):
+    """The two halves of the feature, side by side on one list."""
+    create(client, title="eat dinner", start_at=iso_in(hours=3),
+           estimated_time=30, impact=5, effort=2)
+    create(client, title="finish that game", start_at=iso_in(days=30),
+           estimated_time=240, impact=5, effort=2)
+    state = client.get("/api/state").json()
+
+    dinner, game = find(state, "eat dinner"), find(state, "finish that game")
+    assert dinner["urgency"] > game["urgency"]
+    assert dinner["score"] > game["score"]
+    assert state["next_task_id"] == dinner["id"]
+
+
+def test_the_ai_fills_in_a_start_time_for_a_new_top_level_task(client):
+    client.put("/api/settings", json={"ai_start_times": True})
+    before = datetime.now(timezone.utc)
+    task = find(create(client, title="eat dinner"), "eat dinner")
+    # The stub answers "in two hours"; the app turns that offset into an instant.
+    assert task["start_at"] is not None
+    gap = datetime.fromisoformat(task["start_at"]) - before
+    assert timedelta(minutes=118) <= gap <= timedelta(minutes=122)
+
+
+def test_the_ai_leaves_start_times_off_the_steps_inside_a_task(client):
+    """A step is scheduled inside its parent's slot, so a start time on one
+    would be a number nothing reads."""
+    client.put("/api/settings", json={"ai_start_times": True})
+    parent = find(create(client, title="move house"), "move house")
+    state = client.post(f"/api/tasks/{parent['id']}/breakdown", json={}).json()
+    steps = find(state, "move house")["subtasks"]
+    assert steps and all(s["start_at"] is None for s in steps)
+
+
+def test_a_start_time_the_ai_suggested_can_be_turned_off(client):
+    client.put("/api/settings", json={"ai_start_times": False})
+    assert find(create(client, title="eat dinner"), "eat dinner")["start_at"] is None
+
+
+def test_nudging_a_task_carries_its_start_time_with_it(client):
+    """Left behind, the start time would keep the task reading as urgent from
+    a moment that has gone."""
+    task = find(create(client, title="overdue thing",
+                       deadline=iso_in(hours=-3), start_at=iso_in(hours=-4)),
+                "overdue thing")
+    target = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(days=2)
+    state = client.post("/api/nudge", json={
+        "nudges": [{"task_id": task["id"], "deadline": target.isoformat()}]}).json()
+
+    moved = find(state, "overdue thing")
+    assert datetime.fromisoformat(moved["deadline"]) == target
+    # Still an hour ahead of the deadline, exactly as it was before the nudge.
+    assert (target - datetime.fromisoformat(moved["start_at"])) == timedelta(hours=1)
+
+
+def test_the_calendar_says_when_a_block_was_meant_to_begin(client):
+    when = iso_in(hours=4)
+    create(client, title="eat dinner", start_at=when, estimated_time=30)
+    payload = client.get("/api/calendar").json()
+    assert event(payload, "eat dinner")["start_at"] == when
+
+
+def test_nudging_a_parent_and_its_child_at_once_gives_each_its_own_start(client):
+    """The child was named in the same call, so its own new deadline decides
+    where it starts — not the slide its parent's move would have given it."""
+    parent = find(create(client, title="parent", deadline=iso_in(hours=-3),
+                         start_at=iso_in(hours=-4)), "parent")
+    child = client.post("/api/tasks", json={
+        "title": "child", "parent_id": parent["id"], "annotate": False,
+        "deadline": iso_in(hours=-5), "start_at": iso_in(hours=-6)}).json()
+    assert find(child, "child")
+
+    base = datetime.now(timezone.utc).replace(microsecond=0)
+    p_at, c_at = base + timedelta(days=2), base + timedelta(days=5)
+    state = client.post("/api/nudge", json={"nudges": [
+        {"task_id": parent["id"], "deadline": p_at.isoformat()},
+        {"task_id": find(child, "child")["id"], "deadline": c_at.isoformat()},
+    ]}).json()
+
+    kid = find(state, "child")
+    assert datetime.fromisoformat(kid["deadline"]) == c_at
+    # Its start kept its own one-hour lead, measured from its own new deadline.
+    assert c_at - datetime.fromisoformat(kid["start_at"]) == timedelta(hours=1)

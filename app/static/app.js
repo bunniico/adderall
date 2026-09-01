@@ -765,6 +765,11 @@ function taskNode(task, isSub) {
       const b = add(`~${fmtMinutes(est)}`, "");
       if (task.has_subtasks) b.title = "Total of all subtasks";
     }
+    // When it is due to begin, when that is still ahead of you. A deadline
+    // says when it must be finished; on a list of things you have not started,
+    // "starts 18:00" is usually the more useful half.
+    const startBadge = fmtStart(task.start_at);
+    if (startBadge) add(startBadge.label, "start-badge").title = startBadge.title;
     const dl = fmtDeadline(dlIso);
     // A deadline that has gone by is the one badge worth making clickable:
     // the thing you want the second you read it is to move it, and the
@@ -820,6 +825,27 @@ function taskNode(task, isSub) {
     el.appendChild(wrap);
   }
   return el;
+}
+
+/* The "starts …" badge, or nothing.
+ *
+ * Only ever shown while the start time is still ahead: once it has gone by,
+ * the task is simply something you should be doing, which the urgency and the
+ * deadline badge already say more usefully than a stale timestamp would. */
+function fmtStart(iso) {
+  if (!iso) return null;
+  const when = new Date(iso);
+  const mins = Math.round((when - Date.now()) / 60000);
+  if (mins <= 0) return null;
+  const today = new Date().toDateString() === when.toDateString();
+  const clock = when.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return {
+    label: mins < 60 ? `⏳ starts in ${fmtMinutes(mins)}`
+         : today ? `⏳ starts ${clock}`
+         : `⏳ starts ${when.toLocaleDateString([], { month: "short", day: "numeric" })}`,
+    title: `Meant to begin ${when.toLocaleString()} — the scheduler places it ` +
+           `from there, and it stays out of the way until then.`,
+  };
 }
 
 /* What the score means, in the one place both the list badge and the detail
@@ -1427,6 +1453,9 @@ function openDetail(id) {
   $("d-deadline-source").textContent =
     task.deadline_source === "auto" ? `auto: ${new Date(task.deadline).toLocaleString()}` :
     task.deadline_source === "user" ? "set by you" : "none";
+  $("d-start").value = isoToLocalInput(task.start_at);
+  renderStartPresets();
+  updateStartNote();
   $("d-estimate").value = task.estimated_time ?? "";
   $("d-impact").value = task.impact ?? 5;
   $("d-effort").value = task.effort ?? 5;
@@ -1448,6 +1477,119 @@ function openDetail(id) {
   loadRepeat(task);
   updateDetailDerived();
   $("modal-detail").showModal();
+}
+
+/* ---------------- start times ----------------
+ * When you would like to *begin* a task, which is a different question from
+ * when it has to be finished by — and for most things the easier one to
+ * answer. Dinner is a six o'clock thing; a game you will get round to
+ * eventually is a next-month thing. The server schedules from it: a task with
+ * a start time is placed at that hour, ahead of whatever wanted the same slot
+ * and matters less, and one set weeks out stops competing for today.
+ *
+ * The presets exist because a datetime picker is exactly the friction this
+ * app is built to remove — "tonight" is one click, not six.
+ */
+
+const START_PRESETS = [
+  { label: "Now", hint: "right away", at: () => new Date() },
+  { label: "In an hour", hint: "an hour from now", at: () => new Date(Date.now() + 3600e3) },
+  {
+    label: "This evening",
+    hint: "6pm today, or tomorrow evening if that has gone",
+    at: () => {
+      const d = new Date();
+      d.setHours(18, 0, 0, 0);
+      return d > new Date() ? d : (d.setDate(d.getDate() + 1), d);
+    },
+  },
+  {
+    label: "Tomorrow morning",
+    hint: "9am tomorrow",
+    at: () => {
+      const d = new Date();
+      d.setDate(d.getDate() + 1);
+      d.setHours(9, 0, 0, 0);
+      return d;
+    },
+  },
+  {
+    label: "Next week",
+    hint: "a week out, same time of day",
+    at: () => new Date(Date.now() + 7 * 24 * 3600e3),
+  },
+  {
+    // The "it genuinely does not matter when" end of the scale, and the whole
+    // reason the field is worth having: something parked a month out stops
+    // taking the good hours away from work that needed them.
+    label: "Some day",
+    hint: "a month out — parked, and out of the way until then",
+    at: () => {
+      const d = new Date();
+      d.setMonth(d.getMonth() + 1);
+      return d;
+    },
+  },
+];
+
+function renderStartPresets() {
+  const row = $("d-start-presets");
+  row.replaceChildren();
+  for (const preset of START_PRESETS) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "ghost";
+    btn.textContent = preset.label;
+    btn.title = `Start ${preset.hint}`;
+    btn.addEventListener("click", () => {
+      $("d-start").value = isoToLocalInput(preset.at().toISOString());
+      updateStartNote();
+    });
+    row.appendChild(btn);
+  }
+  const clear = document.createElement("button");
+  clear.type = "button";
+  clear.className = "ghost";
+  clear.textContent = "No start time";
+  clear.title = "Let the app pick a day from the task's quadrant, as it did before";
+  clear.addEventListener("click", () => { $("d-start").value = ""; updateStartNote(); });
+  row.appendChild(clear);
+}
+
+/* What setting this actually does, in the dialog, while you set it. The two
+ * cases read very differently and both are worth saying out loud. */
+function updateStartNote() {
+  const raw = $("d-start").value;
+  const task = findAnyTask(detailTaskId);
+  const tag = $("d-start-source");
+  const note = $("d-start-note");
+  if (!raw) {
+    tag.textContent = "none";
+    note.textContent = task?.parent_id
+      ? "This step is scheduled inside its parent's slot."
+      : "No preferred start — the app picks a day from the task's quadrant.";
+    return;
+  }
+  const when = new Date(raw);
+  const hours = (when - Date.now()) / 3600e3;
+  tag.textContent = task?.start_at &&
+    Math.abs(new Date(task.start_at) - when) < 60000 ? "set" : "unsaved";
+  if (task?.parent_id) {
+    // A step is placed inside the block its parent was given, so a start time
+    // on one changes how loudly it asks for attention, not where it lands.
+    note.textContent = "A step is scheduled inside its parent's slot, so this " +
+      "raises how urgent the step reads rather than moving it.";
+  } else if (hours <= 0) {
+    note.textContent = "That has already gone by — the task reads as ready to " +
+      "start now, and will keep saying so until you do it or move it.";
+  } else if (hours <= 6) {
+    note.textContent = `Starts in ${fmtMinutes(Math.round(hours * 60))} — the ` +
+      `scheduler puts it in the first slot that fits from then, ahead of ` +
+      `anything wanting the same hours that matters less.`;
+  } else {
+    note.textContent = `Starts ${when.toLocaleString()} — parked until then, ` +
+      `and out of the running for today's hours.`;
+  }
 }
 
 function updateDetailDerived() {
@@ -1495,6 +1637,9 @@ async function saveDetail() {
   const dl = $("d-deadline").value;
   if (dl) fields.deadline = new Date(dl).toISOString();
   else fields.clear_deadline = true;
+  const start = $("d-start").value;
+  if (start) fields.start_at = new Date(start).toISOString();
+  else fields.clear_start_at = true;
   const task = findAnyTask(detailTaskId);
   const targetProject = $("d-project").value;
   const moving = !$("d-project-row").hidden && task &&
@@ -1910,6 +2055,7 @@ function openSettings() {
   $("s-threshold").value = settings.matrix_threshold;
   $("s-threshold-val").textContent = settings.matrix_threshold;
   $("s-ai-scoring").checked = settings.ai_scoring;
+  $("s-ai-start-times").checked = settings.ai_start_times;
   $("s-alarms").checked = settings.alarms.enabled;
   $("s-stop-lead").value = settings.alarms.stop_lead;
   $("s-ready-lead").value = settings.alarms.ready_lead;
@@ -1938,6 +2084,7 @@ async function saveSettings() {
     spread_tasks: $("s-spread").checked,
     matrix_threshold: Number($("s-threshold").value),
     ai_scoring: $("s-ai-scoring").checked,
+    ai_start_times: $("s-ai-start-times").checked,
     alarms: {
       enabled: $("s-alarms").checked,
       stop_lead: Number($("s-stop-lead").value),
@@ -2540,6 +2687,7 @@ function wire() {
   $("d-impact").addEventListener("input", updateDetailDerived);
   $("d-effort").addEventListener("input", updateDetailDerived);
   $("d-estimate").addEventListener("input", updateDetailDerived);
+  $("d-start").addEventListener("input", updateStartNote);
   $("d-save").addEventListener("click", saveDetail);
   $("d-breakdown").addEventListener("click", async () => {
     $("modal-detail").close();

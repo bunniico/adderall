@@ -10,7 +10,7 @@ import logging
 import os
 import sys
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -71,10 +71,13 @@ class TaskCreate(BaseModel):
     description: str = ""
     parent_id: str | None = None
     deadline: str | None = None
+    # When you would like to *begin*, as opposed to be finished by. Left
+    # unset, the AI is asked for one (see `_annotate_tasks`).
+    start_at: str | None = None
     estimated_time: int | None = Field(default=None, ge=1)
     impact: int | None = Field(default=None, ge=0, le=10)
     effort: int | None = Field(default=None, ge=0, le=10)
-    annotate: bool = True  # ask the AI for estimate/scores when missing
+    annotate: bool = True  # ask the AI for estimate/scores/start when missing
 
 
 class TaskUpdate(BaseModel):
@@ -82,6 +85,8 @@ class TaskUpdate(BaseModel):
     description: str | None = None
     deadline: str | None = None
     clear_deadline: bool = False
+    start_at: str | None = None
+    clear_start_at: bool = False
     estimated_time: int | None = Field(default=None, ge=1)
     impact: int | None = Field(default=None, ge=0, le=10)
     effort: int | None = Field(default=None, ge=0, le=10)
@@ -368,6 +373,9 @@ def _calendar_events() -> list[dict]:
                 "status": t["status"],
                 "deadline": d["deadline"],
                 "deadline_source": d["deadline_source"],
+                # When it wanted to begin, which for anything the app placed
+                # itself is also where its block starts.
+                "start_at": t["start_at"],
                 "estimated_time": t["estimated_time"],
                 "buffered_estimate": d["buffered_estimate"],
                 "buffer_applied": d["buffer_applied"],
@@ -390,22 +398,47 @@ def _calendar_events() -> list[dict]:
     return events
 
 
-def _annotate_tasks(task_ids: list[str], want_scores: bool) -> None:
-    """Best effort: fill missing estimates/scores via one batched fast-tier
-    call. Never blocks or fails the surrounding operation."""
+def _now_local(settings: dict) -> str:
+    """The clock the AI is told it is reading, in the user's own timezone.
+
+    A start time is the one thing the model is asked for that it cannot work
+    out from the task alone: "eat dinner" is six hours off at noon and thirty
+    minutes off at half past five, and only the local hour says which.
+    """
+    tz = logic.resolve_tz(settings.get("timezone"))
+    return datetime.now(tz).strftime("%A %d %B %Y, %H:%M (%Z)").strip()
+
+
+def _annotate_tasks(task_ids: list[str], want_scores: bool,
+                    want_start: bool = False) -> None:
+    """Best effort: fill missing estimates, scores and start times via one
+    batched fast-tier call. Never blocks or fails the surrounding operation.
+
+    Start times are only ever written onto top-level tasks. A step inside a
+    task is scheduled from the slot its parent was given — that is what makes
+    a plan one block on the calendar rather than a scatter — so a start time
+    on one would be a number nothing reads.
+    """
     settings = db.get_settings()
     targets = []
     for tid in task_ids:
         t = db.get_task(tid)
-        if t and (t["estimated_time"] is None or
-                  (want_scores and (t["impact"] is None or t["effort"] is None))):
+        if not t:
+            continue
+        wants_start = want_start and t["parent_id"] is None and t["start_at"] is None
+        if (t["estimated_time"] is None or wants_start or
+                (want_scores and (t["impact"] is None or t["effort"] is None))):
             targets.append(t)
     if not targets:
         return
+    ask_start = want_start and any(t["parent_id"] is None for t in targets)
     try:
-        results = ai.annotate(settings, targets, want_scores=want_scores)
+        results = ai.annotate(settings, targets, want_scores=want_scores,
+                              want_start=ask_start,
+                              now_local=_now_local(settings) if ask_start else "")
     except (ai.AIUnavailable, Exception):
         return
+    now = datetime.now(timezone.utc)
     for t in targets:
         row = results.get(t["id"])
         if not row:
@@ -417,6 +450,10 @@ def _annotate_tasks(task_ids: list[str], want_scores: bool) -> None:
             fields["impact"] = int(row["impact"])
         if want_scores and t["effort"] is None and row.get("effort") is not None:
             fields["effort"] = int(row["effort"])
+        if (ask_start and t["parent_id"] is None and t["start_at"] is None
+                and row.get("start_in_minutes") is not None):
+            when = now + timedelta(minutes=int(row["start_in_minutes"]))
+            fields["start_at"] = when.isoformat(timespec="seconds")
         if fields:
             db.update_task(t["id"], fields)
 
@@ -667,16 +704,20 @@ def create_task(body: TaskCreate):
     _reveal(body.parent_id)
     settings = db.get_settings()
     if body.annotate:
-        _annotate_tasks([task["id"]], want_scores=settings["ai_scoring"])
+        _annotate_tasks([task["id"]], want_scores=settings["ai_scoring"],
+                        want_start=settings["ai_start_times"])
     return _state()
 
 
 @app.patch("/api/tasks/{task_id}")
 def update_task(task_id: str, body: TaskUpdate):
     _require_task(task_id)
-    fields = body.model_dump(exclude_unset=True, exclude={"clear_deadline"})
+    fields = body.model_dump(exclude_unset=True,
+                             exclude={"clear_deadline", "clear_start_at"})
     if body.clear_deadline:
         fields["deadline"] = None
+    if body.clear_start_at:
+        fields["start_at"] = None
     if fields.get("status") == "in_progress":
         fields["started_at"] = db.now_iso()
     if fields.get("status") == "done":
@@ -893,9 +934,15 @@ def breakdown_task(task_id: str, body: BreakdownRequest):
 def annotate_task(task_id: str):
     task = _require_task(task_id)
     settings = db.get_settings()
-    # Explicit re-annotation clears prior AI values so they refresh.
+    # Explicit re-annotation clears prior AI values so they refresh — the
+    # start time included, since asking again is how you say "you had this
+    # one wrong". Only for a top-level task: a step is scheduled inside its
+    # parent's slot, so a start time on one would go unread.
+    want_start = bool(settings["ai_start_times"]) and task["parent_id"] is None
     try:
-        results = ai.annotate(settings, [task], want_scores=settings["ai_scoring"])
+        results = ai.annotate(settings, [task], want_scores=settings["ai_scoring"],
+                              want_start=want_start,
+                              now_local=_now_local(settings) if want_start else "")
     except ai.AIUnavailable as exc:
         raise HTTPException(502, str(exc))
     row = results.get(task_id)
@@ -906,6 +953,10 @@ def annotate_task(task_id: str):
                 fields["impact"] = int(row["impact"])
             if row.get("effort") is not None:
                 fields["effort"] = int(row["effort"])
+        if want_start and row.get("start_in_minutes") is not None:
+            when = (datetime.now(timezone.utc)
+                    + timedelta(minutes=int(row["start_in_minutes"])))
+            fields["start_at"] = when.isoformat(timespec="seconds")
         db.update_task(task_id, fields)
     return _state()
 
@@ -954,7 +1005,8 @@ def compile_braindump(body: CompileRequest):
             plant(item.get("subtasks") or [], task["id"])
 
     plant(items, None)
-    _annotate_tasks(new_ids, want_scores=settings["ai_scoring"])
+    _annotate_tasks(new_ids, want_scores=settings["ai_scoring"],
+                    want_start=settings["ai_start_times"])
     return _state()
 
 
@@ -1054,19 +1106,22 @@ def nudge(body: NudgeRequest):
     for t in db.list_tasks():
         by_project.setdefault(t["project_id"], []).append(t)
 
-    moves: dict[str, str] = {}
+    moves: dict[str, dict[str, str]] = {}
     for task_id, when in wanted.items():
         task = db.get_task(task_id)
         tasks = by_project.get(task["project_id"], [])
         derived = logic.compute(tasks, settings, ratios)
-        # Later entries win, so nudging a parent and one of its children in the
-        # same call lands the child where it was asked to go.
-        for tid, iso in logic.nudge_plan(tasks, derived, task_id, when).items():
-            moves.setdefault(tid, iso)
-        moves[task_id] = when.isoformat(timespec="seconds")
+        plan = logic.nudge_plan(tasks, derived, task_id, when)
+        for tid, fields in plan.items():
+            moves.setdefault(tid, dict(fields))
+        # The task this entry actually names wins outright, at both ends: a
+        # parent's slide must not be what decides where its explicitly nudged
+        # child starts, only where the rest of the plan around it does.
+        moves[task_id] = dict(plan.get(task_id, {}))
+        moves[task_id]["deadline"] = when.isoformat(timespec="seconds")
 
-    for tid, iso in moves.items():
-        db.update_task(tid, {"deadline": iso})
+    for tid, fields in moves.items():
+        db.update_task(tid, fields)
     return _state()
 
 

@@ -16,7 +16,8 @@ SETTINGS = {
 def make_task(id, **kw):
     base = {
         "id": id, "title": id, "description": "", "parent_id": None,
-        "deadline": None, "estimated_time": None, "actual_time": None,
+        "deadline": None, "start_at": None,
+        "estimated_time": None, "actual_time": None,
         "impact": None, "effort": None, "status": "todo",
         "ack_thankless": False, "order_index": 0,
         "started_at": None,
@@ -683,12 +684,39 @@ def test_nudge_plan_moves_the_task_and_slides_its_subtasks():
     target = NOW + timedelta(days=2)
     moves = logic.nudge_plan(tasks, derived, "p", target)
 
-    assert logic.parse_dt(moves["p"]) == target
+    assert logic.parse_dt(moves["p"]["deadline"]) == target
     # delta is +3 days; every user-set deadline underneath moves by exactly that
-    assert logic.parse_dt(moves["k"]) == NOW + timedelta(days=0)
-    assert logic.parse_dt(moves["g"]) == NOW - timedelta(days=1)
+    assert logic.parse_dt(moves["k"]["deadline"]) == NOW + timedelta(days=0)
+    assert logic.parse_dt(moves["g"]["deadline"]) == NOW - timedelta(days=1)
     # ...so the gaps between them — the length of the plan — are unchanged
-    assert logic.parse_dt(moves["p"]) - logic.parse_dt(moves["k"]) == timedelta(days=2)
+    assert (logic.parse_dt(moves["p"]["deadline"])
+            - logic.parse_dt(moves["k"]["deadline"])) == timedelta(days=2)
+
+
+def test_nudge_plan_slides_start_times_by_the_same_delta():
+    """A start time left behind would say "you should be doing this now"
+    forever, whatever date the task was moved to."""
+    parent = make_task("p", deadline=(NOW - timedelta(days=1)).isoformat(),
+                       start_at=(NOW - timedelta(days=1, hours=1)).isoformat())
+    kid = make_task("k", parent_id="p",
+                    deadline=(NOW - timedelta(days=3)).isoformat(),
+                    start_at=(NOW - timedelta(days=3, hours=2)).isoformat())
+    tasks = [parent, kid]
+    derived = logic.compute(tasks, SETTINGS, now=NOW)
+
+    moves = logic.nudge_plan(tasks, derived, "p", NOW + timedelta(days=2))
+
+    # +3 days, the same shift the deadlines took, so each task still begins
+    # exactly one hour (and two) before it is due.
+    assert logic.parse_dt(moves["p"]["start_at"]) == NOW + timedelta(days=2) - timedelta(hours=1)
+    assert logic.parse_dt(moves["k"]["start_at"]) == NOW - timedelta(hours=2)
+
+
+def test_nudge_plan_leaves_a_task_without_a_start_time_alone():
+    parent = make_task("p", deadline=(NOW - timedelta(days=1)).isoformat())
+    derived = logic.compute([parent], SETTINGS, now=NOW)
+    moves = logic.nudge_plan([parent], derived, "p", NOW + timedelta(days=1))
+    assert "start_at" not in moves["p"]
 
 
 def test_nudge_plan_leaves_auto_deadlines_to_reschedule_themselves():
@@ -705,7 +733,7 @@ def test_nudge_plan_handles_a_task_with_no_deadline_at_all():
     settings = {**SETTINGS, "auto_deadlines": False}
     derived = logic.compute([task], settings, now=NOW)
     moves = logic.nudge_plan([task], derived, "solo", NOW + timedelta(hours=2))
-    assert logic.parse_dt(moves["solo"]) == NOW + timedelta(hours=2)
+    assert logic.parse_dt(moves["solo"]["deadline"]) == NOW + timedelta(hours=2)
 
 
 def test_nudge_plan_ignores_an_unknown_task():
@@ -812,12 +840,15 @@ def test_a_tree_is_booked_once_not_once_per_step():
     derived = logic.compute([parent, *kids, other], SETTINGS, now=NOW)
 
     # The tree is one span: its last step ends exactly on the parent's deadline
-    # and its first starts one subtree's worth of work earlier.
+    # and its first starts one subtree's worth of work earlier. Both tasks want
+    # the same day, and the cheap one takes the morning — the day is handed out
+    # by score, so the 78-minute job runs 09:00-10:18 and the tree follows.
     parent_end = logic.parse_dt(derived["p"]["deadline"])
     assert logic.parse_dt(derived["c1"]["deadline"]) == parent_end
     assert derived["p"]["length_min"] == 2 * 156
+    assert derived["other"]["deadline"] == "2026-08-30T10:18:00+00:00"
     assert (parent_end - timedelta(minutes=2 * 156)).isoformat() == \
-        "2026-08-30T09:00:00+00:00"
+        "2026-08-30T10:18:00+00:00"
     # 312 minutes of tree plus 78 of the other task is inside the eight-hour
     # cap, so both fit on the same day. Charging the day for the container as
     # well as the steps it is made of would have come to 702 and pushed the
@@ -1004,3 +1035,182 @@ def test_level_progress_never_goes_backwards_or_negative():
     assert logic.level_progress(-50)["total"] == 0
     levels = [logic.level_progress(n)["level"] for n in range(0, 2000, 37)]
     assert levels == sorted(levels)
+
+
+# ---- start times: when a task wants to begin ----
+# The scheduler's other question. A deadline says when work must be finished;
+# a start time says which hour of which day it belongs to, which for most of
+# what people actually write down is the easier thing to know and the more
+# useful thing to schedule from.
+
+TZ_SETTINGS = {**SETTINGS, "spread_tasks": True, "day_start": 9,
+               "day_capacity": 480, "timezone": "UTC"}
+
+
+def test_start_pressure_peaks_at_the_hour_and_decays_with_the_wait():
+    assert logic.start_pressure(None, NOW) is None          # said nothing
+    assert logic.start_pressure(NOW, NOW) == 10.0           # now
+    assert logic.start_pressure(NOW - timedelta(days=2), NOW) == 10.0  # overdue
+    assert logic.start_pressure(NOW + timedelta(hours=1), NOW) == 8.0
+    assert logic.start_pressure(NOW + timedelta(hours=4), NOW) == 5.0
+    assert logic.start_pressure(NOW + timedelta(hours=6), NOW) == 4.0
+    # A month out is parked, not merely quiet: it sits on the floor.
+    assert logic.start_pressure(NOW + timedelta(days=30), NOW) == 0.5
+
+
+def test_urgency_hears_a_start_time_that_has_arrived():
+    """A deadline days away does not stop dinner being a dinner-time problem."""
+    far = NOW + timedelta(days=5)
+    assert logic.urgency(far, 30, NOW) < 1.0
+    assert logic.urgency(far, 30, NOW, start_at=NOW) == 10.0
+    # ...and a start time far out never *raises* anything.
+    assert logic.urgency(far, 30, NOW, start_at=NOW + timedelta(days=30)) == \
+        logic.urgency(far, 30, NOW)
+
+
+def test_urgency_takes_the_higher_reading_not_the_sum():
+    """An auto-scheduled task is placed at its start time, so its deadline
+    pressure and its start pressure are two views of one fact."""
+    soon = NOW + timedelta(minutes=10)
+    assert logic.urgency(soon, 30, NOW, start_at=NOW) == 10.0
+
+
+def test_a_start_time_places_the_task_at_that_hour():
+    """The 'eat dinner' case: it lands this evening, not at tomorrow's 9am."""
+    dinner = NOW.replace(hour=18, minute=0)
+    task = make_task("dinner", estimated_time=30, start_at=dinner.isoformat())
+    derived = logic.compute([task], TZ_SETTINGS, now=NOW)
+
+    end = logic.parse_dt(derived["dinner"]["deadline"])
+    assert derived["dinner"]["deadline_source"] == "auto"
+    # Buffered to 39 minutes, running from six o'clock.
+    assert end - timedelta(minutes=39) == dinner
+
+
+def test_a_start_time_outside_working_hours_is_still_honoured():
+    """Office hours are where the app puts work it chose the hour for itself,
+    not a rule about when you are allowed to eat."""
+    late = NOW.replace(hour=21, minute=30)
+    task = make_task("supper", estimated_time=30, start_at=late.isoformat())
+    derived = logic.compute([task], TZ_SETTINGS, now=NOW)
+    assert logic.parse_dt(derived["supper"]["deadline"]) > late
+
+
+def test_a_start_time_in_the_past_starts_now_not_yesterday_morning():
+    """It has slipped, so it goes in as soon as you could actually begin."""
+    gone = NOW - timedelta(hours=3)
+    task = make_task("late", estimated_time=30, start_at=gone.isoformat())
+    derived = logic.compute([task], TZ_SETTINGS, now=NOW)
+    assert logic.parse_dt(derived["late"]["deadline"]) >= NOW
+
+
+def test_a_start_time_weeks_out_parks_the_task_there():
+    """The 'finish that game' case: put it at the far end and stop competing
+    with today's work for today's hours."""
+    someday = NOW + timedelta(days=30)
+    game = make_task("game", estimated_time=240, start_at=someday.isoformat())
+    derived = logic.compute([game], TZ_SETTINGS, now=NOW)
+
+    assert logic.parse_dt(derived["game"]["deadline"]) >= someday
+    assert derived["game"]["urgency"] < 1.0     # nothing to do about it yet
+
+
+def test_a_task_starting_soon_takes_the_slot_from_one_that_can_wait():
+    """The pushing half: two tasks want the same afternoon, together they do
+    not fit in it, and only one of them has a reason to want it *now*.
+
+    260 buffered minutes each and 300 left in today's window, so exactly one
+    of them can have today. Placement used to follow list order, which would
+    have given it to the chores purely for having been typed first and left
+    dinner starting at twenty past four.
+    """
+    soon = NOW + timedelta(hours=1)
+    dinner = make_task("dinner", estimated_time=200, start_at=soon.isoformat(),
+                       order_index=1)
+    # A fill-in written down three days ago, so its own horizon lands it on
+    # today too — and it is the less urgent of the two, which is the only
+    # ground on which a start time gets to push anything.
+    chores = make_task("chores", estimated_time=200, impact=2, effort=2,
+                       order_index=0,
+                       created_at=(NOW - timedelta(days=3)).isoformat())
+    derived = logic.compute([dinner, chores], TZ_SETTINGS, now=NOW)
+
+    # Dinner gets today, at the hour it asked for.
+    assert logic.parse_dt(derived["dinner"]["deadline"]) == \
+        soon + timedelta(minutes=260)
+    # The chores move to tomorrow rather than sitting on top of it.
+    assert logic.parse_dt(derived["chores"]["deadline"]).date() == \
+        (NOW + timedelta(days=1)).date()
+
+
+def test_a_start_time_does_not_pull_work_onto_an_hour_already_taken():
+    """It asks for six o'clock; if six o'clock is spoken for it takes the
+    next free stretch rather than double-booking it."""
+    at_six = NOW.replace(hour=18, minute=0)
+    booked = make_task("meeting", estimated_time=60,
+                       deadline=(at_six + timedelta(minutes=78)).isoformat())
+    dinner = make_task("dinner", estimated_time=30, start_at=at_six.isoformat())
+    derived = logic.compute([booked, dinner], TZ_SETTINGS, now=NOW)
+
+    dinner_end = logic.parse_dt(derived["dinner"]["deadline"])
+    assert dinner_end - timedelta(minutes=39) >= at_six + timedelta(minutes=78)
+
+
+def test_two_things_pinned_to_the_same_hour_run_back_to_back():
+    at_six = NOW.replace(hour=18, minute=0)
+    a = make_task("a", estimated_time=30, start_at=at_six.isoformat(),
+                  order_index=0)
+    b = make_task("b", estimated_time=30, start_at=at_six.isoformat(),
+                  order_index=1)
+    derived = logic.compute([a, b], TZ_SETTINGS, now=NOW)
+
+    ends = sorted(logic.parse_dt(derived[i]["deadline"]) for i in ("a", "b"))
+    assert ends[0] == at_six + timedelta(minutes=39)
+    assert ends[1] == ends[0] + timedelta(minutes=39)   # butted up, not on top
+
+
+def test_a_step_is_scheduled_inside_its_parents_slot_start_time_or_not():
+    """A start time on a step raises how urgent it reads; the plan is still
+    one block, because that is what makes a plan readable."""
+    parent = make_task("p", estimated_time=60)
+    kid = make_task("k", parent_id="p", estimated_time=60,
+                    start_at=NOW.isoformat())
+    derived = logic.compute([parent, kid], TZ_SETTINGS, now=NOW)
+
+    # The step ends on its parent's deadline, exactly as it would without one.
+    assert derived["k"]["deadline"] == derived["p"]["deadline"]
+    assert derived["k"]["urgency"] == 10.0      # but it is heard
+
+
+def test_start_times_work_with_spreading_turned_off():
+    """No day book to consult, so the start time is simply taken at its word."""
+    settings = {**TZ_SETTINGS, "spread_tasks": False}
+    at_six = NOW.replace(hour=18, minute=0)
+    task = make_task("dinner", estimated_time=30, start_at=at_six.isoformat())
+    derived = logic.compute([task], settings, now=NOW)
+    assert logic.parse_dt(derived["dinner"]["deadline"]) == \
+        at_six + timedelta(minutes=39)
+
+
+def test_a_deadline_you_set_still_wins_over_a_start_time():
+    """You said when it is due; the start time is then an intention, not a
+    second opinion about the date."""
+    mine = NOW + timedelta(days=2)
+    task = make_task("t", estimated_time=30, deadline=mine.isoformat(),
+                     start_at=(NOW + timedelta(days=9)).isoformat())
+    derived = logic.compute([task], TZ_SETTINGS, now=NOW)
+    assert logic.parse_dt(derived["t"]["deadline"]) == mine
+    assert derived["t"]["deadline_source"] == "user"
+
+
+def test_tasks_without_start_times_are_placed_exactly_as_before():
+    """The feature is opt-in per task: a list that never uses it schedules
+    the way it always did, off the quadrant horizon."""
+    quick = make_task("quick", estimated_time=60, impact=8, effort=2)
+    slog = make_task("slog", estimated_time=60, impact=8, effort=8)
+    derived = logic.compute([quick, slog], TZ_SETTINGS, now=NOW)
+    # quick_win horizon is a day out, major_project a week.
+    assert logic.parse_dt(derived["quick"]["deadline"]).date() == \
+        (NOW + timedelta(days=1)).date()
+    assert logic.parse_dt(derived["slog"]["deadline"]).date() == \
+        (NOW + timedelta(days=7)).date()
