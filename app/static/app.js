@@ -1259,7 +1259,7 @@ function renderXp() {
     // losing your progress rather than as passing a milestone.
     const upMs = xpFillDuration(1 - previous.progress);
     xpFill(1, false, upMs);
-    Motion.play("xpgain", { durationMs: upMs });
+    Motion.play("xpgain", { durationMs: upMs, progress: 1 });
     setTimeout(() => {
       xpFill(0, true);          // back to empty with no animation at all
       const downMs = xpFillDuration(xp.progress);
@@ -1268,13 +1268,13 @@ function renderXp() {
       void meter.offsetWidth;   // restart the flash if two levels land at once
       meter.classList.add("levelup");
       Motion.play("levelup");
-      Motion.play("xpgain", { durationMs: downMs });
+      Motion.play("xpgain", { durationMs: downMs, progress: xp.progress });
       toast(`Level ${xp.level}! ${xp.to_next} XP to the next one.`);
     }, upMs + 40);
   } else {
     const ms = xpFillDuration(xp.progress - previous.progress);
     xpFill(xp.progress, false, ms);
-    Motion.play("xpgain", { durationMs: ms });
+    Motion.play("xpgain", { durationMs: ms, progress: xp.progress });
   }
 }
 

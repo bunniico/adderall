@@ -106,12 +106,18 @@ const Motion = (() => {
    * roll of rising blips scheduled on the Web Audio clock (so it can't drift
    * the way a setTimeout chain would), timed to the width of the fill
    * animation the caller is already running. A small gain is a quick
-   * double-tap; a big one is a real climb. */
-  function xpRoll(c, at, { durationMs = 300 } = {}) {
+   * double-tap; a big one is a real climb.
+   *
+   * `progress` is how full the level's bar is once this roll lands (0 at a
+   * fresh level, 1 right before it turns over), so the roll itself climbs
+   * higher the closer the bar is to full — the sound tracks the bar, not
+   * just the motion of filling it. */
+  function xpRoll(c, at, { durationMs = 300, progress = 0.5 } = {}) {
     const interval = 0.042;  // matches STAGGER_MS's cadence elsewhere
     const count = Math.max(2, Math.round(durationMs / 1000 / interval));
+    const base = 400 + Math.max(0, Math.min(1, progress)) * 240;
     for (let i = 0; i < count; i++) {
-      const pitch = 460 + (i / Math.max(1, count - 1)) * 260;
+      const pitch = base + (i / Math.max(1, count - 1)) * 240;
       blip(c, at + i * interval, { pitch });
     }
   }
