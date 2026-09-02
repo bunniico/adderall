@@ -485,6 +485,26 @@
       <input id="s-workspace-id" type="text" placeholder="wrkspc_… (from platform.claude.com/workspaces/&lt;id&gt;)">
     </label>
 
+    <!-- One-way import of tasks assigned to you in ClickUp, into their own
+         "ClickUp" tab. See clickup.py for what a sync does and does not
+         touch. -->
+    <fieldset class="s-group">
+      <legend>🔄 ClickUp sync</legend>
+      <label>ClickUp API token <span id="s-clickup-status" class="tag"></span>
+        <input id="s-clickup-token" type="password" placeholder="pk_… (leave blank to keep current)">
+      </label>
+      <p class="muted">Pulls every open task assigned to you, across every
+        ClickUp workspace the token can see, into a <b>ClickUp</b> tab —
+        created the first time a sync runs. Re-syncing refreshes an imported
+        task's title, description and due date from ClickUp; everything else
+        (estimate, priority, status, which tab it's in) is yours to manage
+        here and is never touched. Nothing is pushed back to ClickUp.</p>
+      <p id="s-clickup-last-sync" class="muted"></p>
+      <div class="modal-actions">
+        <button type="button" id="s-clickup-sync" class="ghost wide">Sync now</button>
+      </div>
+    </fieldset>
+
     <div class="modal-actions">
       <button id="s-save" class="accent wide">Save settings</button>
     </div>

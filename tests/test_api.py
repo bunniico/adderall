@@ -603,6 +603,51 @@ def test_workspace_id_roundtrips_and_clears(client):
     assert client.put("/api/settings", json={"workspace_id": ""}).json()["workspace_id"] == ""
 
 
+def test_clickup_token_roundtrip_and_privacy(client):
+    res = client.get("/api/settings").json()
+    assert "clickup_api_token" not in res
+    assert res["has_clickup_token"] is False
+    res = client.put("/api/settings", json={"clickup_api_token": "pk_secret"}).json()
+    assert res["has_clickup_token"] is True
+    assert "clickup_api_token" not in res  # never echoed back
+    # blank means "leave unchanged", same as the Anthropic key
+    res = client.put("/api/settings", json={"buffer": 0.4}).json()
+    assert res["has_clickup_token"] is True
+
+
+def test_clickup_sync_creates_project_and_tasks(client, monkeypatch):
+    from app import main
+
+    def fake_sync(settings):
+        project = main.db.create_project("ClickUp")
+        task = main.db.create_task({
+            "title": "Ship the thing", "project_id": project["id"],
+            "clickup_id": "c1",
+        })
+        return {"project_id": project["id"], "fetched": 1,
+                "created": [task["id"]], "updated": []}
+
+    monkeypatch.setattr(main.clickup, "sync", fake_sync)
+    res = client.post("/api/clickup/sync")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["clickup"]["fetched"] == 1
+    assert len(body["clickup"]["created"]) == 1
+    assert any(p["name"] == "ClickUp" for p in body["projects"])
+
+
+def test_clickup_sync_without_token_returns_502(client, monkeypatch):
+    from app import main
+
+    def fake_sync(settings):
+        raise main.clickup.ClickUpUnavailable("ClickUp API token missing.")
+
+    monkeypatch.setattr(main.clickup, "sync", fake_sync)
+    res = client.post("/api/clickup/sync")
+    assert res.status_code == 502
+    assert "token" in res.json()["detail"]
+
+
 def test_auto_deadline_respects_toggle(client):
     client.put("/api/settings", json={"auto_deadlines": False})
     state = create(client, title="floaty")

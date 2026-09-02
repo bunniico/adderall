@@ -9,6 +9,9 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       # Only needed for identity-linked keys; can also be set in ⚙ Settings.
       - ANTHROPIC_WORKSPACE_ID=${ANTHROPIC_WORKSPACE_ID:-}
+      # ClickUp personal API token, for pulling in tasks assigned to you; can
+      # also be set in ⚙ Settings → ClickUp sync.
+      - CLICKUP_API_TOKEN=${CLICKUP_API_TOKEN:-}
       # Every AI call logs its prompt, any thinking, and the returned JSON to
       # `docker logs`. DEBUG adds the system prompt; ADDERALL_AI_LOG_CHARS caps
       # how much of one prompt or completion a single line carries (0 = no cap).
@@ -20,6 +23,10 @@ services:
       # to 0 to turn the background job off and drive `POST /api/recurring/run`
       # from a real cron instead.
       - ADDERALL_RECUR_INTERVAL=${ADDERALL_RECUR_INTERVAL:-3600}
+      # How often the ClickUp sync runs, in seconds (1800 by default). Set to
+      # 0 to turn the background job off and drive `POST /api/clickup/sync`
+      # from a real cron instead.
+      - ADDERALL_CLICKUP_INTERVAL=${ADDERALL_CLICKUP_INTERVAL:-1800}
     # Adderall is a small FastAPI app over SQLite; it never needs more than
     # one core or half a gig, so cap it and leave the rest of the box alone.
     deploy:

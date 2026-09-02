@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import ai, db, logic, recurring, scheduler, title_parse
+from . import ai, clickup, db, logic, recurring, scheduler, title_parse
 
 def _configure_logging() -> None:
     """Send the app's own logs to stdout, where `docker logs` reads them.
@@ -52,10 +52,12 @@ async def lifespan(app: FastAPI):
     timer instead of a job pinned to midnight.
     """
     scheduler.start(app)
+    clickup.start(app)
     try:
         yield
     finally:
         await scheduler.stop(app)
+        await clickup.stop(app)
 
 
 app = FastAPI(title="Adderall", docs_url="/api/docs", openapi_url="/api/openapi.json",
@@ -1073,6 +1075,24 @@ def run_recurring():
     return state
 
 
+# ---------- ClickUp sync ----------
+# A one-way mirror of "tasks assigned to me" into a dedicated project — see
+# clickup.py. This route runs the same pass the background loop does on a
+# timer, exposed because a sync you cannot trigger on demand is a sync you
+# cannot test right after pasting in a token.
+
+@app.post("/api/clickup/sync")
+def sync_clickup():
+    settings = db.get_settings()
+    try:
+        result = clickup.sync(settings)
+    except clickup.ClickUpUnavailable as exc:
+        raise HTTPException(502, str(exc))
+    state = _state()
+    state["clickup"] = result
+    return state
+
+
 @app.post("/api/tasks/{task_id}/breakdown")
 def breakdown_task(task_id: str, body: BreakdownRequest):
     task = _require_task(task_id)
@@ -1303,6 +1323,9 @@ def get_settings():
     has_key = bool((settings.pop("api_key", "") or "").strip()
                    or os.environ.get("ANTHROPIC_API_KEY"))
     settings["has_api_key"] = has_key
+    has_clickup_token = bool((settings.pop("clickup_api_token", "") or "").strip()
+                             or os.environ.get("CLICKUP_API_TOKEN"))
+    settings["has_clickup_token"] = has_clickup_token
     # Derived, not stored: what the day cap has actually learned to be, so the
     # dialog can show it next to the number you set.
     settings["capacity"] = _capacity()
@@ -1316,10 +1339,13 @@ def get_settings():
 def put_settings(body: SettingsUpdate):
     changes = body.model_dump()
     changes.pop("has_api_key", None)
+    changes.pop("has_clickup_token", None)
     changes.pop("capacity", None)  # derived; the page only ever echoes it back
     changes.pop("spend", None)     # likewise
     if changes.get("api_key") == "":
         changes.pop("api_key")  # empty field means "leave unchanged"
+    if changes.get("clickup_api_token") == "":
+        changes.pop("clickup_api_token")  # empty field means "leave unchanged"
     _normalize_sort(changes)
     db.update_settings(changes)
     return get_settings()
