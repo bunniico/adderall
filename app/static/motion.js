@@ -85,6 +85,23 @@ const Motion = (() => {
     });
   }
 
+  /* The mirror image of `click`: pitch rises instead of falling, so it reads
+   * as progress climbing rather than a press landing. */
+  function tickUp(c, at, { pitch = 500, peak = 0.12, cutoff = 2000 } = {}) {
+    const osc = c.createOscillator();
+    const gain = c.createGain();
+    const lp = c.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.value = cutoff;
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(pitch, at);
+    osc.frequency.exponentialRampToValueAtTime(pitch * 1.8, at + 0.05);
+    env(gain, at, peak, 0.004, 0.05);
+    osc.connect(gain).connect(lp).connect(master);
+    osc.start(at);
+    osc.stop(at + 0.1);
+  }
+
   const BUILTIN = {
     click:    (c, t) => click(c, t),
     // A softer, lower click for anything destructive or dismissive: the same
@@ -102,6 +119,8 @@ const Motion = (() => {
     // A light tap for a task landing on screen — short and quiet enough that
     // a cascade of several arriving at once reads as a patter, not a jangle.
     tick:     (c, t) => click(c, t, { pitch: 640, peak: 0.07, cutoff: 1600 }),
+    // A quick upward chirp for the XP bar filling.
+    xpgain:   (c, t) => tickUp(c, t),
   };
 
   const SLOTS = [
@@ -109,6 +128,7 @@ const Motion = (() => {
     { id: "hover",    label: "Hover",         hint: "pointing at a button" },
     { id: "complete", label: "Task finished", hint: "checking something off" },
     { id: "levelup",  label: "Level up",      hint: "passing a level" },
+    { id: "xpgain",   label: "XP gain",       hint: "the XP bar filling up" },
     { id: "alarm",    label: "Alarm",         hint: "a deadline transition" },
   ];
 
