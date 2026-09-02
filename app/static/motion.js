@@ -85,21 +85,35 @@ const Motion = (() => {
     });
   }
 
-  /* The mirror image of `click`: pitch rises instead of falling, so it reads
-   * as progress climbing rather than a press landing. */
-  function tickUp(c, at, { pitch = 500, peak = 0.12, cutoff = 2000 } = {}) {
+  /* One step of a counter climbing: short and square-waved rather than
+   * triangle, so a rapid volley of these reads as its own instrument instead
+   * of a stutter of `click`. */
+  function blip(c, at, { pitch = 480, peak = 0.09, cutoff = 2200 } = {}) {
     const osc = c.createOscillator();
     const gain = c.createGain();
     const lp = c.createBiquadFilter();
     lp.type = "lowpass";
     lp.frequency.value = cutoff;
-    osc.type = "triangle";
+    osc.type = "square";
     osc.frequency.setValueAtTime(pitch, at);
-    osc.frequency.exponentialRampToValueAtTime(pitch * 1.8, at + 0.05);
-    env(gain, at, peak, 0.004, 0.05);
+    env(gain, at, peak, 0.002, 0.02);
     osc.connect(gain).connect(lp).connect(master);
     osc.start(at);
-    osc.stop(at + 0.1);
+    osc.stop(at + 0.06);
+  }
+
+  /* The XP bar filling reads as a counter ticking upward, not one blip: a
+   * roll of rising blips scheduled on the Web Audio clock (so it can't drift
+   * the way a setTimeout chain would), timed to the width of the fill
+   * animation the caller is already running. A small gain is a quick
+   * double-tap; a big one is a real climb. */
+  function xpRoll(c, at, { durationMs = 300 } = {}) {
+    const interval = 0.042;  // matches STAGGER_MS's cadence elsewhere
+    const count = Math.max(2, Math.round(durationMs / 1000 / interval));
+    for (let i = 0; i < count; i++) {
+      const pitch = 460 + (i / Math.max(1, count - 1)) * 260;
+      blip(c, at + i * interval, { pitch });
+    }
   }
 
   const BUILTIN = {
@@ -119,8 +133,8 @@ const Motion = (() => {
     // A light tap for a task landing on screen — short and quiet enough that
     // a cascade of several arriving at once reads as a patter, not a jangle.
     tick:     (c, t) => click(c, t, { pitch: 640, peak: 0.07, cutoff: 1600 }),
-    // A quick upward chirp for the XP bar filling.
-    xpgain:   (c, t) => tickUp(c, t),
+    // A rising roll of ticks for the XP bar filling, `opts.durationMs` long.
+    xpgain:   (c, t, opts) => xpRoll(c, t, opts),
   };
 
   const SLOTS = [
@@ -132,7 +146,7 @@ const Motion = (() => {
     { id: "alarm",    label: "Alarm",         hint: "a deadline transition" },
   ];
 
-  function play(name) {
+  function play(name, opts) {
     if (!enabled) return;
     const c = audio();
     if (!c) return;
@@ -145,7 +159,7 @@ const Motion = (() => {
         src.start();
         return;
       }
-      (BUILTIN[name] || BUILTIN.click)(c, c.currentTime);
+      (BUILTIN[name] || BUILTIN.click)(c, c.currentTime, opts);
     } catch { /* a browser that will not make noise is not an error */ }
   }
 
