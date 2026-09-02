@@ -1239,6 +1239,7 @@ function renderXp() {
   if (!gained || wasHidden || !previous) { xpFill(xp.progress, false); return; }
 
   xpFloat(gained);
+  Motion.play("xpgain");
   // The focus overlay covers the header, so a bar sliding about underneath it
   // is a reward nobody sees. Finishing a task from inside a session says it in
   // the one thing that does show through.
