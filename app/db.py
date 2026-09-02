@@ -58,6 +58,8 @@ DEFAULT_SETTINGS = {
     "api_key": "",             # optional; falls back to ANTHROPIC_API_KEY env
     "workspace_id": "",        # required for identity-linked keys; falls back
                                # to ANTHROPIC_WORKSPACE_ID env
+    "clickup_api_token": "",   # optional; falls back to CLICKUP_API_TOKEN env
+    "clickup_last_sync_at": "", # ISO instant of the last successful sync
     "models": {
         "fast": "claude-haiku-4-5",    # estimates, impact/effort scoring
         "balanced": "claude-sonnet-5", # interactive task breakdown
@@ -115,6 +117,10 @@ CREATE TABLE IF NOT EXISTS tasks (
     started_at    TEXT,
     xp_awarded    INTEGER,
     series_id     TEXT REFERENCES series(id) ON DELETE SET NULL,
+    -- Set only on tasks imported from ClickUp; the id of the ClickUp task
+    -- they were made from, so a re-sync can find and update them instead of
+    -- creating duplicates. See clickup.py.
+    clickup_id    TEXT,
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL
 );
@@ -152,7 +158,7 @@ TASK_FIELDS = {
     "title", "description", "parent_id", "project_id", "deadline", "start_at",
     "estimated_time",
     "actual_time", "impact", "effort", "status", "ack_thankless", "collapsed",
-    "order_index", "started_at", "series_id",
+    "order_index", "started_at", "series_id", "clickup_id",
 }
 
 
@@ -204,7 +210,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
         # everywhere is exactly right: those tasks keep being placed off their
         # quadrant horizon, the same as they were yesterday.
         conn.execute("ALTER TABLE tasks ADD COLUMN start_at TEXT")
+    if "clickup_id" not in cols:
+        # Nothing was imported before this column existed, so null everywhere
+        # is exactly right: nothing looks like a ClickUp task that isn't one.
+        conn.execute("ALTER TABLE tasks ADD COLUMN clickup_id TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_series ON tasks(series_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_clickup ON tasks(clickup_id)")
     if "project_id" not in cols:
         conn.execute(
             "ALTER TABLE tasks ADD COLUMN project_id TEXT "
@@ -371,6 +382,16 @@ def list_tasks(project_id: str | None = None) -> list[dict]:
 def get_task(task_id: str) -> dict | None:
     with connect() as conn:
         row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    return _row_to_task(row) if row else None
+
+
+def get_task_by_clickup_id(clickup_id: str) -> dict | None:
+    """The task a ClickUp import already made, if there is one — how a
+    re-sync finds a task to update instead of creating a duplicate."""
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM tasks WHERE clickup_id = ?", (clickup_id,)
+        ).fetchone()
     return _row_to_task(row) if row else None
 
 

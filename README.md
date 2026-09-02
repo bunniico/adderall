@@ -116,6 +116,26 @@ until you provide it. Put the workspace ID in ⚙ Settings → Workspace ID, or
 set `ANTHROPIC_WORKSPACE_ID`. You can find the ID in the Claude Console URL:
 `platform.claude.com/workspaces/<id>`. Ordinary keys don't need this.
 
+### ClickUp sync
+
+Pulls every open task assigned to you, across every ClickUp workspace your
+token can see, into its own **ClickUp** tab — created the first time a sync
+runs. Set a personal API token (from ClickUp → Settings → Apps) in ⚙
+Settings → ClickUp sync, or via `CLICKUP_API_TOKEN` in the environment.
+
+It's a one-way mirror, and deliberately simple about it: re-syncing refreshes
+an imported task's title, description and due date from ClickUp, but nothing
+else — its estimate, impact/effort, status, subtasks and which tab it lives
+in are yours, and sync never touches them once it exists. Nothing is pushed
+back to ClickUp, and a task that stops showing up as "assigned and open" in
+ClickUp (finished, reassigned, deleted) is simply left alone rather than
+auto-completed or removed here.
+
+Runs on the same kind of sweep as the recurring-task job below — once at
+startup, then every `ADDERALL_CLICKUP_INTERVAL` seconds (1800 by default; `0`
+turns it off) — plus **Sync now** in Settings for an on-demand pass. No
+token configured yet is not an error; the sweep just has nothing to do.
+
 ### Seeing what the AI is doing
 
 Every Claude call writes what it sent and what came back to the container's
@@ -425,6 +445,10 @@ API keys are never logged.
 - **Transition alarms** — three staged cues before any deadline (stop what
   you're doing → get ready → go), with different sounds and configurable
   lead times.
+- **ClickUp sync** — a **ClickUp** tab that mirrors every open task assigned
+  to you, pulled in on a background timer or on demand with **Sync now** in
+  ⚙ Settings. One-way: ClickUp owns an imported task's title, description
+  and due date, everything else is yours. See **ClickUp sync** above.
 
 ## Design principles
 
@@ -522,7 +546,9 @@ a call costs and which model the budget lets it have;
 (interval phase, weekday sets, month-length clamping, nth and last weekdays,
 DST, end conditions) and then the app around it, with the sweep driven by hand
 so the tests own the clock;
-`tests/test_api.py` covers the API with the AI stubbed out.
+`tests/test_api.py` covers the API with the AI stubbed out;
+`tests/test_clickup.py` covers the ClickUp client against mocked HTTP (no
+network) and what a sync creates, updates and deliberately leaves alone.
 
 ### The recurring-task sweep
 
@@ -559,6 +585,8 @@ app/
   scheduler.py  the background timer that runs that sweep
   ai.py         Claude API broker (breakdown / annotate / compile), model
                 prices, and the budget throttle applied at the call site
+  clickup.py    ClickUp sync: the API client, the one-way import into a
+                dedicated project, and its own background timer
   static/       single-page front end (vanilla JS, no build step)
                   app.js is the task list, repeat controls, focus mode
                   and settings; calendar.js is the day/week/month views

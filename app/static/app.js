@@ -2245,6 +2245,11 @@ function openSettings() {
   $("s-key-status").textContent = settings.has_api_key ? "configured ✓" : "not set";
   // Not a secret, unlike the key — safe to show so it can be edited/cleared.
   $("s-workspace-id").value = settings.workspace_id || "";
+  $("s-clickup-token").value = "";
+  $("s-clickup-status").textContent = settings.has_clickup_token ? "configured ✓" : "not set";
+  $("s-clickup-last-sync").textContent = settings.clickup_last_sync_at
+    ? `Last synced ${new Date(settings.clickup_last_sync_at).toLocaleString()}`
+    : "Never synced yet.";
   $("modal-settings").showModal();
 }
 
@@ -2284,6 +2289,8 @@ async function saveSettings() {
 
   const key = $("s-api-key").value.trim();
   if (key) body.api_key = key;
+  const clickupToken = $("s-clickup-token").value.trim();
+  if (clickupToken) body.clickup_api_token = clickupToken;
   try {
     settings = await api("/settings", { method: "PUT", body: JSON.stringify(body) });
     $("modal-settings").close();
@@ -2291,6 +2298,24 @@ async function saveSettings() {
     applyState(await api("/state"));
     toast("Settings saved ✓");
   } catch (e) { toast(e.message, true); }
+}
+
+/* One-way import of tasks assigned to you in ClickUp — see clickup.py. */
+async function syncClickUp() {
+  const btn = $("s-clickup-sync");
+  btn.disabled = true;
+  try {
+    const res = await api("/clickup/sync", { method: "POST" });
+    settings = await api("/settings");
+    applyState(res);
+    $("s-clickup-last-sync").textContent = settings.clickup_last_sync_at
+      ? `Last synced ${new Date(settings.clickup_last_sync_at).toLocaleString()}`
+      : "Never synced yet.";
+    const { created, updated, fetched } = res.clickup || {};
+    toast(`ClickUp: ${fetched ?? 0} assigned, ${created?.length ?? 0} new, ` +
+          `${updated?.length ?? 0} updated ✓`);
+  } catch (e) { toast(e.message, true); }
+  finally { btn.disabled = false; }
 }
 
 /* ---------------- sounds ----------------
@@ -2959,6 +2984,7 @@ function wire() {
   $("btn-focus").addEventListener("click", () => startFocus(null));
   $("btn-settings").addEventListener("click", openSettings);
   $("s-save").addEventListener("click", saveSettings);
+  $("s-clickup-sync").addEventListener("click", syncClickUp);
   $("s-buffer").addEventListener("input", () =>
     $("s-buffer-val").textContent = $("s-buffer").value + "%");
   $("s-capacity").addEventListener("input", () =>
