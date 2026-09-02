@@ -1212,7 +1212,17 @@ function renderThrottle() {
 
 let xpDrawn = null;      // what the meter is currently showing
 let xpGainTimer = null;
-const XP_FILL_MS = 600;  // must match the transition in style.css
+const XP_FILL_MS = 600;      // fallback fill duration; see xpFillDuration for real gains
+const XP_FILL_MS_MIN = 260;  // a sliver of a gain still gets a real, audible roll
+const XP_FILL_MS_MAX = 720;  // past this a big gain would feel sluggish, not epic
+
+/* How long a fill (and its tick roll) takes: longer for a bigger bite out of
+ * the bar, so the sound and the motion both say "that was a big one" instead
+ * of firing the same blip no matter what just got finished. */
+function xpFillDuration(fraction) {
+  const f = Math.max(0, Math.min(1, fraction));
+  return Math.round(XP_FILL_MS_MIN + f * (XP_FILL_MS_MAX - XP_FILL_MS_MIN));
+}
 
 function renderXp() {
   const meter = $("xp-meter");
@@ -1239,7 +1249,6 @@ function renderXp() {
   if (!gained || wasHidden || !previous) { xpFill(xp.progress, false); return; }
 
   xpFloat(gained);
-  Motion.play("xpgain");
   // The focus overlay covers the header, so a bar sliding about underneath it
   // is a reward nobody sees. Finishing a task from inside a session says it in
   // the one thing that does show through.
@@ -1248,31 +1257,42 @@ function renderXp() {
     // Run the old level out to the end before starting the new one: a bar
     // that jumps from nearly-full to nearly-empty with no fanfare reads as
     // losing your progress rather than as passing a milestone.
-    xpFill(1, false);
+    const upMs = xpFillDuration(1 - previous.progress);
+    xpFill(1, false, upMs);
+    Motion.play("xpgain", { durationMs: upMs });
     setTimeout(() => {
       xpFill(0, true);          // back to empty with no animation at all
-      xpFill(xp.progress, false);
+      const downMs = xpFillDuration(xp.progress);
+      xpFill(xp.progress, false, downMs);
       meter.classList.remove("levelup");
       void meter.offsetWidth;   // restart the flash if two levels land at once
       meter.classList.add("levelup");
       Motion.play("levelup");
+      Motion.play("xpgain", { durationMs: downMs });
       toast(`Level ${xp.level}! ${xp.to_next} XP to the next one.`);
-    }, XP_FILL_MS + 40);
+    }, upMs + 40);
   } else {
-    xpFill(xp.progress, false);
+    const ms = xpFillDuration(xp.progress - previous.progress);
+    xpFill(xp.progress, false, ms);
+    Motion.play("xpgain", { durationMs: ms });
   }
 }
 
 /* `snap` fills without animating — the one moment that needs it is the reset
  * to an empty bar on a level-up, which must not be seen sliding backwards. */
-function xpFill(progress, snap) {
+function xpFill(progress, snap, durationMs) {
   const fill = $("xp-fill");
   const width = Math.max(0, Math.min(1, progress)) * 100 + "%";
-  if (!snap) { fill.style.width = width; return; }
+  if (!snap) {
+    fill.style.transitionDuration = (durationMs || XP_FILL_MS) + "ms";
+    fill.style.width = width;
+    return;
+  }
   fill.style.transition = "none";
   fill.style.width = width;
   void fill.offsetWidth;  // force the reflow, so the next width does animate
   fill.style.transition = "";
+  fill.style.transitionDuration = "";
 }
 
 /* The "+62 XP" that rises off the bar. */
