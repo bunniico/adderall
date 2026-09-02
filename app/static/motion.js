@@ -99,6 +99,9 @@ const Motion = (() => {
     // The same switch as `click`, just barely touched: high and quiet enough
     // to read as a hint rather than a press, so it never competes with it.
     hover:    (c, t) => click(c, t, { pitch: 900, peak: 0.045, cutoff: 2400 }),
+    // A light tap for a task landing on screen — short and quiet enough that
+    // a cascade of several arriving at once reads as a patter, not a jangle.
+    tick:     (c, t) => click(c, t, { pitch: 640, peak: 0.07, cutoff: 1600 }),
   };
 
   const SLOTS = [
@@ -229,8 +232,13 @@ const Motion = (() => {
       const id = el.dataset.id;
       if (!id || known.has(id)) continue;
       known.add(id);
-      el.style.setProperty("--stagger", Math.min(i++, STAGGER_MAX) * STAGGER_MS + "ms");
+      const delay = Math.min(i++, STAGGER_MAX) * STAGGER_MS;
+      el.style.setProperty("--stagger", delay + "ms");
       el.classList.add("enter");
+      // Synced to the same delay the animation itself uses, so a cascade of
+      // rows ticks in step with the cascade of motion rather than firing in
+      // one clump up front.
+      setTimeout(() => play("tick"), delay);
       // Taken off once it has played. A one-shot class left on the element
       // keeps overriding whatever resting animation the row is meant to have
       // — which for the next-up task is the only thing marking it as next.
