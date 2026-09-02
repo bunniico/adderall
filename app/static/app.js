@@ -1041,6 +1041,15 @@ function renderRail() {
   $("rail-goal").textContent = on ? `${xp.into_level} / ${xp.level_span}` : "off";
   $("rail-goal-fill").style.width = (on ? xp.progress * 100 : 0) + "%";
   $("rail-xp").textContent = on ? `level ${xp.level} · ${xp.total} XP earned` : "";
+
+  // Open, top-level tasks only: what is actually still ahead of you in this
+  // list, not what has already been finished or discarded.
+  const open = mine.filter((t) => t.status === "todo" || t.status === "in_progress");
+  const timeLeft = open.reduce((sum, t) =>
+    sum + (t.has_subtasks ? (t.rollup_remaining || 0) : (t.buffered_estimate || 0)), 0);
+  const pointsLeft = open.reduce((sum, t) => sum + (t.score || 0), 0);
+  $("rail-time-total").textContent = open.length ? fmtMinutes(timeLeft) : "—";
+  $("rail-points-total").textContent = open.length ? Math.round(pointsLeft) : "—";
 }
 
 /* The list is rebuilt wholesale on every state change, so anything the user
