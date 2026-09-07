@@ -1332,7 +1332,7 @@ def test_state_carries_the_level_and_xp(client):
     state = client.get("/api/state").json()
     assert state["xp"] == {"total": 0, "level": 1, "into_level": 0,
                            "level_span": 100, "to_next": 100, "progress": 0.0,
-                           "gained": 0}
+                           "gained": 0, "hourly": None}
 
 
 def test_completing_a_task_pays_out_its_score(client):
@@ -1347,6 +1347,17 @@ def test_completing_a_task_pays_out_its_score(client):
     assert state["xp"]["total"] == expected
     # ...and the task remembers what it paid, for the Done list to show.
     assert find(state, "a real task")["xp_awarded"] == expected
+
+
+def test_average_hourly_xp_reflects_completed_estimated_work(client):
+    state = create(client, title="timed task", impact=9, effort=2,
+                   estimated_time=30)
+    task = find(state, "timed task")
+    score = task["score"]
+    buffered_minutes = task["buffered_estimate"]
+    state = client.post(f"/api/tasks/{task['id']}/complete", json={}).json()
+    xp = round(score)
+    assert state["xp"]["hourly"] == xp / (buffered_minutes / 60)
 
 
 def test_a_task_never_pays_twice(client):

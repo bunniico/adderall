@@ -1054,6 +1054,7 @@ function renderRail() {
   $("rail-goal").textContent = on ? `${xp.into_level} / ${xp.level_span}` : "off";
   $("rail-goal-fill").style.width = (on ? xp.progress * 100 : 0) + "%";
   $("rail-xp").textContent = on ? `level ${xp.level} · ${xp.total} XP earned` : "";
+  $("rail-hourly-xp").textContent = on && xp.hourly != null ? Math.round(xp.hourly) : "—";
 
   // Open, top-level tasks only: what is actually still ahead of you in this
   // list, not what has already been finished or discarded.

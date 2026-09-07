@@ -360,7 +360,9 @@ def _state(project_id: str | None = None, xp_gained: int = 0) -> dict:
         # stale bar. `gained` is only ever non-zero on the reply to the call
         # that earned it, which is the page's cue to animate rather than
         # silently jump.
-        "xp": {**logic.level_progress(db.get_xp()), "gained": xp_gained},
+        "xp": {**logic.level_progress(db.get_xp()), "gained": xp_gained,
+               "hourly": logic.average_hourly_xp(
+                   db.xp_estimate_pairs(), logic.effective_buffer(settings, ratios))},
         # Rides along for the same reason the XP bar does: the badge that says
         # the app has gone cheap for the day has to appear the moment it is
         # true, not the next time someone opens the settings dialog.
