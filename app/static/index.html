@@ -300,6 +300,15 @@
         a fortnight and you are one behind, not fourteen.</p>
     </fieldset>
 
+    <!-- Only shown for a step under a repeating task. Preserve-forward is the
+         default, matching how a step has always behaved, so the control only
+         has to name the exception: a step added just for this occurrence. -->
+    <label id="d-repeat-carry-row" class="row" hidden>
+      <input id="d-repeat-carry" type="checkbox" checked>
+      <span>Preserve this step for the next repeat <span class="muted">—
+      turn off to keep it just for this occurrence; it won't be part of the
+      task's next copy.</span></span></label>
+
     <label id="d-project-row" hidden>Project
       <select id="d-project" title="Move this task — and everything under it — to another tab"></select>
     </label>

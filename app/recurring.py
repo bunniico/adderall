@@ -52,7 +52,9 @@ def snapshot(task_id: str) -> dict:
     repeat was set up, so editing this week's copy — a better title, a truer
     estimate, one more step — is how you edit the series. Discarded steps are
     left out: dropping a step from a routine should stick, or dropping it
-    means nothing.
+    means nothing. A step marked as not carrying forward is left out too —
+    that is how a one-off addition to this occurrence (an errand that just
+    happens to belong under this week's copy) stays out of next week's.
 
     Statuses are not part of the picture at all, which is what lets the
     snapshot be taken at any moment, including after the whole tree has just
@@ -72,7 +74,7 @@ def snapshot(task_id: str) -> dict:
             **{f: row[f] for f in TEMPLATE_FIELDS},
             "collapsed": bool(row["collapsed"]),
             "subtasks": [picture(kid) for kid in children.get(row["id"], [])
-                         if kid["status"] != "discarded"],
+                         if kid["status"] != "discarded" and kid["repeat_carry"]],
         }
 
     return picture(task)

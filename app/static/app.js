@@ -83,6 +83,19 @@ function findAnyTask(id) {
   return findTask(id) || calendarTask(id);
 }
 
+/* A repeat belongs to the top of a tree, never to a step inside it — so
+ * whether a step's own "preserve for repeat" toggle means anything at all
+ * depends on whether *that* ancestor repeats. */
+function rootAncestor(task) {
+  let cur = task;
+  while (cur && cur.parent_id) {
+    const parent = findAnyTask(cur.parent_id);
+    if (!parent) break;
+    cur = parent;
+  }
+  return cur;
+}
+
 /* ---------------- projects (tabs) ----------------
  * Each project is its own list of tasks, one open at a time. The server
  * remembers which tab you are on, so a reload — or the same app opened on
@@ -1639,6 +1652,11 @@ function openDetail(id) {
   // while the thing containing it did not would be a plan nobody could read.
   $("d-repeat-block").hidden = !!task.parent_id;
   loadRepeat(task);
+  // Preserve-for-repeat only means anything for a step under a task whose
+  // tree actually repeats.
+  const carryRow = $("d-repeat-carry-row");
+  carryRow.hidden = !(task.parent_id && rootAncestor(task)?.recurrence);
+  $("d-repeat-carry").checked = task.repeat_carry !== false;
   updateDetailDerived();
   $("modal-detail").showModal();
 }
@@ -1804,6 +1822,9 @@ async function saveDetail() {
   const start = $("d-start").value;
   if (start) fields.start_at = new Date(start).toISOString();
   else fields.clear_start_at = true;
+  if (!$("d-repeat-carry-row").hidden) {
+    fields.repeat_carry = $("d-repeat-carry").checked;
+  }
   const task = findAnyTask(detailTaskId);
   const targetProject = $("d-project").value;
   const moving = !$("d-project-row").hidden && task &&

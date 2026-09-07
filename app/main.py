@@ -96,6 +96,9 @@ class TaskUpdate(BaseModel):
     ack_thankless: bool | None = None
     collapsed: bool | None = None
     order_index: int | None = None
+    # Per-subtask: whether this step carries into the next occurrence of a
+    # repeating task, or is a one-off added to just this one.
+    repeat_carry: bool | None = None
 
 
 class TaskMove(BaseModel):
