@@ -636,6 +636,14 @@ def task_xp(score: float) -> int:
     return max(1, int(round(score)))
 
 
+def average_hourly_xp(pairs: list[dict], buf: float) -> float | None:
+    """XP earned per hour of buffered estimate, across every task that ever
+    paid out XP and carried an estimate. None with nothing to divide by."""
+    total_xp = sum(p["xp"] for p in pairs)
+    total_minutes = sum(buffered_estimate(p["estimated_time"], buf) for p in pairs)
+    return (total_xp / (total_minutes / 60)) if total_minutes else None
+
+
 def level_threshold(level: int) -> int:
     """Total XP needed to have reached `level`. Everyone starts at level 1."""
     level = max(1, int(level))

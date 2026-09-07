@@ -1037,6 +1037,17 @@ def test_level_progress_never_goes_backwards_or_negative():
     assert levels == sorted(levels)
 
 
+def test_average_hourly_xp_divides_total_xp_by_buffered_hours():
+    # 60 buffered minutes (30 * 1.0 buffer) + 120 buffered minutes = 3 hours,
+    # for 90 XP total: 30 XP/hr.
+    pairs = [{"xp": 30, "estimated_time": 30}, {"xp": 60, "estimated_time": 60}]
+    assert logic.average_hourly_xp(pairs, buf=1.0) == 30.0
+
+
+def test_average_hourly_xp_is_none_with_nothing_to_divide_by():
+    assert logic.average_hourly_xp([], buf=0.3) is None
+
+
 # ---- start times: when a task wants to begin ----
 # The scheduler's other question. A deadline says when work must be finished;
 # a start time says which hour of which day it belongs to, which for most of

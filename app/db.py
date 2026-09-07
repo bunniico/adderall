@@ -560,6 +560,18 @@ def completion_ratios(limit: int = 20) -> list[float]:
     return [r["actual_time"] / r["estimated_time"] for r in rows]
 
 
+def xp_estimate_pairs() -> list[dict]:
+    """(xp, estimated_time) for every finished, paid-out task that carried an
+    estimate, for the average-hourly-XP stat."""
+    with connect() as conn:
+        rows = conn.execute(
+            """SELECT xp_awarded, estimated_time FROM tasks
+               WHERE status = 'done' AND xp_awarded IS NOT NULL
+                 AND estimated_time IS NOT NULL AND estimated_time > 0"""
+        ).fetchall()
+    return [{"xp": r["xp_awarded"], "estimated_time": r["estimated_time"]} for r in rows]
+
+
 def completed_history(days: int = 45) -> list[dict]:
     """When recent work was finished and how long it took.
 
