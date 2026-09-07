@@ -113,6 +113,12 @@ CREATE TABLE IF NOT EXISTS tasks (
     status        TEXT NOT NULL DEFAULT 'todo',
     ack_thankless INTEGER NOT NULL DEFAULT 0,
     collapsed     INTEGER NOT NULL DEFAULT 0,
+    -- Whether a step belongs to the next occurrence of a repeating task, not
+    -- just this one. On by default, matching how every step has always
+    -- behaved; turned off, a step is a one-off added to this occurrence and
+    -- stops showing up in the template the series copies forward. See
+    -- recurring.snapshot().
+    repeat_carry  INTEGER NOT NULL DEFAULT 1,
     order_index   INTEGER NOT NULL DEFAULT 0,
     started_at    TEXT,
     xp_awarded    INTEGER,
@@ -158,7 +164,7 @@ TASK_FIELDS = {
     "title", "description", "parent_id", "project_id", "deadline", "start_at",
     "estimated_time",
     "actual_time", "impact", "effort", "status", "ack_thankless", "collapsed",
-    "order_index", "started_at", "series_id", "clickup_id",
+    "order_index", "started_at", "series_id", "clickup_id", "repeat_carry",
 }
 
 
@@ -214,6 +220,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
         # Nothing was imported before this column existed, so null everywhere
         # is exactly right: nothing looks like a ClickUp task that isn't one.
         conn.execute("ALTER TABLE tasks ADD COLUMN clickup_id TEXT")
+    if "repeat_carry" not in cols:
+        # Every step has always carried forward into the next occurrence, so
+        # existing rows default to 1 (preserved) rather than changing their
+        # behavior underneath anyone.
+        conn.execute(
+            "ALTER TABLE tasks ADD COLUMN repeat_carry INTEGER NOT NULL DEFAULT 1"
+        )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_series ON tasks(series_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_clickup ON tasks(clickup_id)")
     if "project_id" not in cols:
@@ -363,6 +376,7 @@ def _row_to_task(row: sqlite3.Row) -> dict:
     task = dict(row)
     task["ack_thankless"] = bool(task["ack_thankless"])
     task["collapsed"] = bool(task["collapsed"])
+    task["repeat_carry"] = bool(task["repeat_carry"])
     return task
 
 

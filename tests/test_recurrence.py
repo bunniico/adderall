@@ -524,6 +524,30 @@ def test_the_steps_come_back_with_it(app):
     assert all(s["recurrence"] is None for s in fresh["subtasks"])
 
 
+def test_a_step_marked_not_to_carry_stays_out_of_the_next_copy(app):
+    client, main, db, recurring = app
+    task = add(client, title="sunday reset")
+    for step in ("strip the beds", "run the wash", "buy new lightbulbs"):
+        client.post("/api/tasks", json={"title": step, "parent_id": task["id"],
+                                        "annotate": False})
+    one_off = next(t for t in db.list_tasks() if t["title"] == "buy new lightbulbs")
+    assert one_off["repeat_carry"] is True   # preserved by default
+    client.patch(f"/api/tasks/{one_off['id']}", json={"repeat_carry": False})
+    repeat(client, task["id"], freq="weekly")
+    client.post(f"/api/tasks/{task['id']}/complete", json={})
+    advance(db, recurring)
+    state = client.get("/api/state").json()
+    fresh = next(t for t in state["tasks"]
+                 if t["title"] == "sunday reset" and t["status"] == "todo")
+    steps = [s["title"] for s in fresh["subtasks"]]
+    assert steps == ["strip the beds", "run the wash"]
+    # The one-off itself is untouched — still sitting on the completed copy.
+    done = next(t for t in state["tasks"] if t["title"] == "sunday reset"
+                and t["status"] == "done")
+    assert [s["title"] for s in done["subtasks"]] == \
+        ["strip the beds", "run the wash", "buy new lightbulbs"]
+
+
 def test_counting_from_completion_starts_the_clock_when_you_finish(app):
     client, main, db, _ = app
     due = (datetime.now(timezone.utc) - timedelta(days=10)).replace(microsecond=0)
