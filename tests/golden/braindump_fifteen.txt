@@ -1,0 +1,26 @@
+now 2026-08-29 12:00 UTC
+day 09:00 to 17:00 | cap 8h | buffer 25%
+
+2026-08-30 Sun  load 5h01m / 8h
+  09:00-10:53    1h53m  sort photos  [auto]
+  10:53-12:08    1h15m  plan the week  [auto]
+  12:08-14:01    1h53m  fix the tap  [auto]
+  ... 1 day with nothing ...
+2026-09-01 Tue  load 5h01m / 8h
+  09:00-10:15    1h15m  write up notes  [auto]
+  10:15-10:53      38m  chase invoice  [auto]
+  10:53-11:31      38m  call dentist  [auto]
+  11:31-14:01    2h30m  cancel gym  [auto]
+  ... 3 days with nothing ...
+2026-09-05 Sat  load 6h53m / 8h
+  09:00-11:30    2h30m  order cat food  [auto]
+  11:30-13:23    1h53m  tidy desk  [auto]
+  13:23-15:53    2h30m  reply to Sam  [auto]
+2026-09-06 Sun  load 3h08m / 8h
+  09:00-10:53    1h53m  clear inbox  [auto]
+  10:53-12:08    1h15m  back up laptop  [auto]
+  ... 5 days with nothing ...
+2026-09-12 Sat  load 2h31m / 8h
+  09:00-09:38      38m  read the report  [auto]
+  09:38-10:53    1h15m  renew passport  [auto]
+  10:53-11:31      38m  book MOT  [auto]

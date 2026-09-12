@@ -1,0 +1,5 @@
+copies on the list: 1
+  2026-08-29T09:00:00+00:00  todo          put the bins out
+series next_at: 2026-09-13T09:00:00+00:00
+series active: True  made: 1
+still has an open copy: True

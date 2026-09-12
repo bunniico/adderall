@@ -1,0 +1,16 @@
+now 2026-08-29 12:00 UTC
+day 09:00 to 17:00 | cap 8h | buffer 25%
+
+2026-08-30 Sun  load 12h / 8h  OVER CAP
+  08:00-09:00       1h  overdue 1  [user]  <<< before the day starts
+  08:00-09:00       1h  overdue 10  [user]  <<< before the day starts
+  08:00-09:00       1h  overdue 11  [user]  <<< before the day starts
+  08:00-09:00       1h  overdue 12  [user]  <<< before the day starts
+  08:00-09:00       1h  overdue 2  [user]  <<< before the day starts
+  08:00-09:00       1h  overdue 3  [user]  <<< before the day starts
+  08:00-09:00       1h  overdue 4  [user]  <<< before the day starts
+  08:00-09:00       1h  overdue 5  [user]  <<< before the day starts
+  08:00-09:00       1h  overdue 6  [user]  <<< before the day starts
+  08:00-09:00       1h  overdue 7  [user]  <<< before the day starts
+  08:00-09:00       1h  overdue 8  [user]  <<< before the day starts
+  08:00-09:00       1h  overdue 9  [user]  <<< before the day starts
