@@ -411,6 +411,13 @@ def _calendar_events() -> list[dict]:
                 children_count[t["parent_id"]] = children_count.get(t["parent_id"], 0) + 1
         for t in tasks:
             d = derived[t["id"]]
+            # Steps are drawn inside their root's block, not beside it: a tree
+            # is one commitment, and six chips for six steps is the same
+            # afternoon counted six times. They carry no deadline of their own
+            # now (see `logic.compute`), so this only says out loud what the
+            # next line would do anyway.
+            if t["parent_id"]:
+                continue
             # Discarded work is off the plan entirely; done work stays, because
             # a calendar you can look back at is half of what a calendar is for.
             if t["status"] == "discarded" or not d.get("deadline"):

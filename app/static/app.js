@@ -802,7 +802,8 @@ function taskNode(task, isSub) {
       add(`★ ${Math.round(task.score)}`, "score-badge").title = scoreTitle(task);
     }
     // A task that contains subtasks is worth what it holds: the estimate is
-    // the sum of everything underneath, the deadline the furthest one inside.
+    // the sum of everything underneath. The deadline is the container's own,
+    // because a step no longer carries one to roll up.
     const est = task.has_subtasks ? task.rollup_estimate : task.buffered_estimate;
     const dlIso = task.has_subtasks ? task.rollup_deadline : task.deadline;
     const dlSrc = task.has_subtasks ? task.rollup_deadline_source : task.deadline_source;
@@ -1649,9 +1650,22 @@ function openDetail(id) {
   }
   select.value = task.project_id || state.active_project_id;
   $("d-project-row").hidden = projects.length < 2;
+  // Only a top-level task is scheduled: a tree gets one block, and its steps
+  // are the checklist inside it rather than six appointments of their own.
+  const isStep = !!task.parent_id;
+  $("d-when-block").hidden = isStep;
+  $("d-start-presets").hidden = isStep;
+  $("d-start-note").hidden = isStep;
+  const root = isStep ? rootAncestor(task) : null;
+  const whenNote = $("d-when-note");
+  whenNote.hidden = !isStep;
+  whenNote.textContent = root && root.id !== task.id
+    ? `Scheduled as part of “${root.title}”, in the slot that task was given. ` +
+      `Set the dates there.`
+    : "Scheduled as part of the task above it.";
   // Only a top-level task repeats: a step that came back on its own schedule
   // while the thing containing it did not would be a plan nobody could read.
-  $("d-repeat-block").hidden = !!task.parent_id;
+  $("d-repeat-block").hidden = isStep;
   loadRepeat(task);
   // Preserve-for-repeat only means anything for a step under a task whose
   // tree actually repeats.
@@ -1748,21 +1762,15 @@ function updateStartNote() {
   const note = $("d-start-note");
   if (!raw) {
     tag.textContent = "none";
-    note.textContent = task?.parent_id
-      ? "This step is scheduled inside its parent's slot."
-      : "No preferred start — the app picks a day from the task's quadrant.";
+    note.textContent =
+      "No preferred start — the app picks a day from the task's quadrant.";
     return;
   }
   const when = new Date(raw);
   const hours = (when - Date.now()) / 3600e3;
   tag.textContent = task?.start_at &&
     Math.abs(new Date(task.start_at) - when) < 60000 ? "set" : "unsaved";
-  if (task?.parent_id) {
-    // A step is placed inside the block its parent was given, so a start time
-    // on one changes how loudly it asks for attention, not where it lands.
-    note.textContent = "A step is scheduled inside its parent's slot, so this " +
-      "raises how urgent the step reads rather than moving it.";
-  } else if (hours <= 0) {
+  if (hours <= 0) {
     note.textContent = "That has already gone by — the task reads as ready to " +
       "start now, and will keep saying so until you do it or move it.";
   } else if (hours <= 6) {
@@ -1817,12 +1825,16 @@ async function saveDetail() {
   };
   const est = $("d-estimate").value;
   if (est) fields.estimated_time = Number(est);
-  const dl = $("d-deadline").value;
-  if (dl) fields.deadline = new Date(dl).toISOString();
-  else fields.clear_deadline = true;
-  const start = $("d-start").value;
-  if (start) fields.start_at = new Date(start).toISOString();
-  else fields.clear_start_at = true;
+  // Only when the fields are on screen: a step is scheduled by its root, and
+  // saving one must not wipe a date left on its row from before that was so.
+  if (!$("d-when-block").hidden) {
+    const dl = $("d-deadline").value;
+    if (dl) fields.deadline = new Date(dl).toISOString();
+    else fields.clear_deadline = true;
+    const start = $("d-start").value;
+    if (start) fields.start_at = new Date(start).toISOString();
+    else fields.clear_start_at = true;
+  }
   if (!$("d-repeat-carry-row").hidden) {
     fields.repeat_carry = $("d-repeat-carry").checked;
   }

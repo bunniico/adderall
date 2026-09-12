@@ -225,11 +225,12 @@ function isOverdue(e) {
 /* ---------------- how full a day is ----------------
  * How much a day costs, and what it is allowed to cost. */
 
-/* Leaves only. A task with subtasks is drawn as a block spanning the work its
- * steps add up to, and its steps are drawn inside it, so adding every block on
- * screen together would charge the day twice for the same afternoon. */
+/* Roots only. A tree is drawn as one block spanning the work its steps add up
+ * to, and the steps themselves are a checklist inside it rather than blocks of
+ * their own, so counting anything with a parent would charge the day twice for
+ * the same afternoon. */
 function dayLoad(events, field = "length_min") {
-  return events.reduce((n, e) => n + (e.has_subtasks ? 0 : e[field]), 0);
+  return events.reduce((n, e) => n + (e.parent_id ? 0 : e[field]), 0);
 }
 
 function capacityMinutes() {

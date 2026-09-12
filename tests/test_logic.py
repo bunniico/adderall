@@ -123,28 +123,54 @@ def test_auto_deadlines_toggle_off():
     assert d["urgency"] == 0.5  # low baseline
 
 
-def test_backward_scheduling_children_from_parent_deadline():
+def test_a_step_carries_no_deadline_of_its_own():
+    """A tree is one commitment, and the steps inside it are a checklist.
+
+    They used to be tiled backwards from the parent's deadline, which walked a
+    long tree off the start of the working day and gave every step a date it
+    could go overdue on by itself.
+    """
     parent_dl = NOW + timedelta(hours=10)
     parent = make_task("p", deadline=parent_dl.isoformat())
     c1 = make_task("c1", parent_id="p", estimated_time=60, order_index=0)  # buffered 78
     c2 = make_task("c2", parent_id="p", estimated_time=30, order_index=1)  # buffered 39
     c3 = make_task("c3", parent_id="p", estimated_time=20, order_index=2)  # buffered 26
     derived = logic.compute([parent, c1, c2, c3], SETTINGS, now=NOW)
-    # last child finishes at the parent deadline
-    assert derived["c3"]["deadline"] == parent_dl.isoformat(timespec="seconds")
-    # earlier children leave room for later siblings' buffered estimates
-    assert derived["c2"]["deadline"] == (parent_dl - timedelta(minutes=26)).isoformat(timespec="seconds")
-    assert derived["c1"]["deadline"] == (parent_dl - timedelta(minutes=26 + 39)).isoformat(timespec="seconds")
+
+    assert derived["p"]["deadline"] == parent_dl.isoformat(timespec="seconds")
+    for step in ("c1", "c2", "c3"):
+        assert derived[step]["deadline"] is None
+        assert derived[step]["deadline_source"] == "none"
+        # The date the work is aimed at is still known, and is still what the
+        # step's urgency is measured against.
+        assert derived[step]["inherited_deadline"] == \
+            parent_dl.isoformat(timespec="seconds")
+    assert derived["c1"]["urgency"] == logic.urgency(
+        parent_dl, derived["c1"]["buffered_estimate"], NOW)
 
 
-def test_backward_scheduling_skips_done_siblings():
+def test_a_deadline_set_by_hand_on_a_step_is_not_a_plan_either():
+    """Old lists are full of them. The row keeps its value; nothing reads it."""
+    parent_dl = NOW + timedelta(hours=10)
+    parent = make_task("p", deadline=parent_dl.isoformat())
+    kid = make_task("c", parent_id="p", estimated_time=60,
+                    deadline=(NOW + timedelta(days=9)).isoformat())
+    derived = logic.compute([parent, kid], SETTINGS, now=NOW)
+    assert derived["c"]["deadline"] is None
+    # ...so it cannot drag the tree's own date nine days out either.
+    assert derived["p"]["rollup_deadline"] == parent_dl.isoformat(timespec="seconds")
+
+
+def test_a_done_step_takes_no_room_in_the_tree():
+    """Done siblings were skipped when tiling backwards. They are still
+    skipped in the place it now matters: how long the tree is."""
     parent_dl = NOW + timedelta(hours=10)
     parent = make_task("p", deadline=parent_dl.isoformat())
     c1 = make_task("c1", parent_id="p", estimated_time=60, order_index=0)
     c2 = make_task("c2", parent_id="p", estimated_time=30, order_index=1, status="done")
     derived = logic.compute([parent, c1, c2], SETTINGS, now=NOW)
-    # done sibling reserves no time
-    assert derived["c1"]["deadline"] == parent_dl.isoformat(timespec="seconds")
+    assert derived["p"]["rollup_remaining"] == 78     # c1 and nothing else
+    assert derived["p"]["length_min"] == 78
 
 
 def test_parent_with_open_children_is_not_actionable():
@@ -284,13 +310,16 @@ def test_sort_by_deadline_sinks_undated_tasks_either_way():
         "later", "soon", "undated"]
 
 
-def test_sort_by_deadline_reads_a_container_off_the_work_it_holds():
+def test_sort_by_deadline_reads_a_container_off_its_own_date():
     settings = {**SETTINGS, "auto_deadlines": False, "sort_field": "deadline"}
     solo = make_task("solo", order_index=0,
                      deadline=(NOW + timedelta(days=2)).isoformat())
-    parent = make_task("parent", order_index=1)
+    parent = make_task("parent", order_index=1,
+                       deadline=(NOW + timedelta(hours=1)).isoformat())
+    # A date left on a step from before steps stopped being scheduled must not
+    # move the tree it sits in, in either direction.
     step = make_task("step", parent_id="parent",
-                     deadline=(NOW + timedelta(hours=1)).isoformat())
+                     deadline=(NOW + timedelta(days=9)).isoformat())
     assert sorted_ids([solo, parent, step], settings) == ["parent", "solo"]
 
 
@@ -412,20 +441,22 @@ def test_done_parent_counts_as_fully_done():
     assert derived["p"]["rollup_remaining"] == 0
 
 
-def test_rollup_deadline_is_the_furthest_inside():
+def test_rollup_deadline_is_the_containers_own():
+    """Nothing inside a tree carries a date any more, so the only one the
+    rollup can find is the container's. That is the right answer and a much
+    simpler one: a tree is due when the tree is due."""
     parent = make_task("p", deadline=(NOW + timedelta(hours=2)).isoformat())
     early = make_task("c1", parent_id="p", order_index=0, estimated_time=10)
     late = make_task("c2", parent_id="p", order_index=1,
                      deadline=(NOW + timedelta(days=3)).isoformat())
     derived = logic.compute([parent, early, late], SETTINGS, now=NOW)
     assert derived["p"]["rollup_deadline"] == \
-        (NOW + timedelta(days=3)).isoformat(timespec="seconds")
+        (NOW + timedelta(hours=2)).isoformat(timespec="seconds")
     assert derived["p"]["rollup_deadline_source"] == "user"
-    # the container's own deadline is left alone for scheduling
     assert derived["p"]["deadline"] == (NOW + timedelta(hours=2)).isoformat(timespec="seconds")
 
 
-def test_backward_scheduled_children_end_at_the_parent_deadline():
+def test_a_tree_rolls_up_to_the_deadline_of_its_root():
     parent_dl = NOW + timedelta(hours=10)
     parent = make_task("p", deadline=parent_dl.isoformat())
     c1 = make_task("c1", parent_id="p", order_index=0, estimated_time=60)
@@ -480,12 +511,13 @@ def test_focus_queue_unknown_root_is_empty():
 
 def test_focus_root_is_the_tree_owning_the_most_urgent_step():
     calm = make_task("calm", impact=8, effort=2, estimated_time=10)
-    project = make_task("project")
-    step = make_task("step", parent_id="project", estimated_time=60,
-                     deadline=(NOW + timedelta(minutes=70)).isoformat())
+    project = make_task("project",
+                        deadline=(NOW + timedelta(minutes=70)).isoformat())
+    step = make_task("step", parent_id="project", estimated_time=60)
     tasks = [calm, project, step]
     derived = logic.compute(tasks, SETTINGS, now=NOW)
-    # the urgent step is nested; the session roots at its top-level ancestor
+    # The tree is what is nearly due, and the step inherits that pressure, so
+    # it is the urgent thing; the session roots at its top-level ancestor.
     assert logic.next_task(tasks, derived)["id"] == "step"
     assert logic.focus_root_id(tasks, derived) == "project"
 
@@ -844,7 +876,7 @@ def test_a_tree_is_booked_once_not_once_per_step():
     # the same day, and the cheap one takes the morning — the day is handed out
     # by score, so the 78-minute job runs 09:00-10:18 and the tree follows.
     parent_end = logic.parse_dt(derived["p"]["deadline"])
-    assert logic.parse_dt(derived["c1"]["deadline"]) == parent_end
+    assert derived["c1"]["deadline"] is None      # the tree is the commitment
     assert derived["p"]["length_min"] == 2 * 156
     assert derived["other"]["deadline"] == "2026-08-30T10:18:00+00:00"
     assert (parent_end - timedelta(minutes=2 * 156)).isoformat() == \
@@ -1188,9 +1220,11 @@ def test_a_step_is_scheduled_inside_its_parents_slot_start_time_or_not():
                     start_at=NOW.isoformat())
     derived = logic.compute([parent, kid], TZ_SETTINGS, now=NOW)
 
-    # The step ends on its parent's deadline, exactly as it would without one.
-    assert derived["k"]["deadline"] == derived["p"]["deadline"]
-    assert derived["k"]["urgency"] == 10.0      # but it is heard
+    # The step sits inside its parent's one block, so it has no date of its
+    # own; the date it is working toward is the parent's.
+    assert derived["k"]["deadline"] is None
+    assert derived["k"]["inherited_deadline"] == derived["p"]["deadline"]
+    assert derived["k"]["urgency"] == 10.0      # but the start time is heard
 
 
 def test_start_times_work_with_spreading_turned_off():
