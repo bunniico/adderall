@@ -1,0 +1,11 @@
+now 2026-08-29 12:00 UTC
+day 09:00 to 17:00 | cap 8h | buffer 25%
+
+2026-08-31 Mon  load 12h / 8h  OVER CAP
+  05:00-17:00      12h  launch the thing  [user]  <<< before the day starts
+  05:00-07:00       2h    step 1  [auto]  <<< before the day starts
+  07:00-09:00       2h    step 2  [auto]  <<< before the day starts
+  09:00-11:00       2h    step 3  [auto]
+  11:00-13:00       2h    step 4  [auto]
+  13:00-15:00       2h    step 5  [auto]
+  15:00-17:00       2h    step 6  [auto]
