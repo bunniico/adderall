@@ -12,7 +12,7 @@ due Thu 3 Sep 22:00  starting 17:00
   Fri 4 Sep 09:00-14:00   (not the day it is due)
 due Fri 4 Sep 22:00  starting 17:00
   Fri 4 Sep 17:00-22:00
-  Sat 5 Sep 09:00-14:00   (not the day it is due)
+  Mon 7 Sep 09:00-14:00   (not the day it is due)
 due Mon 7 Sep 22:00  starting 17:00
   Mon 7 Sep 17:00-22:00
   Tue 8 Sep 09:00-14:00   (not the day it is due)
@@ -27,4 +27,4 @@ due Thu 10 Sep 22:00  starting 17:00
   Fri 11 Sep 09:00-14:00   (not the day it is due)
 due Fri 11 Sep 22:00  starting 17:00
   Fri 11 Sep 17:00-22:00
-  Sat 12 Sep 09:00-14:00   (not the day it is due)
+  Mon 14 Sep 09:00-14:00   (not the day it is due)

@@ -462,6 +462,72 @@ def test_a_weekday_rhythm_never_lands_its_work_on_the_weekend(app):
             assert start.weekday() < 5, "and never on a Saturday or Sunday"
 
 
+def test_a_weekday_rhythm_keeps_its_overrun_off_the_weekend(app):
+    """#67, end to end. Since #66 the hour in a rule starts the work, so eight
+    hours from five in the evening cannot finish inside the day and run over.
+    For Friday's shift the next calendar day is a Saturday, which is exactly
+    the day "every weekday" was keeping."""
+    client, *_ = app
+    client.put("/api/settings", json={"day_start": 9, "day_end": 22,
+                                      "day_capacity": 480, "timezone": "UTC",
+                                      "adaptive_capacity": False})
+    task = add(client, title="work", estimated_time=480)
+    repeat(client, task["id"], freq="weekly", weekdays=[1, 2, 3, 4, 5],
+           time="17:00")
+
+    shifts = [e for e in client.get("/api/calendar").json()["events"]
+              if e["title"] == "work"]
+    assert len(shifts) > 5
+    for shift in shifts:
+        assert shift["blocks"], "every shift is drawn somewhere"
+        for opened, closed in shift["blocks"]:
+            for when in (logic.parse_dt(opened), logic.parse_dt(closed)):
+                assert when.weekday() < 5, \
+                    f"work on {when:%a %d %b %H:%M}, which the rule does not name"
+
+
+def test_a_task_that_does_not_repeat_may_still_use_a_weekend(app):
+    """The tradeoff #67 records, asserted rather than assumed: the days come
+    from the task's own rule, so a task with no rule is unconstrained."""
+    client, *_ = app
+    client.put("/api/settings", json={"day_start": 9, "day_end": 22,
+                                      "day_capacity": 480, "timezone": "UTC",
+                                      "adaptive_capacity": False})
+    # A Friday evening, with far more work than the evening holds.
+    friday = datetime.now(timezone.utc)
+    while friday.weekday() != 4:
+        friday += timedelta(days=1)
+    friday = friday.replace(hour=17, minute=0, second=0, microsecond=0)
+    add(client, title="marathon", estimated_time=480,
+        start_at=friday.isoformat(), deadline=friday.isoformat())
+
+    ev = next(e for e in client.get("/api/calendar").json()["events"]
+              if e["title"] == "marathon")
+    days = {logic.parse_dt(a).weekday() for a, _ in ev["blocks"]}
+    assert days & {5, 6}, "nothing about a one-off says a weekend is off limits"
+
+
+def test_a_rhythm_with_one_named_day_stacks_its_overrun_onto_that_day(app):
+    """The awkward case #67 asks to pin down: one allowed day, and more work
+    than it holds. The overrun cannot go to the next morning, because the next
+    morning is not a day this rhythm may use. It goes to the next one that is,
+    which for a weekly rule is a week later."""
+    client, *_ = app
+    client.put("/api/settings", json={"day_start": 9, "day_end": 22,
+                                      "day_capacity": 480, "timezone": "UTC",
+                                      "adaptive_capacity": False})
+    task = add(client, title="long monday", estimated_time=900)   # 15h raw
+    repeat(client, task["id"], freq="weekly", weekdays=[1], time="09:00")
+
+    shifts = [e for e in client.get("/api/calendar").json()["events"]
+              if e["title"] == "long monday"]
+    assert shifts
+    for shift in shifts:
+        for opened, _closed in shift["blocks"]:
+            assert logic.parse_dt(opened).weekday() == 0, \
+                "a Monday rhythm only ever works on a Monday"
+
+
 def test_a_task_that_already_has_a_deadline_keeps_it_as_the_first_beat(app):
     client, *_ = app
     due = (datetime.now(timezone.utc) + timedelta(days=2)).replace(microsecond=0)
