@@ -1,12 +1,12 @@
-# ⏳ adderall
+# ⏳ adderall (beta)
 
 > Note: This application requires a Claude API key and a workspace ID if using an identity-based API key. See Anthropic's API site for more details.
 
-goblin.tools is cool, but it also sucks.
+goblin.tools is cool, but it also sucks sometimes.
 
-Here's what I created to fix it:
+Here's what I want to try to fix it:
 
-A single-user, locally hosted web app for people with executive dysfunction
+I want to make a single-user, locally hosted web app for people with executive dysfunction
 (ADHD, autism, AuDHD) designed to help us prioritize and organize tasks with minimal effort.
 
 It ports the four most useful goblin.tools ideas:
