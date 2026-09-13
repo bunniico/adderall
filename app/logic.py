@@ -289,13 +289,26 @@ class DayPlanner:
     still has room under the cap. It only ever looks *forward* from the day
     the horizon asked for: pulling work earlier would invent urgency nobody
     asked for.
+
+    The invariant, which is the thing that keeps getting lost:
+
+        No block starts before the start of the day or ends after the end of
+        it, except where you asked for that in so many words — a `start_at`
+        you set outside the window, or a day so full there is nowhere left.
+
+    Work that will not fit in one window is laid across consecutive windows
+    rather than run through the night, and work that must be *finished* by an
+    hour outside the window is laid backwards into the window time before it.
+    A four hour job due at eight in the morning was done yesterday evening; it
+    was never done from four until eight.
     """
 
     def __init__(self, capacity: int = DEFAULT_CAPACITY,
                  day_start: int = DEFAULT_DAY_START,
                  day_end: int = DEFAULT_DAY_END,
                  tz: tzinfo = timezone.utc,
-                 search_days: int = PLACEMENT_SEARCH_DAYS) -> None:
+                 search_days: int = PLACEMENT_SEARCH_DAYS,
+                 now: datetime | None = None) -> None:
         self.capacity = max(30, min(24 * 60, int(capacity or DEFAULT_CAPACITY)))
         self.day_start = max(0, min(23, int(day_start))) * 60
         # Clamped, not rejected: a day that ends before it starts is a typo, and
@@ -304,9 +317,18 @@ class DayPlanner:
         self.day_end = min(24 * 60, max(self.day_start + MIN_DAY_HOURS * 60,
                                         int(day_end) * 60))
         self.tz = tz
+        # The hours already gone. Work laid backwards from a deadline that is
+        # still ahead of you stops here rather than filling this morning.
+        self.now = now
         self.search_days = max(1, int(search_days))
         self._days: dict[date, list[list[int]]] = {}
         self._placed: dict[str, datetime] = {}
+        # Where each task's work actually sits, as UTC instants. A commitment
+        # is not always one unbroken run: work finishing by nine in the morning
+        # was done the evening before, and fourteen hours of it does not fit in
+        # a day however you look at it. The calendar draws these rather than
+        # guessing a start by counting back from the deadline.
+        self._spans: dict[str, list[tuple[datetime, datetime]]] = {}
 
     # ---- local time <-> instants ----
 
@@ -427,17 +449,21 @@ class DayPlanner:
 
         `pin` is the moment the task asked to begin at. On the day it falls
         on, the search starts there rather than at the top of the working
-        window, the window stretches a day's worth past it so several pinned
-        things can run back to back, and the cap does not get a veto: a start
-        time is a commitment you made, like a deadline you set, and the cap
-        governs the work the app schedules for you. On every later day the
-        pin has nothing to say and the ordinary rules apply again.
+        window, the window stretches far enough past it to hold *this* task,
+        and the cap does not get a veto: a start time is a commitment you
+        made, like a deadline you set, and the cap governs the work the app
+        schedules for you. On every later day the pin has nothing to say and
+        the ordinary rules apply again.
+
+        The stretch used to be a whole further capacity, which reserved an
+        evening a pinned task had no use for. It is the task's own length now:
+        dinner at six runs until it is finished and not a minute past.
         """
         for _ in range(self.search_days + 1):
             pinned = pin is not None and self._local(pin).date() == day
             base = self._minute_of(day, pin) if pinned else None
             floor = self._floor(day, not_before, base)
-            until = (min(24 * 60, max(self.window_end, floor + self.capacity))
+            until = (min(24 * 60, max(self.window_end, floor + length))
                      if pinned else None)
             if pinned or self.capacity - self.load(day) >= length:
                 for start, end in self._gaps(day, floor, until):
@@ -461,6 +487,10 @@ class DayPlanner:
         thing placed makes its day that much less empty for the next. Ties go
         to the earliest day, so a book with a clear day anywhere in it still
         gets that day, exactly as before.
+
+        The last resort really is last: everything that reaches it has already
+        failed to fit in any window anywhere in the search, so this is the one
+        place a block is allowed to run past the end of a day.
         """
         best: tuple[int, date] | None = None
         for _ in range(self.search_days + 1):
@@ -474,18 +504,134 @@ class DayPlanner:
         booked = self._merged(chosen)
         return chosen, max(self.day_start, booked[-1][1] if booked else 0)
 
+    # ---- laying work out, backwards and forwards ----
+
+    def _lay_back(self, deadline: datetime, length: int
+                  ) -> list[tuple[datetime, datetime]]:
+        """Where `length` minutes finishing by `deadline` actually happen.
+
+        Backwards from the deadline through window time, day by day. This used
+        to be one line — book `deadline - length` to `deadline` — with no
+        notion of a day in it at all, so a four hour job due at eight in the
+        morning was booked from four until eight, and the day view drew it
+        there because that is exactly what had been booked.
+
+        An *evening* deadline is different from an early morning one, and the
+        difference is the whole rule. Past the end of your day is time you said
+        you would be working: you named that hour, so the stretch between the
+        end of the day and it is yours. Before the start of your day is not:
+        nothing is done before the day begins, so that work happened the
+        evening before.
+        """
+        local = self._local(deadline)
+        day = local.date()
+        dl_min = int((local - self._midnight(day)).total_seconds() // 60)
+        spans: list[tuple[datetime, datetime]] = []
+        remaining = length
+
+        if dl_min > self.window_end:
+            take = min(remaining, dl_min - self.window_end)
+            spans.append((self._instant(day, dl_min - take),
+                          self._instant(day, dl_min)))
+            remaining -= take
+
+        # Only a deadline still ahead of you keeps the hours already gone out
+        # of its plan. One that has passed is historical either way, and work
+        # that was due last Tuesday belongs on last Tuesday.
+        honour_now = self.now is not None and deadline > self.now
+        today = self._local(self.now).date() if self.now is not None else None
+
+        ceiling = min(dl_min, self.window_end)
+        for _ in range(self.search_days + 1):
+            if remaining <= 0:
+                break
+            if honour_now and day < today:
+                break              # nothing earlier than now is available
+            floor = self.day_start
+            if honour_now and day == today:
+                floor = max(floor, self._minute_of(day, self.now))
+            for start, end in reversed(self._gaps(day, floor, ceiling)):
+                take = min(remaining, end - start)
+                if take <= 0:
+                    continue
+                spans.append((self._instant(day, end - take),
+                              self._instant(day, end)))
+                remaining -= take
+                if remaining <= 0:
+                    break
+            day -= timedelta(days=1)
+            ceiling = self.window_end
+
+        if remaining > 0:
+            # Half a year of evenings and nowhere free in any of them. Put what
+            # is left immediately before the earliest piece: a plan with a
+            # block in an odd place beats a plan missing an hour of work.
+            earliest = min((start for start, _ in spans), default=deadline)
+            spans.append((earliest - timedelta(minutes=remaining), earliest))
+        return sorted(spans)
+
+    def _lay_forward(self, day: date, length: int, not_before: datetime | None,
+                     pin: datetime | None) -> list[tuple[datetime, datetime]]:
+        """Where `length` minutes starting from `day` actually happen.
+
+        For work that will not fit in one window: a fourteen hour job is laid
+        across consecutive days' windows rather than run from nine in the
+        morning to eleven at night, or worse, started after whatever was
+        already booked and left to finish at five the next morning. It cannot
+        be done in a day either way; the difference is whether the plan says so
+        or quietly pretends the night is available.
+        """
+        first, spans, remaining = day, [], length
+        for _ in range(self.search_days + 1):
+            if remaining <= 0:
+                break
+            pinned = pin is not None and self._local(pin).date() == day
+            base = self._minute_of(day, pin) if pinned else None
+            floor = self._floor(day, not_before, base)
+            # A pinned day answers to the start time you set, not to the cap.
+            room = remaining if pinned else self.capacity - self.load(day)
+            for start, end in (self._gaps(day, floor) if room > 0 else []):
+                take = min(remaining, end - start, room)
+                if take <= 0:
+                    continue
+                spans.append((self._instant(day, start),
+                              self._instant(day, start + take)))
+                remaining, room = remaining - take, room - take
+                if remaining <= 0:
+                    break
+            day += timedelta(days=1)
+
+        if remaining > 0:
+            # Every day in the search window is full to the cap. The emptiest
+            # of them takes the rest and runs past the end of it: there is
+            # nowhere left that is better, and dropping the work is not an
+            # option the caller has.
+            chosen, start = self._emptiest(first)
+            spans.append((self._instant(chosen, start),
+                          self._instant(chosen, start + remaining)))
+        return spans
+
     # ---- what the scheduler calls ----
+
+    def spans(self, key: str) -> list[tuple[datetime, datetime]]:
+        """Where this task's work sits, in order. Empty if it was never placed."""
+        return self._spans.get(key, [])
 
     def reserve(self, key: str, deadline: datetime, length: int) -> datetime:
         """Book something that already has a time: a deadline you set yourself.
 
         Fixed points go in before anything is placed around them, so the app
-        schedules its own work in the space that is actually left.
+        schedules its own work in the space that is actually left. The deadline
+        is yours and is handed straight back; where the work leading up to it
+        goes is `_lay_back`'s answer, and it is inside your day.
         """
         if key in self._placed:
             return self._placed[key]
         length = max(1, int(length))
-        self.book(deadline - timedelta(minutes=length), deadline)
+        spans = self._lay_back(deadline, length)
+        for start, end in spans:
+            self.book(start, end)
+        self._spans[key] = spans
         self._placed[key] = deadline
         return deadline
 
@@ -507,28 +653,52 @@ class DayPlanner:
             return self._placed[key]
         length = max(1, int(length))
         day = self._local(target).date()
-        slot = (self._first_fit(day, length, not_before, pin)
-                if length <= self.capacity or pin is not None else None)
-        if slot is None:
-            # More than a whole day's worth of work in one piece (or nothing
-            # free for half a year): give it the emptiest day there is and let
-            # it run past the end of the window. A twelve-hour job is a
-            # twelve-hour job, and pretending otherwise helps nobody.
-            slot = self._emptiest(day)
-        chosen, start = slot
-        end = self._instant(chosen, start + length)
-        self.book(end - timedelta(minutes=length), end)
+        slot = self._first_fit(day, length, not_before, pin)
+        if slot is not None:
+            chosen, start = slot
+            spans = [(self._instant(chosen, start),
+                      self._instant(chosen, start + length))]
+        else:
+            # It does not fit in one piece anywhere: more than a day's work, or
+            # a diary with no gap that size left in it. Lay it across the days
+            # rather than running it through the night.
+            spans = self._lay_forward(day, length, not_before, pin)
+        for start, end in spans:
+            self.book(start, end)
+        self._spans[key] = spans
+        end = spans[-1][1]
         self._placed[key] = end
         return end
 
 
-def day_planner(settings: dict, capacity: int | None = None) -> DayPlanner:
+def day_planner(settings: dict, capacity: int | None = None,
+                now: datetime | None = None) -> DayPlanner:
     """A planner set up the way the settings say a day works."""
     if capacity is None:
         capacity = capacity_plan(settings)["minutes"]
     return DayPlanner(capacity, settings.get("day_start", DEFAULT_DAY_START),
                       settings.get("day_end", DEFAULT_DAY_END),
-                      resolve_tz(settings.get("timezone")))
+                      resolve_tz(settings.get("timezone")), now=now)
+
+
+def task_blocks(planner: DayPlanner, task_id: str, derived: dict) -> list[list[str]]:
+    """Where a task's work sits, as the calendar draws it.
+
+    What the planner booked, when it placed this task: one span usually, more
+    when the work was laid across several days. Otherwise a single block
+    ending on the deadline, which is the old rule and still the right answer
+    for a deadline the planner never had a say in (spreading turned off).
+    """
+    spans = planner.spans(task_id)
+    if spans:
+        return [[start.isoformat(timespec="seconds"),
+                 end.isoformat(timespec="seconds")] for start, end in spans]
+    deadline = parse_dt(derived.get("deadline"))
+    if deadline is None:
+        return []
+    start = deadline - timedelta(minutes=derived["length_min"])
+    return [[start.isoformat(timespec="seconds"),
+             deadline.isoformat(timespec="seconds")]]
 
 
 def _tree_minutes(task: dict, children: dict, lengths: dict) -> int:
@@ -866,7 +1036,7 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
     threshold = int(settings.get("matrix_threshold", 5))
     auto_deadlines = bool(settings.get("auto_deadlines", True))
     spread = bool(settings.get("spread_tasks", True))
-    planner = planner if planner is not None else day_planner(settings)
+    planner = planner if planner is not None else day_planner(settings, now=now)
     sort_field, sort_desc = sort_mode(settings)
 
     by_id = {t["id"]: t for t in tasks}
@@ -1058,6 +1228,10 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
         # the score is made of, and for a container that is the work inside it.
         d["length_min"] = block_length(d)
         d["raw_length_min"] = max(1, round(d["length_min"] / (1.0 + buf)))
+        # Where those minutes actually are. Counting back from the deadline is
+        # only right when the work runs straight into it, which is exactly what
+        # stops being true once the plan respects the hours you keep.
+        d["blocks"] = task_blocks(planner, t["id"], d)
         # Computed after urgency, so containers score off what they actually
         # still hold rather than off their own empty shell. Containers then
         # have this replaced outright by the pass below.

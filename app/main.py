@@ -283,7 +283,8 @@ def _spend(settings: dict | None = None) -> dict:
 
 def _derive_all(projects: list[dict], by_project: dict[str, list[dict]],
                 settings: dict, ratios: list[float],
-                forecast: list[dict] | None = None) -> dict[str, dict]:
+                forecast: list[dict] | None = None,
+                book: dict | None = None) -> dict[str, dict]:
     """Derived fields for every project, planned against one shared day book.
 
     Two passes, deliberately. Everything already pinned to a time is booked
@@ -299,13 +300,20 @@ def _derive_all(projects: list[dict], by_project: dict[str, list[dict]],
     future is a commitment you have already made; it goes in the book with the
     rest of them (see `recurring.forecast`).
     """
-    planner = logic.day_planner(settings, _capacity(settings)["minutes"])
+    planner = logic.day_planner(settings, _capacity(settings)["minutes"],
+                                now=datetime.now(timezone.utc))
     for project in projects:
         logic.reserve_fixed(planner, by_project.get(project["id"], []),
                             settings, ratios)
     if forecast is None:
         forecast = recurring.forecast(settings=settings, ratios=ratios)
     recurring.reserve_forecast(planner, forecast)
+    # The caller can ask for the book itself: the forecast's blocks live in it
+    # and nowhere else, since an occurrence is not a task to derive anything
+    # from. `book["planner"] = ...` rather than a second return value, so the
+    # three callers that do not care are left alone.
+    if book is not None:
+        book["planner"] = planner
     return {p["id"]: logic.compute(by_project.get(p["id"], []), settings, ratios,
                                    planner=planner)
             for p in projects}
@@ -399,7 +407,9 @@ def _calendar_events() -> list[dict]:
         by_project.setdefault(t["project_id"], []).append(t)
 
     forecast = recurring.forecast(settings=settings, ratios=ratios)
-    all_derived = _derive_all(projects, by_project, settings, ratios, forecast)
+    book: dict = {}
+    all_derived = _derive_all(projects, by_project, settings, ratios, forecast,
+                              book=book)
     events: list[dict] = []
     for project in projects:
         tasks = by_project.get(project["id"], [])
@@ -453,16 +463,22 @@ def _calendar_events() -> list[dict]:
                 # a one-off with the same date on it, so the calendar says so.
                 "recurrence": series.get(t["id"]),
                 "path": logic.ancestor_titles(tasks, t),
+                # Where the work actually sits, which is not always one run
+                # back from the deadline: work due first thing was done the
+                # evening before, and work too big for a day is in pieces.
+                "blocks": d["blocks"],
                 # A real task, as against one of the outlines below.
                 "projected": False,
             })
-    events.extend(_forecast_events(forecast, projects, by_project, settings, ratios))
+    events.extend(_forecast_events(forecast, projects, by_project, settings,
+                                   ratios, book.get("planner")))
     return events
 
 
 def _forecast_events(forecast: list[dict], projects: list[dict],
                      by_project: dict[str, list[dict]], settings: dict,
-                     ratios: list[float]) -> list[dict]:
+                     ratios: list[float],
+                     planner: logic.DayPlanner | None = None) -> list[dict]:
     """The rhythms' future, as blocks that do not exist yet.
 
     A repeating job puts one copy on your list at a time, which is the right
@@ -530,6 +546,10 @@ def _forecast_events(forecast: list[dict], projects: list[dict],
             "subtask_count": len(template.get("subtasks") or []),
             "recurrence": described[sid],
             "path": [],
+            "blocks": (logic.task_blocks(planner, occ["key"],
+                                         {"deadline": occ["at"].isoformat(),
+                                          "length_min": length})
+                       if planner is not None else []),
             "projected": True,
             "occurrence": occ["number"],
             "source_task_id": open_of.get(sid),
