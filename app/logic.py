@@ -693,6 +693,9 @@ def task_blocks(planner: DayPlanner, task_id: str, derived: dict) -> list[list[s
     if spans:
         return [[start.isoformat(timespec="seconds"),
                  end.isoformat(timespec="seconds")] for start, end in spans]
+    stored = derived.get("planned_blocks")
+    if stored:
+        return stored
     deadline = parse_dt(derived.get("deadline"))
     if deadline is None:
         return []
@@ -1003,7 +1006,8 @@ def list_sort_key(task: dict, d: dict, field: str, descending: bool) -> list:
 
 def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None,
             now: datetime | None = None,
-            planner: DayPlanner | None = None) -> dict[str, dict]:
+            planner: DayPlanner | None = None,
+            replan: bool = False) -> dict[str, dict]:
     """Compute all derived fields for a flat task list.
 
     Returns {task_id: {buffered_estimate, quadrant, urgency, deadline,
@@ -1029,6 +1033,13 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
     across every project and auto-deadlines are spread over days that have
     room instead of stacking; leave it out and one is made for this call,
     which still spreads *this* list but knows nothing about the other tabs.
+
+    `replan` is the difference between deciding and reading. Off, a task that
+    has been planned already keeps the slot it was given: two reads in a row
+    agree, and looking at your week does not rearrange it. On, every auto
+    placement is decided again from scratch, which is what the replan pass
+    does after something changes. A deadline you set yourself is a fixed point
+    either way — nothing here ever moves one.
     """
     now = now or datetime.now(timezone.utc)
     ratios = ratios or []
@@ -1094,6 +1105,11 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
             return user_dl, "user"
         if not auto_deadlines:
             return None, "none"
+        planned = None if replan else parse_dt(task.get("planned_at"))
+        if planned is not None:
+            # Already decided, and decided once. Re-deriving it on every read
+            # is what made the app look like it was changing its mind.
+            return planned, "auto"
         target, minutes, floor, pin = auto_plan(task)
         if not minutes:
             return target, "auto"  # nothing left to do in here, nothing to book
@@ -1141,10 +1157,23 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
                 planner.reserve(task["id"], dl, minutes)
         if not auto_deadlines:
             return
+        if not replan:
+            # A slot already given out is a slot that is taken: book it before
+            # anything new is placed, or today's fresh task would be handed the
+            # afternoon something else is already sitting in.
+            for task in roots:
+                planned = parse_dt(task.get("planned_at"))
+                if planned is None or parse_dt(task["deadline"]) is not None:
+                    continue
+                minutes = _tree_minutes(task, children, lengths)
+                if minutes:
+                    planner.reserve(task["id"], planned, minutes)
         queue = []
         for i, task in enumerate(roots):
             if parse_dt(task["deadline"]) is not None:
                 continue
+            if not replan and parse_dt(task.get("planned_at")) is not None:
+                continue                      # it has its slot; leave it there
             target, minutes, floor, pin = auto_plan(task)
             if not minutes:
                 continue
@@ -1231,7 +1260,8 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
         # Where those minutes actually are. Counting back from the deadline is
         # only right when the work runs straight into it, which is exactly what
         # stops being true once the plan respects the hours you keep.
-        d["blocks"] = task_blocks(planner, t["id"], d)
+        d["blocks"] = task_blocks(planner, t["id"],
+                                  {**d, "planned_blocks": t.get("planned_blocks")})
         # Computed after urgency, so containers score off what they actually
         # still hold rather than off their own empty shell. Containers then
         # have this replaced outright by the pass below.

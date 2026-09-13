@@ -312,8 +312,14 @@ def _derive_all(projects: list[dict], by_project: dict[str, list[dict]],
     future is a commitment you have already made; it goes in the book with the
     rest of them (see `recurring.forecast`).
     """
-    planner = logic.day_planner(settings, _capacity(settings)["minutes"],
-                                now=datetime.now(timezone.utc))
+    now = datetime.now(timezone.utc)
+    # Deciding or reading? The plan on the tasks is current while nothing has
+    # changed since it was made, and a read then simply reads it — which is
+    # what makes two reads agree. See `scheduler.py` for the whole rule.
+    state = db.plan_state()
+    replan = state["rev"] != state["planned_rev"]
+
+    planner = logic.day_planner(settings, _capacity(settings)["minutes"], now=now)
     for project in projects:
         logic.reserve_fixed(planner, by_project.get(project["id"], []),
                             settings, ratios)
@@ -326,9 +332,38 @@ def _derive_all(projects: list[dict], by_project: dict[str, list[dict]],
     # three callers that do not care are left alone.
     if book is not None:
         book["planner"] = planner
-    return {p["id"]: logic.compute(by_project.get(p["id"], []), settings, ratios,
-                                   planner=planner)
-            for p in projects}
+    derived = {p["id"]: logic.compute(by_project.get(p["id"], []), settings,
+                                      ratios, now=now, planner=planner,
+                                      replan=replan)
+               for p in projects}
+    if replan:
+        _write_plan(projects, by_project, derived, state["rev"], now, settings)
+    return derived
+
+
+def _write_plan(projects: list[dict], by_project: dict[str, list[dict]],
+                derived: dict[str, dict], rev: int, now: datetime,
+                settings: dict) -> None:
+    """Write down where the app just decided each thing goes.
+
+    Only the placements it chose itself: a deadline you set is yours and is
+    not the plan's to remember. Stored on the task so the next read can read
+    it rather than decide it again, and stamped with the rev it covers so the
+    read after a change knows to think again.
+    """
+    for project in projects:
+        for task in by_project.get(project["id"], []):
+            d = derived[project["id"]].get(task["id"])
+            if d is None:
+                continue
+            auto = d.get("deadline_source") == "auto" and d.get("deadline")
+            planned_at = d["deadline"] if auto else None
+            blocks = d.get("blocks") if auto else None
+            if task.get("planned_at") != planned_at or \
+               task.get("planned_blocks") != blocks:
+                db.save_plan(task["id"], planned_at, blocks)
+    local = now.astimezone(logic.resolve_tz(settings.get("timezone")))
+    db.record_plan(rev, now.isoformat(timespec="seconds"), local.date().isoformat())
 
 
 def _state(project_id: str | None = None, xp_gained: int = 0) -> dict:
@@ -387,6 +422,11 @@ def _state(project_id: str | None = None, xp_gained: int = 0) -> dict:
         # the app has gone cheap for the day has to appear the moment it is
         # true, not the next time someone opens the settings dialog.
         "spend": _spend(settings),
+        # When the app last worked out where things go. On screen, because
+        # "I'm not sure when it runs" is a fair thing to say about a scheduler
+        # that never tells you. Read *after* the derive above, so it is the
+        # plan this payload was built from.
+        "plan": db.plan_state(),
     }
 
 
@@ -1424,6 +1464,19 @@ def drop_tasks(body: DropRequest):
             recurring.close_occurrence(task)
         dropped.append({"task_id": task_id, "was": was["status"]})
     return {"dropped": dropped, "state": _state()}
+
+
+@app.post("/api/replan")
+def replan_now():
+    """Remake the plan, now, because you asked.
+
+    Everything else that remakes it is a consequence of something you did (see
+    `scheduler.py`); this is the button for when you simply want it thought
+    through again. It bumps the rev, and the state it returns is planned
+    against it.
+    """
+    db.bump_plan_rev()
+    return _state()
 
 
 @app.get("/api/settings")

@@ -1,4 +1,33 @@
-"""The scheduled job that keeps recurring tasks appearing.
+"""The jobs that run on a timer, and the rule for when the plan is remade.
+
+## When the scheduler runs
+
+It is worth saying out loud, because "I'm not sure when it runs or if it has
+any routines at all" was a fair thing to say about it. Placement used to be
+recomputed inside every request, on a day book built for that request and
+thrown away with it, so the app was rearranging your week every time you
+looked at it and never rearranging it when something actually changed.
+
+**What is replanned.** Only work the app placed itself: a task with no
+deadline of your own, which it gave a day and an hour to. A deadline you set,
+a start time you set, and the shape of a tree are never touched.
+
+**When.** The plan is remade on the first read after anything that could move
+work about: any task written (created, edited, finished, dropped, moved,
+deleted), any setting the plan is made of (the hours of your day, the cap, the
+buffer, the timezone), the local day rolling over, and the sweep below
+planting a copy of a repeating job. Nothing else. In particular, *reading*
+never replans: two reads in a row give the same answer, which is the whole
+point.
+
+**How it is known.** `db.plan_rev` counts changes; the plan records the rev it
+was made against. Equal means current. That is the entire mechanism.
+
+**Blast radius.** Today onward. The past is never rewritten, so work that is
+already overdue stays overdue rather than quietly rescheduling itself out of
+the red.
+
+## The recurrence sweep
 
 It is deliberately a sweep on a timer rather than an alarm clock set for
 midnight. This app runs on one machine — a laptop that sleeps, a Pi that gets
@@ -21,7 +50,9 @@ import asyncio
 import logging
 import os
 
-from . import recurring
+from datetime import datetime, timezone
+
+from . import db, logic, recurring
 
 log = logging.getLogger(__name__)
 
@@ -42,8 +73,29 @@ def interval_seconds() -> int:
 
 
 def run_once() -> dict:
-    """One sweep, synchronously. The API route and the loop share this."""
-    return recurring.sweep()
+    """One pass, synchronously. The API route and the loop share this.
+
+    The sweep, and then the day-rollover check: a plan made yesterday was made
+    for a day that no longer exists, so the rev is bumped and the next read
+    remakes it. Bumping rather than planning here keeps the placement in one
+    place (the read path) instead of two.
+    """
+    result = recurring.sweep()
+    result["rolled_over"] = _roll_over()
+    return result
+
+
+def _roll_over() -> bool:
+    """Has the local day turned since the plan was made? Say so, once."""
+    settings = db.get_settings()
+    today = datetime.now(timezone.utc).astimezone(
+        logic.resolve_tz(settings.get("timezone"))).date().isoformat()
+    state = db.plan_state()
+    if state["planned_day"] is None or state["planned_day"] == today:
+        return False
+    log.info("recurring: the day turned; the plan will be remade on next read")
+    db.bump_plan_rev()
+    return True
 
 
 async def _loop(interval: int) -> None:
