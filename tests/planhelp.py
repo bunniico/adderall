@@ -79,10 +79,13 @@ def _minutes(total: int) -> str:
 
 def blocks(tasks: list[dict], settings: dict, now: datetime | None = None,
            ratios: list[float] | None = None) -> list[dict]:
-    """What the calendar would draw: one block per scheduled task.
+    """What the calendar would draw: every span of every scheduled task.
 
-    A block ends at the task's deadline and starts `length_min` earlier, which
-    is where the hours outside the working day become visible.
+    Read off `blocks`, which is where the planner actually put the work. Work
+    finishing by an hour outside your day was done before it, and work too big
+    for one day is in more than one piece, so a block no longer always ends on
+    the deadline it belongs to. The dump says the deadline out loud where the
+    two differ.
     """
     now = now or NOW
     derived = logic.compute(tasks, settings, ratios or [], now=now)
@@ -93,18 +96,23 @@ def blocks(tasks: list[dict], settings: dict, now: datetime | None = None,
         deadline = logic.parse_dt(d.get("deadline"))
         if deadline is None:
             continue
-        length = d["length_min"]
-        end = deadline.astimezone(tz)
-        out.append({
-            "id": t["id"], "title": t["title"],
-            "start": end - timedelta(minutes=length), "end": end,
-            "length": length, "source": d["deadline_source"],
-            # A tree is drawn as one block and charged for once. Steps carry no
-            # deadline and so are never drawn; the test for what a day costs is
-            # therefore "is this a root", not "is this a leaf".
-            "counts": not t["parent_id"],
-            "depth": len(d["order_path"]) - 1,
-        })
+        pieces = d["blocks"]
+        for i, (opened, closed) in enumerate(pieces):
+            start = logic.parse_dt(opened).astimezone(tz)
+            end = logic.parse_dt(closed).astimezone(tz)
+            out.append({
+                "id": t["id"], "title": t["title"],
+                "start": start, "end": end,
+                "length": int((end - start).total_seconds() // 60),
+                "source": d["deadline_source"],
+                # A tree is drawn as one block and charged for once. Steps carry
+                # no deadline and so are never drawn; the test for what a day
+                # costs is therefore "is this a root", not "is this a leaf".
+                "counts": not t["parent_id"],
+                "depth": len(d["order_path"]) - 1,
+                "piece": (i + 1, len(pieces)),
+                "due": deadline.astimezone(tz),
+            })
     out.sort(key=lambda b: (b["start"], b["title"]))
     return out
 
@@ -153,10 +161,15 @@ def dump(tasks: list[dict], settings: dict | None = None,
                        "  >>> after the day ends"
                        if (spill == "+1" or end_min > window_end) else "")
             indent = "  " * block["depth"]
+            nth, of = block["piece"]
+            part = f" ({nth}/{of})" if of > 1 else ""
+            # Only worth saying when the work does not run straight into it.
+            due = ("" if block["end"] == block["due"] and of == nth
+                   else f"  due {block['due']:%-d %b %H:%M}")
             lines.append(
                 f"  {block['start']:%H:%M}-{block['end']:%H:%M}{spill} "
-                f"{_minutes(block['length']):>6}  {indent}{block['title']}"
-                f"  [{block['source']}]{outside}")
+                f"{_minutes(block['length']):>6}  {indent}{block['title']}{part}"
+                f"  [{block['source']}]{due}{outside}")
 
     unscheduled = sorted(t["title"] for t in tasks
                          if t["id"] not in {b["id"] for b in drawn})

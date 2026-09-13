@@ -199,6 +199,25 @@ function eventStart(e) {
   return new Date(new Date(e.deadline).getTime() - e.length_min * 60000);
 }
 
+/* Where a task's work actually sits, as [start, end] pairs.
+ *
+ * Counting back from the deadline is only right when the work runs straight
+ * into it. It often does not: work due first thing was done the evening
+ * before, and work too big for one day is laid across several. The server
+ * sends the spans it booked; the old arithmetic is the fallback for anything
+ * that has none (an older payload, a projection with no day book). */
+function eventSegments(e) {
+  if (e.blocks?.length) {
+    return e.blocks.map(([from, to]) => [new Date(from), new Date(to)]);
+  }
+  return [[eventStart(e), eventEnd(e)]];
+}
+
+function onDay([start, end], day) {
+  const opens = startOfDay(day);
+  return end > opens && start < addDays(opens, 1);
+}
+
 function byScore(a, b) {
   return (b.score ?? 0) - (a.score ?? 0) ||
          new Date(a.deadline) - new Date(b.deadline);
@@ -225,12 +244,31 @@ function isOverdue(e) {
 /* ---------------- how full a day is ----------------
  * How much a day costs, and what it is allowed to cost. */
 
-/* Roots only. A tree is drawn as one block spanning the work its steps add up
- * to, and the steps themselves are a checklist inside it rather than blocks of
- * their own, so counting anything with a parent would charge the day twice for
- * the same afternoon. */
-function dayLoad(events, field = "length_min") {
-  return events.reduce((n, e) => n + (e.parent_id ? 0 : e[field]), 0);
+/* What a day actually costs: the minutes of work sitting *in* it.
+ *
+ * Roots only, because a tree is drawn as one block spanning the work its steps
+ * add up to and counting anything with a parent would charge the day twice for
+ * the same afternoon. And per span rather than per task, because a plan laid
+ * across two days costs each of them only the part it holds — charging Tuesday
+ * for Wednesday's half is how a day reads as over its cap when it is not. */
+function minutesOnDay(e, day) {
+  const opens = startOfDay(day), closes = addDays(opens, 1);
+  let total = 0;
+  for (const [from, to] of eventSegments(e)) {
+    const start = Math.max(from, opens), end = Math.min(to, closes);
+    if (end > start) total += (end - start) / 60000;
+  }
+  return total;
+}
+
+function dayLoad(events, day, field = "length_min") {
+  return events.reduce((n, e) => {
+    if (e.parent_id) return n;
+    const mins = minutesOnDay(e, day);
+    if (field === "length_min" || !e.length_min) return n + mins;
+    // The buffer is the same fraction of every piece of the same task.
+    return n + mins * ((e[field] ?? e.length_min) / e.length_min);
+  }, 0);
 }
 
 function capacityMinutes() {
@@ -513,8 +551,11 @@ function chipTooltip(e) {
 
 function renderDayView(root, events) {
   const day = cal.cursor;
+  // What is *on* today, which is where the work sits rather than where its
+  // deadline falls. A thing due at nine tomorrow morning was done tonight,
+  // and tonight is when it belongs on the grid.
   const today = events
-    .filter((e) => sameDay(new Date(e.deadline), day))
+    .filter((e) => eventSegments(e).some((seg) => onDay(seg, day)))
     .sort(byTime);
 
   root.appendChild(dayScheduleSummary(today, day));
@@ -554,12 +595,18 @@ function renderDayView(root, events) {
   canvas.className = "cal-canvas";
   canvas.style.height = height + "px";
 
-  const placed = today.map((e) => {
-    const end = eventEnd(e);
-    const startMin = Math.max(0, minutesIntoDay(eventStart(e), day));
-    const endMin = Math.min(24 * 60, minutesIntoDay(end, day));
-    return { e, startMin, endMin: Math.max(endMin, startMin + 1) };
-  });
+  // One entry per span, not per task: a plan laid across two days is drawn on
+  // both of them, as the two pieces of work it actually is.
+  const placed = [];
+  for (const e of today) {
+    for (const seg of eventSegments(e)) {
+      if (!onDay(seg, day)) continue;
+      const startMin = Math.max(0, minutesIntoDay(seg[0], day));
+      const endMin = Math.min(24 * 60, minutesIntoDay(seg[1], day));
+      placed.push({ e, startMin, endMin: Math.max(endMin, startMin + 1) });
+    }
+  }
+  placed.sort((a, b) => a.startMin - b.startMin || a.endMin - b.endMin);
 
   for (const band of freeBands(placed)) canvas.appendChild(gapBand(band));
   for (const item of layoutColumns(placed)) canvas.appendChild(dayBlock(item, day));
@@ -585,8 +632,8 @@ function dayScheduleSummary(events, day) {
   const wrap = document.createElement("div");
   wrap.className = "cal-summary";
   const open = events.filter((e) => e.status !== "done");
-  const total = dayLoad(open);
-  const raw = dayLoad(open, "raw_length_min");
+  const total = dayLoad(open, day);
+  const raw = dayLoad(open, day, "raw_length_min");
   const buffer = Math.max(0, total - raw);
   const cap = capacityMinutes();
 
@@ -598,7 +645,7 @@ function dayScheduleSummary(events, day) {
   // Work that comes back is counted like any other commitment — that is the
   // whole point of drawing it — but it is worth saying how much of the day is
   // already spoken for by a rhythm rather than by anything you chose today.
-  const repeating = dayLoad(open.filter((e) => e.projected));
+  const repeating = dayLoad(open.filter((e) => e.projected), day);
   if (repeating > 0) bits.push(`${fmtMinutes(repeating)} of it repeating work`);
   const done = events.length - open.length;
   if (done) bits.push(`${done} done`);
@@ -777,12 +824,15 @@ function renderWeekView(root, events) {
   for (let i = 0; i < 7; i++) {
     const day = addDays(start, i);
     const list = (byDay.get(dayKey(day)) || []).sort(byScore);
-    grid.appendChild(dayColumn(day, list));
+    grid.appendChild(dayColumn(day, list, events));
   }
   root.appendChild(grid);
 }
 
-function dayColumn(day, list) {
+/* `list` is what is *due* on this day, which is what the chips show. `all` is
+ * every event there is, because what the day *costs* is the work sitting in it,
+ * and some of that belongs to deadlines on other days. */
+function dayColumn(day, list, all = list) {
   const col = document.createElement("div");
   col.className = "cal-col" + (sameDay(day, new Date()) ? " today" : "");
 
@@ -811,9 +861,9 @@ function dayColumn(day, list) {
   }
   col.appendChild(body);
 
-  const open = list.filter((e) => e.status !== "done");
-  if (open.length) {
-    const total = dayLoad(open);
+  const open = all.filter((e) => e.status !== "done");
+  const total = dayLoad(open, day);
+  if (total > 0) {
     const cap = capacityMinutes();
     const over = total > cap;
     const foot = document.createElement("div");

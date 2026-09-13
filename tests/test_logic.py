@@ -800,12 +800,23 @@ def test_length_falls_back_rather_than_collapsing_to_nothing():
 # ---- spreading work over the days that have room ----
 
 def spans(derived, ids):
-    """(start, end) of each task's calendar block, in order."""
+    """(start, end) of each task's calendar block, in order.
+
+    Read off `blocks`, which is where the work was actually booked. Counting
+    back from the deadline says the same thing for work that runs straight
+    into its deadline and the wrong thing for everything else.
+    """
     out = []
     for tid in ids:
-        end = logic.parse_dt(derived[tid]["deadline"])
-        out.append((end - timedelta(minutes=derived[tid]["length_min"]), end))
+        blocks = derived[tid]["blocks"]
+        out.append((logic.parse_dt(blocks[0][0]), logic.parse_dt(blocks[-1][1])))
     return out
+
+
+def block_list(derived, task_id):
+    """Every span of one task's work, as (start, end) pairs."""
+    return [(logic.parse_dt(a), logic.parse_dt(b))
+            for a, b in derived[task_id]["blocks"]]
 
 
 def test_same_shaped_tasks_spread_instead_of_stacking():
@@ -868,6 +879,78 @@ def test_a_full_day_still_has_gaps_to_place_the_next_thing_in():
         assert end.hour * 60 + end.minute <= 22 * 60
 
 
+# ---- the window invariant: no block outside the hours you keep ----
+
+def test_a_morning_deadline_is_worked_the_evening_before():
+    """The scenario #36 is named after.
+
+    Four hours of work due at eight in the morning used to be booked from four
+    until eight, because the only arithmetic involved was `deadline - length`.
+    Nothing is done before the day starts; that work happened last night.
+    """
+    settings = {**SETTINGS, "day_start": 9, "day_end": 22, "timezone": "UTC"}
+    due = datetime(2026, 8, 31, 8, 0, tzinfo=timezone.utc)
+    task = make_task("report", deadline=due.isoformat(), estimated_time=192)
+    derived = logic.compute([task], settings, now=NOW)
+
+    assert logic.parse_dt(derived["report"]["deadline"]) == due   # yours, kept
+    blocks = block_list(derived, "report")
+    assert len(blocks) == 1
+    start, end = blocks[0]
+    # The evening before, ending when the day does.
+    assert end.isoformat() == "2026-08-30T22:00:00+00:00"
+    assert (end - start).total_seconds() / 60 == derived["report"]["length_min"]
+    assert start.hour >= 9
+
+
+def test_an_evening_deadline_is_worked_right_up_to_it():
+    """Past the end of your day is different from before the start of it: you
+    named that hour, so finishing into it is what you meant."""
+    settings = {**SETTINGS, "day_start": 9, "day_end": 22, "timezone": "UTC"}
+    due = datetime(2026, 8, 31, 23, 0, tzinfo=timezone.utc)
+    task = make_task("ship", deadline=due.isoformat(), estimated_time=96)
+    derived = logic.compute([task], settings, now=NOW)
+
+    blocks = block_list(derived, "ship")
+    assert blocks[-1][1] == due                       # work runs into it
+    assert blocks[0][0].hour >= 9                     # but starts inside the day
+    assert sum((end - start).total_seconds() for start, end in blocks) / 60 == \
+        derived["ship"]["length_min"]
+
+
+def test_nothing_the_app_schedules_itself_lands_outside_the_window():
+    """The invariant, over a list big enough to make the planner work for it."""
+    settings = {**SETTINGS, "day_start": 9, "day_end": 22, "timezone": "UTC"}
+    tasks = [make_task(f"t{i}", estimated_time=90 + (i % 5) * 40,
+                       impact=(i * 3) % 11, effort=(i * 7) % 11, order_index=i)
+             for i in range(20)]
+    derived = logic.compute(tasks, settings, now=NOW)
+    for t in tasks:
+        for start, end in block_list(derived, t["id"]):
+            assert start.hour * 60 + start.minute >= 9 * 60
+            assert end.hour * 60 + end.minute <= 22 * 60
+            assert start.date() == end.date()
+
+
+def test_a_start_time_stretches_the_day_only_as_far_as_it_needs():
+    """A pinned task runs from the hour you set for exactly its own length,
+    and takes nothing else out of the window with it."""
+    settings = {**SETTINGS, "day_start": 9, "day_end": 22, "timezone": "UTC"}
+    late = datetime(2026, 8, 30, 21, 0, tzinfo=timezone.utc)
+    pinned = make_task("dinner", estimated_time=96, start_at=late.isoformat())
+    other = make_task("email", estimated_time=24, impact=8, effort=2,
+                      order_index=1)
+    derived = logic.compute([pinned, other], settings, now=NOW)
+
+    start, end = block_list(derived, "dinner")[0]
+    assert start == late
+    # Its own length past the end of the day, and not a minute more.
+    assert end == late + timedelta(minutes=derived["dinner"]["length_min"])
+    for start, end in block_list(derived, "email"):
+        assert start.hour * 60 + start.minute >= 9 * 60
+        assert end.hour * 60 + end.minute <= 22 * 60
+
+
 def test_placement_respects_the_daily_cap():
     """A smaller cap fills fewer tasks into a day, and says so."""
     tasks = [make_task(f"t{i}", estimated_time=120, impact=8, effort=2)
@@ -927,16 +1010,26 @@ def test_a_tree_is_booked_once_not_once_per_step():
         "2026-08-30"
 
 
-def test_work_bigger_than_a_day_gets_a_day_to_itself():
+def test_work_bigger_than_a_day_is_laid_across_days():
+    """Fifteen and a half hours does not fit in a day whatever you do with it.
+
+    It used to be given the emptiest day and left to run past the end of it,
+    which on a busy book meant starting after whatever was already booked and
+    finishing in the small hours. Now it is laid across consecutive windows,
+    and every piece of it is inside one.
+    """
     small = make_task("small", estimated_time=60, impact=8, effort=2)
     huge = make_task("huge", estimated_time=720, impact=8, effort=2, order_index=1)
     derived = logic.compute([small, huge], SETTINGS, now=NOW)
-    # It cannot fit under the cap anywhere, so it takes the first day nothing
-    # else has claimed and runs past the end of the working window rather than
-    # being cut up or quietly hidden.
-    assert derived["huge"]["length_min"] == 936
-    start, _ = spans(derived, ["huge"])[0]
-    assert start.isoformat() == "2026-08-31T09:00:00+00:00"
+    assert derived["huge"]["length_min"] == 936          # 15h36m of work
+
+    blocks = block_list(derived, "huge")
+    assert len(blocks) > 1
+    assert sum((end - start).total_seconds() for start, end in blocks) / 60 == 936
+    for start, end in blocks:
+        assert start.hour * 60 + start.minute >= 9 * 60
+        assert end.hour * 60 + end.minute <= 22 * 60
+        assert start.date() == end.date()
 
 
 def test_today_is_never_scheduled_in_the_hours_already_gone():

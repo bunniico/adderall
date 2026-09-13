@@ -1093,6 +1093,28 @@ def test_calendar_reports_where_a_deadline_came_from(client):
     assert event(payload, "theirs")["deadline_source"] == "auto"
 
 
+def test_a_calendar_event_says_where_its_work_sits(client):
+    """Not "one run back from the deadline": work due first thing in the
+    morning was done the evening before, and the page is told so."""
+    from app import db
+    db.update_settings({"day_start": 9, "day_end": 22, "timezone": "UTC"})
+    due = (datetime.now(timezone.utc) + timedelta(days=3)).replace(
+        hour=8, minute=0, second=0, microsecond=0)
+    state = create(client, title="early", deadline=due.isoformat(),
+                   estimated_time=120)
+    assert find(state, "early")
+
+    ev = event(client.get("/api/calendar").json(), "early")
+    assert ev["blocks"], "the calendar must say where the work is"
+    for start, end in ev["blocks"]:
+        start, end = logic_parse(start), logic_parse(end)
+        assert 9 <= start.hour
+        assert end.hour <= 22
+        assert start.date() == end.date()
+    # The deadline is still the one that was set, whatever the work does.
+    assert logic_parse(ev["deadline"]) == due
+
+
 def test_a_step_gets_no_calendar_block_of_its_own(client):
     """One tree, one block. Six steps used to mean six chips on the day, which
     is the same afternoon drawn six times and six things to reschedule."""
