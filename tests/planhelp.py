@@ -40,6 +40,10 @@ SETTINGS = {
     "auto_deadlines": True,
     "spread_tasks": True,
     "day_capacity": 480,
+    # The app's own default, so the goldens are the plan you would actually
+    # get. NOW is a Saturday on purpose, which makes this visible rather than
+    # theoretical.
+    "working_days": [1, 2, 3, 4, 5],
     "day_start": 9,
     "day_end": 22,
     "timezone": "UTC",
@@ -56,7 +60,8 @@ def task(id, **kw) -> dict:
         "estimated_time": None, "actual_time": None,
         "impact": None, "effort": None, "status": "todo",
         "ack_thankless": False, "collapsed": False, "repeat_carry": True,
-        "flexibility": 3, "planned_at": None, "planned_blocks": None,
+        "flexibility": 3, "workday_only": 1,
+        "planned_at": None, "planned_blocks": None,
         "order_index": 0, "started_at": None, "xp_awarded": None,
         "series_id": None, "clickup_id": None,
         "created_at": NOW.isoformat(), "updated_at": NOW.isoformat(),

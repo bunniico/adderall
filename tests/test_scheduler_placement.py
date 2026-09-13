@@ -247,8 +247,10 @@ def _weekend_plan(db, recurring) -> str:
     """A weekday rhythm too big for its own evenings, and a one-off beside it.
 
     Both want more hours than one day holds, so both have to run over onto a
-    following day. The rhythm names weekdays and the one-off names nothing,
-    which is the whole distinction #67 turns on.
+    following day. The rhythm names weekdays and the one-off names nothing:
+    since #74 that no longer matters, because the working-days setting holds
+    them both. See `test_a_task_that_does_not_repeat_still_keeps_off_your_days_off`
+    for the case where the box is unticked and the difference comes back.
     """
     from app import logic
     project = db.ensure_project()
@@ -301,9 +303,11 @@ def test_a_weekday_rhythm_never_spills_onto_the_weekend(app_db):
     Saturday, which the rule does not name and which is the one day the person
     who set "every weekday" was explicitly keeping.
 
-    The one-off beside it names no days at all, so nothing says a Saturday is
-    off limits to *it*. That asymmetry is deliberate and is the tradeoff this
-    issue records: the rule is read from the task, not applied globally.
+    The one-off beside it named no days at all, so #67 left it free to use a
+    Saturday and recorded that as a deliberate tradeoff. #74 closed it: every
+    task is kept off your days off unless you untick the box, so both stay on
+    weekdays here. The asymmetry the golden was written to show is gone on
+    purpose — what it shows now is that the two constraints agree.
     """
     db, _main, recurring = app_db
     check("weekend_is_not_yours", _weekend_plan(db, recurring),

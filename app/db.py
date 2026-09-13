@@ -26,6 +26,11 @@ DEFAULT_SETTINGS = {
                                # finish, so the warning means something
     "missed_grace_hours": 12,  # how long an occurrence stays on the list after
                                # its beat has been overtaken by the next one
+    # Which days are yours to work. The hours of a day were always a setting;
+    # which days there are was not, so the planner treated your Saturday as
+    # just another Tuesday. 0 is Sunday, the same numbering the repeat rules
+    # and the calendar use.
+    "working_days": [1, 2, 3, 4, 5],
     "day_start": 9,            # local hour your day opens...
     "day_end": 22,             # ...and the hour it closes. How long the day is
                                # and how much work fits in it are two different
@@ -123,6 +128,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     -- default and is how everything behaved before the column existed. See
     -- `logic.FLEXIBILITY`.
     flexibility   INTEGER NOT NULL DEFAULT 3,
+    -- "keep this off my days off". On by default: a day off you have to
+    -- defend task by task is not a day off.
+    workday_only  INTEGER NOT NULL DEFAULT 1,
     -- Whether a step belongs to the next occurrence of a repeating task, not
     -- just this one. On by default, matching how every step has always
     -- behaved; turned off, a step is a one-off added to this occurrence and
@@ -189,7 +197,7 @@ TASK_FIELDS = {
     "estimated_time",
     "actual_time", "impact", "effort", "status", "ack_thankless", "collapsed",
     "order_index", "started_at", "series_id", "clickup_id", "repeat_carry",
-    "flexibility",
+    "flexibility", "workday_only",
 }
 
 
@@ -262,6 +270,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # Indexed here rather than in SCHEMA: on an older database the column
     # does not exist until the line above has run.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)")
+    if "workday_only" not in cols:
+        conn.execute(
+            "ALTER TABLE tasks ADD COLUMN workday_only INTEGER NOT NULL DEFAULT 1")
     if "flexibility" not in cols:
         # Everything that exists was scheduled as though it were ordinary, so
         # 3 everywhere keeps every existing plan exactly where it is.
@@ -413,6 +424,7 @@ def _row_to_task(row: sqlite3.Row) -> dict:
     task["ack_thankless"] = bool(task["ack_thankless"])
     task["collapsed"] = bool(task["collapsed"])
     task["repeat_carry"] = bool(task["repeat_carry"])
+    task["workday_only"] = bool(task["workday_only"])
     # Stored as JSON because a list of spans has no shape SQLite knows.
     if task.get("planned_blocks"):
         try:
@@ -897,6 +909,7 @@ def spend_since(cutoff_iso: str) -> float:
 # Settings the plan is made of: changing one of these means the plan was made
 # against a day that no longer exists. Changing the theme does not.
 PLANNING_SETTINGS = {"day_start", "day_end", "day_capacity", "adaptive_capacity",
+                     "working_days",
                      "buffer", "adaptive_buffer", "auto_deadlines", "spread_tasks",
                      "timezone", "matrix_threshold", "missed_grace_hours"}
 

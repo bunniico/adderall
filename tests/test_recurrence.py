@@ -486,9 +486,15 @@ def test_a_weekday_rhythm_keeps_its_overrun_off_the_weekend(app):
                     f"work on {when:%a %d %b %H:%M}, which the rule does not name"
 
 
-def test_a_task_that_does_not_repeat_may_still_use_a_weekend(app):
-    """The tradeoff #67 records, asserted rather than assumed: the days come
-    from the task's own rule, so a task with no rule is unconstrained."""
+def test_a_task_that_does_not_repeat_still_keeps_off_your_days_off(app):
+    """#74 closes the gap #67 left open.
+
+    #67 read the allowed days off the task's own repeat rule, so a task with
+    no rule was unconstrained and could still be given a Saturday. That was
+    recorded as a deliberate tradeoff and is now the thing being fixed:
+    `workday_only` is on by default, so a day off you have to defend task by
+    task is not a day off.
+    """
     client, *_ = app
     client.put("/api/settings", json={"day_start": 9, "day_end": 22,
                                       "day_capacity": 480, "timezone": "UTC",
@@ -504,7 +510,14 @@ def test_a_task_that_does_not_repeat_may_still_use_a_weekend(app):
     ev = next(e for e in client.get("/api/calendar").json()["events"]
               if e["title"] == "marathon")
     days = {logic.parse_dt(a).weekday() for a, _ in ev["blocks"]}
-    assert days & {5, 6}, "nothing about a one-off says a weekend is off limits"
+    assert not (days & {5, 6}), "a one-off keeps off your days off too now"
+
+    # ...unless you say otherwise, which is what the checkbox is for.
+    client.patch(f"/api/tasks/{ev['id']}", json={"workday_only": False})
+    ev = next(e for e in client.get("/api/calendar").json()["events"]
+              if e["title"] == "marathon")
+    days = {logic.parse_dt(a).weekday() for a, _ in ev["blocks"]}
+    assert days & {5, 6}, "unticked, it may use the weekend again"
 
 
 def test_a_rhythm_with_one_named_day_stacks_its_overrun_onto_that_day(app):
@@ -1068,8 +1081,18 @@ def test_new_work_is_scheduled_around_the_days_a_rhythm_owns(app):
     add(client, title="fix the sink", estimated_time=60)
     events = client.get("/api/calendar").json()["events"]
     sink = next(e for e in events if e["title"] == "fix the sink")
-    booked = {e["deadline"][:10] for e in events if e["title"] == "work"}
-    assert sink["deadline"][:10] not in booked
+    # Not "a different day": since #74 the weekend is off limits to both, so
+    # there is no day left that the rhythm does not also use, and sharing one
+    # is fine. What must not happen is sharing an *hour* — the complaint was
+    # work booked into time that was already spoken for.
+    shifts = [(logic.parse_dt(a), logic.parse_dt(b))
+              for e in events if e["title"] == "work" for a, b in e["blocks"]]
+    for opened, closed in ((logic.parse_dt(a), logic.parse_dt(b))
+                           for a, b in sink["blocks"]):
+        assert opened.weekday() < 5, "and still not on a day off"
+        for busy_from, busy_to in shifts:
+            assert not (opened < busy_to and busy_from < closed), \
+                f"the sink is booked over the rhythm at {opened:%a %d %b %H:%M}"
 
 
 def test_the_forecast_does_not_move_a_deadline_you_set(app):

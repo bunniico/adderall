@@ -32,7 +32,11 @@ CATCH_UP_STEPS = 500
 # one of those is about the occurrence you did, not about the job that comes
 # back. A rhythm that happens at a particular hour says so in its rule (the
 # `time` field), which is where the next copy's date and hour both come from.
-TEMPLATE_FIELDS = ("title", "description", "estimated_time", "impact", "effort")
+# `workday_only` is here because it describes the job rather than the copy:
+# if this is a thing you keep off your days off, it is that every time it
+# comes round, not just the once.
+TEMPLATE_FIELDS = ("title", "description", "estimated_time", "impact", "effort",
+                   "workday_only")
 
 
 def _tz(settings: dict | None = None):
@@ -608,7 +612,8 @@ def forecast(now: datetime | None = None, settings: dict | None = None,
                 "due_at": closes,
                 # Which days this rhythm is allowed to put work on. Only the
                 # rule knows, and the planner has no other way to find out.
-                "days": logic.rule_days(rule),
+                "days": logic.task_days(template, settings,
+                                        logic.rule_days(rule)),
                 "minutes": minutes,
                 "template": template,
                 "number": made + index,

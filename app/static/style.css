@@ -1322,3 +1322,10 @@ body.calendar-mode #list-view { display: none; }
   margin-top: 8px; font-size: 11px; padding: 3px 8px;
   border-radius: 6px; cursor: pointer;
 }
+
+/* Which days are yours to work: seven boxes, in the week's own order. */
+.day-picker { display: flex; flex-wrap: wrap; gap: 10px; margin: 4px 0; }
+.day-picker label {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 12px; cursor: pointer; margin: 0;
+}

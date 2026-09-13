@@ -82,6 +82,9 @@ class TaskCreate(BaseModel):
     # How movable this is, 1 to 5. Left unset it is 3, which is how everything
     # behaved before there was a setting for it. See `logic.FLEXIBILITY`.
     flexibility: int | None = Field(default=None, ge=1, le=5)
+    # "Keep this off my days off." Left unset it is on, because a day off you
+    # have to defend task by task is not a day off. See `logic.task_days`.
+    workday_only: bool | None = None
     annotate: bool = True  # ask the AI for estimate/scores/start when missing
 
 
@@ -98,6 +101,7 @@ class TaskUpdate(BaseModel):
     status: str | None = Field(
         default=None, pattern="^(todo|in_progress|done|discarded|missed)$")
     flexibility: int | None = Field(default=None, ge=1, le=5)
+    workday_only: bool | None = None
     ack_thankless: bool | None = None
     collapsed: bool | None = None
     order_index: int | None = None
@@ -971,10 +975,11 @@ def create_task(body: TaskCreate):
         parent = _require_task(body.parent_id)
         project_id = parent["project_id"]  # a subtask lives where its parent does
     fields = body.model_dump(exclude={"annotate"})
-    if fields.get("flexibility") is None:
-        # The column is NOT NULL with a default, and "nothing said" means the
-        # default rather than a null.
-        fields.pop("flexibility", None)
+    for column in ("flexibility", "workday_only"):
+        if fields.get(column) is None:
+            # Both columns are NOT NULL with a default, and "nothing said"
+            # means the default rather than a null.
+            fields.pop(column, None)
     fields["project_id"] = project_id
     settings = db.get_settings()
     repeat = None

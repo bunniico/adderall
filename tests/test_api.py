@@ -1202,6 +1202,74 @@ def test_a_start_time_you_set_decides_which_end_the_work_is_laid_from(client):
         assert 9 <= opened.hour and closed.hour <= 22
 
 
+def test_the_app_keeps_its_own_work_off_your_days_off(client):
+    """#74: which days there are was never a setting, so the planner treated
+    a Saturday as another Tuesday and filled it."""
+    from app import db
+    db.update_settings({"day_start": 9, "day_end": 22, "day_capacity": 480,
+                        "timezone": "UTC", "working_days": [1, 2, 3, 4, 5]})
+    for i in range(12):
+        create(client, title=f"t{i}", estimated_time=150, impact=8, effort=3)
+
+    evs = [e for e in client.get("/api/calendar").json()["events"]
+           if not e["parent_id"]]
+    days = {logic_parse(a).weekday() for e in evs for a, _ in e["blocks"]}
+    assert days, "the tasks are scheduled somewhere"
+    assert not (days & {5, 6}), "and nowhere near your weekend"
+
+
+def test_a_task_can_opt_out_of_that_and_defaults_to_opted_in(client):
+    """The checkbox. On by default, because a day off you have to defend task
+    by task is not a day off."""
+    from app import db
+    db.update_settings({"day_start": 9, "day_end": 22, "day_capacity": 480,
+                        "timezone": "UTC", "working_days": [1, 2, 3, 4, 5]})
+    made = find(create(client, title="hobby", estimated_time=150), "hobby")
+    assert made["workday_only"] is True, "on unless you say otherwise"
+
+    # Fill every weekday so the only room left is a weekend.
+    for i in range(12):
+        create(client, title=f"filler{i}", estimated_time=420, impact=9, effort=2)
+    client.patch(f"/api/tasks/{made['id']}", json={"workday_only": False})
+
+    assert db.get_task(made["id"])["workday_only"] is False
+    # The page reads the flag off the task list, which is where the checkbox
+    # lives; the calendar has no use for it and is not given it.
+    assert find(client.get("/api/state").json(), "hobby")["workday_only"] is False
+
+    # And it is honoured: with every weekday full, the one task allowed to use
+    # a weekend is the one that opted out.
+    ev = next(e for e in client.get("/api/calendar").json()["events"]
+              if e["title"] == "hobby")
+    assert ev["blocks"], "it is placed somewhere"
+
+
+def test_a_deadline_you_set_beats_the_weekend_preference(client):
+    """The #36 case, which "days off" must not quietly break.
+
+    Four hours due at eight on Monday morning has no working hour before it —
+    the only time left is the weekend. Dropping the work is a worse answer
+    than spending part of a Saturday on it, so the deadline wins and the
+    preference yields. A preference must not make a commitment impossible.
+    """
+    from app import db
+    db.update_settings({"day_start": 9, "day_end": 22, "timezone": "UTC",
+                        "working_days": [1, 2, 3, 4, 5]})
+    monday = datetime.now(timezone.utc) + timedelta(days=1)
+    while monday.weekday() != 0:
+        monday += timedelta(days=1)
+    monday = monday.replace(hour=8, minute=0, second=0, microsecond=0)
+    create(client, title="the report", estimated_time=192,
+           deadline=monday.isoformat())
+
+    ev = next(e for e in client.get("/api/calendar").json()["events"]
+              if e["title"] == "the report")
+    assert ev["blocks"], "the work is placed rather than dropped"
+    assert ev["overflow_min"] == 0, "all of it, not part of it"
+    assert all(logic_parse(b) <= monday for _, b in ev["blocks"]), \
+        "and still finished by the deadline"
+
+
 def test_work_with_nowhere_to_go_is_sent_as_no_blocks_at_all(client):
     """The contract the calendar draws from, and the one #65 quietly changed.
 

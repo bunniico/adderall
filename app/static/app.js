@@ -1659,6 +1659,7 @@ function openDetail(id) {
   $("d-impact").value = task.impact ?? 5;
   $("d-effort").value = task.effort ?? 5;
   $("d-give").value = task.flexibility ?? 3;
+  $("d-workday").checked = task.workday_only !== false;
   // Moving between tabs only means anything once there is more than one.
   const projects = state.projects || [];
   const select = $("d-project");
@@ -1853,7 +1854,10 @@ async function saveDetail() {
     impact: Number($("d-impact").value),
     effort: Number($("d-effort").value),
   };
-  if (!$("d-give-row").hidden) fields.flexibility = Number($("d-give").value);
+  if (!$("d-give-row").hidden) {
+    fields.flexibility = Number($("d-give").value);
+    fields.workday_only = $("d-workday").checked;
+  }
   const est = $("d-estimate").value;
   if (est) fields.estimated_time = Number(est);
   // Only when the fields are on screen: a step is scheduled by its root, and
@@ -2222,6 +2226,31 @@ async function compileBraindump() {
 /* The hours of the day, as options for both ends of it. Built rather than
  * written out so they read in the reader's own locale — 9 AM or 09:00,
  * whichever their clock uses. */
+/* The week, as seven boxes. Monday first because that is how a working week
+ * reads, but the values are the app's own Sunday-is-0 numbering, which is what
+ * the repeat rules and the calendar already speak. */
+const WORKING_DAY_NAMES = [[1, "Mon"], [2, "Tue"], [3, "Wed"], [4, "Thu"],
+                           [5, "Fri"], [6, "Sat"], [0, "Sun"]];
+
+function fillWorkingDays() {
+  const box = $("s-working-days");
+  if (box.children.length) return;
+  for (const [value, name] of WORKING_DAY_NAMES) {
+    const label = document.createElement("label");
+    const tick = document.createElement("input");
+    tick.type = "checkbox";
+    tick.dataset.day = String(value);
+    label.append(tick, document.createTextNode(name));
+    box.appendChild(label);
+  }
+}
+
+function readWorkingDays() {
+  return [...$("s-working-days").querySelectorAll("input")]
+    .filter((t) => t.checked)
+    .map((t) => Number(t.dataset.day));
+}
+
 function fillDayStarts() {
   for (const id of ["s-day-start", "s-day-end"]) {
     const select = $(id);
@@ -2280,6 +2309,11 @@ function openSettings() {
   $("s-capacity").value = (settings.day_capacity ?? 480) / 60;
   $("s-capacity-val").textContent = fmtMinutes(settings.day_capacity ?? 480);
   $("s-adaptive-capacity").checked = settings.adaptive_capacity !== false;
+  fillWorkingDays();
+  const working = new Set(settings.working_days ?? [1, 2, 3, 4, 5]);
+  for (const tick of $("s-working-days").querySelectorAll("input")) {
+    tick.checked = working.has(Number(tick.dataset.day));
+  }
   $("s-day-start").value = String(settings.day_start ?? 9);
   $("s-day-end").value = String(settings.day_end ?? 22);
   $("s-spread").checked = settings.spread_tasks !== false;
@@ -2328,6 +2362,7 @@ async function saveSettings() {
     adaptive_buffer: $("s-adaptive").checked,
     day_capacity: Math.round(Number($("s-capacity").value) * 60),
     adaptive_capacity: $("s-adaptive-capacity").checked,
+    working_days: readWorkingDays(),
     day_start: Number($("s-day-start").value),
     day_end: Number($("s-day-end").value),
     spread_tasks: $("s-spread").checked,
