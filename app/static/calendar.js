@@ -208,10 +208,25 @@ function eventStart(e) {
  * sends the spans it booked; the old arithmetic is the fallback for anything
  * that has none (an older payload, a projection with no day book). */
 function eventSegments(e) {
-  if (e.blocks?.length) {
+  // An *empty* list is an answer, not a missing one: the planner looked and
+  // found nowhere for this work to go. Counting back from the deadline anyway
+  // is how a day with more work than hours ends up drawn as a pile of
+  // overlapping blocks starting at five in the morning — which is the picture
+  // this whole milestone exists to stop. Only a payload with no `blocks` at
+  // all (an older one, or a projection with no day book) gets the old
+  // arithmetic.
+  if (Array.isArray(e.blocks)) {
     return e.blocks.map(([from, to]) => [new Date(from), new Date(to)]);
   }
   return [[eventStart(e), eventEnd(e)]];
+}
+
+/* Work with nowhere to go: more hours before the deadline than the days
+ * between here and it contain. The server says how many minutes could not be
+ * placed (`overflow_min`); a task where that is the whole job has no block at
+ * all and would otherwise vanish off the calendar silently. */
+function hasNowhereToGo(e) {
+  return stillToDo(e) && !eventSegments(e).length;
 }
 
 function onDay([start, end], day) {
@@ -602,13 +617,22 @@ function renderDayView(root, events) {
 
   root.appendChild(dayScheduleSummary(today, day));
 
+  // Work due today that the planner could find no room for. It has no block,
+  // so it is on no part of the grid below; saying so is the difference
+  // between an honest empty afternoon and work that quietly disappeared.
+  const homeless = events.filter(
+    (e) => hasNowhereToGo(e) && sameDay(new Date(e.deadline), day));
+  if (homeless.length) root.appendChild(nowhereBand(homeless));
+
   if (!today.length) {
-    const empty = document.createElement("p");
-    empty.className = "cal-empty muted";
-    empty.textContent = sameDay(day, new Date())
-      ? "Nothing due today. Genuinely nothing — enjoy it."
-      : "Nothing due on this day.";
-    root.appendChild(empty);
+    if (!homeless.length) {
+      const empty = document.createElement("p");
+      empty.className = "cal-empty muted";
+      empty.textContent = sameDay(day, new Date())
+        ? "Nothing due today. Genuinely nothing — enjoy it."
+        : "Nothing due on this day.";
+      root.appendChild(empty);
+    }
     return;
   }
 
@@ -668,6 +692,39 @@ function renderDayView(root, events) {
       : placed[0].startMin;
     grid.scrollTop = Math.max(0, (anchor - 45) * CAL_PX_PER_MIN);
   }
+}
+
+/* The rail for work that will not fit. Every chip here is a real task with a
+ * real deadline and no hour to do it in, which is a thing to act on rather
+ * than a thing to hide: each one opens, and each one can be nudged. */
+function nowhereBand(events) {
+  const wrap = document.createElement("div");
+  wrap.className = "cal-nowhere";
+
+  const total = events.reduce((n, e) => n + (e.overflow_min || e.length_min || 0), 0);
+  const head = document.createElement("div");
+  head.className = "cal-nowhere-head";
+  head.textContent = `⚠ ${events.length} task${events.length === 1 ? "" : "s"} ` +
+    `due today with nowhere to go — ${fmtMinutes(total)} of work and no hours ` +
+    `left before the deadline.`;
+  head.title = "There are fewer working hours between now and these deadlines " +
+    "than the work needs. Nudge them to a later day, or drop them. " +
+    capacityNote();
+  wrap.appendChild(head);
+
+  const body = document.createElement("div");
+  body.className = "cal-nowhere-body";
+  for (const e of events.sort(byScore)) {
+    body.appendChild(eventChip(e, { showTime: true, stacked: true, nudge: true }));
+  }
+  wrap.appendChild(body);
+
+  const all = document.createElement("button");
+  all.className = "cal-nowhere-all";
+  all.textContent = "Reschedule these";
+  all.addEventListener("click", () => openNudge(events));
+  wrap.appendChild(all);
+  return wrap;
 }
 
 function dayScheduleSummary(events, day) {
