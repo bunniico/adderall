@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.planhelp import NOW, SETTINGS, at, dump, task
+from tests.planhelp import NOW, SETTINGS, WEEKDAYS, at, dump, task
 
 GOLDEN = Path(__file__).parent / "golden"
 
@@ -201,6 +201,73 @@ def test_a_daily_chore_left_alone_for_a_fortnight(app_db):
     lines.append(f"series active: {series['active']}  made: {series['made']}")
     lines.append(f"still has an open copy: {db.has_open_occurrence(series['id'])}")
     check("repeat_missed_fortnight", "\n".join(lines) + "\n")
+
+
+def _repeat_plan(db, recurring, when: str | None) -> str:
+    """A weekday rhythm's next fortnight, as the day book actually holds it.
+
+    Driven off `recurring.forecast` and `reserve_forecast` rather than the
+    calendar endpoint, because that endpoint reads the wall clock and a golden
+    file that moves with the calendar is not a golden file. It is the same
+    placement path either way: the endpoint books the forecast through exactly
+    these two calls.
+    """
+    from app import logic
+    project = db.ensure_project()
+    job = db.create_task({"title": "work", "project_id": project["id"],
+                          "estimated_time": 480})
+    rule = {"freq": "weekly", "interval": 1, "weekdays": [1, 2, 3, 4, 5]}
+    if when:
+        rule["time"] = when
+    recurring.start_series(job, rule, now=NOW)
+
+    tz = logic.resolve_tz(SETTINGS["timezone"])
+    occurrences = recurring.forecast(now=NOW, settings=SETTINGS, days=14)
+    planner = logic.day_planner(SETTINGS, now=NOW)
+    recurring.reserve_forecast(planner, occurrences)
+
+    planted = db.get_task(job["id"])
+    lines = ["work, 8h, every weekday" + (f" at {when}" if when else ""),
+             f"the copy on the list is due {planted['deadline']}"
+             + (f", starting {planted['start_at']}" if planted["start_at"] else ""),
+             ""]
+    for occ in occurrences:
+        due = (occ.get("due_at") or occ["at"]).astimezone(tz)
+        opens = occ.get("start_at")
+        lines.append(f"due {WEEKDAYS[due.weekday()]} {due:%-d %b %H:%M}"
+                     + (f"  starting {opens.astimezone(tz):%H:%M}" if opens else ""))
+        for a, b in planner.spans(occ["key"]):
+            a, b = a.astimezone(tz), b.astimezone(tz)
+            note = "" if a.date() == due.date() else "   (not the day it is due)"
+            lines.append(f"  {WEEKDAYS[a.weekday()]} {a:%-d %b %H:%M}-{b:%H:%M}{note}")
+    return "\n".join(lines) + "\n"
+
+
+def test_a_weekday_rhythm_at_nine_is_worked_the_day_before(app_db):
+    """#63/#66: "work, every weekday, at 09:00" put Monday's shift on Sunday.
+
+    The repeat dialog labels that field **At**, so it is the hour the job
+    happens. It was stored as the hour the job is *due*, and `_lay_back` then
+    laid eight hours of it backwards out of Monday and into Sunday — a day the
+    rule does not even name.
+    """
+    db, _main, recurring = app_db
+    check("repeat_at_nine", _repeat_plan(db, recurring, "09:00"))
+
+
+def test_a_weekday_rhythm_in_the_afternoon_is_worked_the_day_before_too(app_db):
+    """The same defect, less obviously: an afternoon hour leaves some room on
+    its own day, so only the overflow lands on the day before. It is the hour
+    being read as a deadline that does it, not the hour being early."""
+    db, _main, recurring = app_db
+    check("repeat_at_five", _repeat_plan(db, recurring, "17:00"))
+
+
+def test_a_weekday_rhythm_with_no_hour_named_is_unchanged(app_db):
+    """The control. A rhythm naming no time already lands on its own day, via
+    `recurring._end_of_working_day`, and must keep doing so."""
+    db, _main, recurring = app_db
+    check("repeat_no_hour", _repeat_plan(db, recurring, None))
 
 
 def test_a_dozen_overdue_tasks_cleared_onto_the_days_that_fit(app_db):

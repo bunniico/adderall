@@ -1093,6 +1093,32 @@ def test_calendar_reports_where_a_deadline_came_from(client):
     assert event(payload, "theirs")["deadline_source"] == "auto"
 
 
+def test_a_start_time_you_set_decides_which_end_the_work_is_laid_from(client):
+    """#63/#66: a task with both a start time and a deadline was laid
+    backwards from the deadline, and the start was never read at all.
+
+    `reserve_fixed` looked at the deadline and nothing else, so "starts at
+    nine, due by the end of the day" put the work before nine — off the front
+    of the day it was meant to begin in.
+    """
+    from app import db
+    db.update_settings({"day_start": 9, "day_end": 22, "timezone": "UTC"})
+    day = (datetime.now(timezone.utc) + timedelta(days=3)).replace(
+        hour=9, minute=0, second=0, microsecond=0)
+    create(client, title="the shift", estimated_time=240,
+           start_at=day.isoformat(),
+           deadline=day.replace(hour=22).isoformat())
+
+    ev = event(client.get("/api/calendar").json(), "the shift")
+    assert ev["blocks"]
+    first = logic_parse(ev["blocks"][0][0])
+    assert first == day, "the work begins at the hour you named"
+    for opened, closed in ev["blocks"]:
+        opened, closed = logic_parse(opened), logic_parse(closed)
+        assert opened.date() == day.date(), "on the day you named, not before"
+        assert 9 <= opened.hour and closed.hour <= 22
+
+
 def test_a_calendar_event_says_how_much_of_the_work_has_nowhere_to_go(client):
     """#65: more hours than there are before the deadline. The blocks are the
     part that fits; the page is told how much is missing rather than being

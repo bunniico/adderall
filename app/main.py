@@ -572,7 +572,13 @@ def _forecast_events(forecast: list[dict], projects: list[dict],
         if sid not in described:
             described[sid] = recurring.describe(db.get_series(sid), settings)
         template, length = occ["template"], occ["minutes"]
-        pressure = logic.urgency(occ["at"], length, now)
+        # The beat is when the work happens; the deadline is the end of the
+        # window it opens. They are the same instant unless the rule named an
+        # hour, in which case that hour starts the work rather than ending it
+        # (`logic.occurrence_window`).
+        due = occ.get("due_at") or occ["at"]
+        opens = occ.get("start_at")
+        pressure = logic.urgency(due, length, now)
         events.append({
             "id": occ["key"],
             "title": template.get("title") or "Recurring task",
@@ -585,9 +591,9 @@ def _forecast_events(forecast: list[dict], projects: list[dict],
             "project_name": names.get(occ["project_id"], ""),
             # Not a status a task can have: nothing here is a task yet.
             "status": "planned",
-            "deadline": occ["at"].isoformat(timespec="seconds"),
+            "deadline": due.isoformat(timespec="seconds"),
             "deadline_source": "recurring",
-            "start_at": None,
+            "start_at": opens.isoformat(timespec="seconds") if opens else None,
             "estimated_time": template.get("estimated_time"),
             "buffered_estimate": length,
             "buffer_applied": buf,
@@ -607,7 +613,7 @@ def _forecast_events(forecast: list[dict], projects: list[dict],
             "recurrence": described[sid],
             "path": [],
             "blocks": (logic.task_blocks(planner, occ["key"],
-                                         {"deadline": occ["at"].isoformat(),
+                                         {"deadline": due.isoformat(),
                                           "length_min": length})
                        if planner is not None else []),
             "projected": True,

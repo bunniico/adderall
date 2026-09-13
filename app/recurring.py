@@ -81,7 +81,8 @@ def snapshot(task_id: str) -> dict:
 
 
 def _plant(template: dict, project_id: str, parent_id: str | None,
-           deadline: str | None, series_id: str | None) -> dict:
+           deadline: str | None, series_id: str | None,
+           start_at: str | None = None) -> dict:
     """Write a template back out as real tasks, deepest steps and all.
 
     Only the top of the tree carries the deadline and the series link: the
@@ -96,6 +97,7 @@ def _plant(template: dict, project_id: str, parent_id: str | None,
         "project_id": project_id,
         "parent_id": parent_id,
         "deadline": deadline,
+        "start_at": start_at,
         "series_id": series_id,
     })
     for kid in template.get("subtasks") or []:
@@ -228,9 +230,15 @@ def start_series(task: dict, rule: dict, settings: dict | None = None,
         project_id=task["project_id"], rule=rule, template={},
         anchor_at=_iso(anchor), next_at=_iso(following), made=1,
     )
+    opens, closes = logic.occurrence_window(anchor, rule, settings)
     fields = {"series_id": series["id"]}
     if not task["deadline"]:
-        fields["deadline"] = _iso(anchor)
+        fields["deadline"] = _iso(closes)
+    # The hour is the rule's, so it is set whether or not the task already had
+    # a deadline of its own: "every weekday at nine" says when this one starts
+    # as much as it says when the next one does.
+    if opens is not None and not task["start_at"]:
+        fields["start_at"] = _iso(opens)
     db.update_task(task["id"], fields)
     db.update_series(series["id"], {"template": snapshot(task["id"])})
     return db.get_series(series["id"])
@@ -386,7 +394,12 @@ def materialize(series: dict, now: datetime | None = None,
 
     project = db.get_project(series["project_id"]) or db.ensure_project()
     template = series["template"] or {"title": "Recurring task"}
-    task = _plant(template, project["id"], None, _iso(due), series["id"])
+    # An hour named in the rule is the hour the job *starts* ("At", on the
+    # repeat dialog), so the copy carries it as a start time and is due by the
+    # end of that working day. See `logic.occurrence_window`.
+    opens, closes = logic.occurrence_window(due, rule, settings)
+    task = _plant(template, project["id"], None, _iso(closes), series["id"],
+                  start_at=_iso(opens))
 
     made = series["made"] + 1
     if rule["count"] is not None and made >= rule["count"]:
@@ -580,13 +593,19 @@ def forecast(now: datetime | None = None, settings: dict | None = None,
         while (cursor is not None and cursor <= horizon and index < FORECAST_MAX
                and (rule["count"] is None or made + index < rule["count"])):
             index += 1
+            opens, closes = logic.occurrence_window(cursor, rule, settings)
             out.append({
                 # Stable across reloads and unique against every task id, so
                 # the day book can memoise it and the page can key on it.
                 "key": f"series:{row['id']}:{_iso(cursor)}",
                 "series_id": row["id"],
                 "project_id": row["project_id"],
+                # The beat itself, which keys and sorting are built on, and
+                # the window it opens: an hour named in the rule starts the
+                # work rather than ending it.
                 "at": cursor,
+                "start_at": opens,
+                "due_at": closes,
                 "minutes": minutes,
                 "template": template,
                 "number": made + index,
@@ -609,7 +628,8 @@ def reserve_forecast(planner, occurrences: list[dict]) -> None:
     """
     for occ in occurrences:
         if occ["minutes"]:
-            planner.reserve(occ["key"], occ["at"], occ["minutes"])
+            planner.reserve(occ["key"], occ.get("due_at") or occ["at"],
+                            occ["minutes"], start=occ.get("start_at"))
 
 
 # ---------- what the page is told ----------
