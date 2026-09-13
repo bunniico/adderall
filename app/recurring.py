@@ -373,14 +373,15 @@ def materialize(series: dict, now: datetime | None = None,
     following = logic.next_occurrence(rule, due, anchor=anchor, tz=tz)
 
     if db.has_open_occurrence(series["id"]):
-        # Still one on the list. Skip this beat rather than duplicating it,
-        # and leave the rhythm pointing at a date that is actually ahead.
-        steps = 0
-        while following is not None and following <= now and steps < CATCH_UP_STEPS:
-            following = logic.next_occurrence(rule, following, anchor=anchor, tz=tz)
-            steps += 1
-        db.update_series(series["id"], {"next_at": _iso(following),
-                                        "active": following is not None})
+        # Still one on the list, and not yet missed. Leave the rhythm exactly
+        # where it is and make nothing: one open copy at a time is what keeps
+        # a neglected daily chore at one row instead of thirty.
+        #
+        # This used to step the series forward past `now` instead, which is
+        # how a fortnight of bin days produced one stale row and no new ones:
+        # the beat was advanced, the copy that blocked it was never closed, and
+        # the two raced each other with the rhythm always ahead. Closing the
+        # missed copy is `close_missed`'s job, and it runs first in the sweep.
         return None
 
     project = db.get_project(series["project_id"]) or db.ensure_project()
@@ -399,6 +400,81 @@ def materialize(series: dict, now: datetime | None = None,
     return task
 
 
+# ---------- beats nobody got to ----------
+
+MISSED_GRACE_HOURS = 12         # default; `missed_grace_hours` overrides it
+
+
+def missed_at(occurrence: dict, series: dict, settings: dict | None = None
+              ) -> datetime | None:
+    """When an open copy stops being late and starts being missed.
+
+    The beat after it, floored by a grace period on its own deadline. A daily
+    chore is missed when tomorrow's is due, a weekly one when next week's is:
+    you get exactly as long to do it late as the rhythm itself allows, which
+    for anything slower than daily is plenty. The grace is there for rhythms
+    tight enough that the next beat is already on top of this one.
+
+    None when there is no next beat to overtake it, which means the series has
+    ended and this last copy is simply still to do.
+    """
+    settings = settings or db.get_settings()
+    hours = settings.get("missed_grace_hours", MISSED_GRACE_HOURS)
+    following = logic.parse_dt(series["next_at"])
+    if following is None:
+        return None
+    due = logic.parse_dt(occurrence["deadline"])
+    if due is None:
+        return following
+    return max(following, due + timedelta(hours=float(hours)))
+
+
+def close_missed(now: datetime | None = None, settings: dict | None = None
+                 ) -> list[dict]:
+    """Mark the beats that went by as missed, and let the rhythm carry on.
+
+    The single-open-copy rule is what keeps a neglected daily chore at one row
+    instead of thirty, and it was doing its job. What nothing did was close
+    that row: `materialize` stepped the *series* past the beat and returned,
+    leaving the copy `todo` with a date in the past forever. It sat in the
+    overdue rail, it kept `has_open_occurrence` true so no later beat could
+    ever be made, and its minutes stayed in the day book — the app planning
+    around work that was not going to happen.
+
+    Missed is not done. There is no XP, nothing is ticked, and nothing pretends
+    the bins went out. It is the honest third answer: that beat went by.
+    """
+    now = now or datetime.now(timezone.utc)
+    settings = settings or db.get_settings()
+    closed: list[dict] = []
+    for row in db.list_series(active_only=True):
+        # A fortnight of bin days is a fortnight of missed beats, and one pass
+        # of the sweep clears all of them: closing one lets the next be made,
+        # which may itself already have gone by. Bounded, so a rule nobody can
+        # satisfy cannot spin.
+        for _ in range(CATCH_UP_STEPS):
+            series = db.get_series(row["id"])
+            if not series or not series["active"]:
+                break
+            task = db.open_occurrence(series["id"])
+            if task is None:
+                break
+            when = missed_at(task, series, settings)
+            if when is None or now < when:
+                break
+            db.update_task(task["id"], {"status": "missed"})
+            # Closed *on its own beat*, not on the day the sweep happened to
+            # notice: "every 3 days after I finish" must not drift by a week
+            # because the laptop was shut.
+            closed_at = logic.parse_dt(task["deadline"]) or when
+            close_occurrence(db.get_task(task["id"]) or task,
+                             closed_at=closed_at, settings=settings)
+            closed.append(db.get_task(task["id"]) or task)
+            log.info("recurring: %s (%s) missed its beat",
+                     task["id"], task["title"])
+    return closed
+
+
 # ---------- the daily job ----------
 
 def sweep(now: datetime | None = None) -> dict:
@@ -412,6 +488,9 @@ def sweep(now: datetime | None = None) -> dict:
     """
     now = now or datetime.now(timezone.utc)
     settings = db.get_settings()
+    # First, because a copy that is still sitting there blocks every beat
+    # behind it: closing the missed one is what lets today's be made.
+    missed = close_missed(now, settings)
     # One day wider than the widest lead, because a lead is counted in local
     # days: 30 days of lead can reach just short of 31 days of clock.
     cutoff = _iso(now + timedelta(days=logic.RECUR_MAX_LEAD_DAYS + 1))
@@ -426,7 +505,7 @@ def sweep(now: datetime | None = None) -> dict:
             created.append(task)
     if created:
         log.info("recurring: sweep created %d task(s)", len(created))
-    return {"ran_at": _iso(now), "created": created}
+    return {"ran_at": _iso(now), "created": created, "missed": missed}
 
 
 # ---------- the rhythm the list cannot show you ----------
@@ -552,6 +631,11 @@ def describe(series: dict | None, settings: dict | None = None) -> dict | None:
         "next_at": series["next_at"],
         "made": series["made"],
         "active": series["active"],
+        # Beats that went by. Real information about a rhythm that is not
+        # working, and the only honest way to say so: a job you have missed
+        # four times running is one to reschedule or stop, not one to feel bad
+        # about every morning.
+        "missed": db.count_missed(series["id"]),
     }
 
 

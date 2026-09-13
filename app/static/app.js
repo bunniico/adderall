@@ -827,11 +827,15 @@ function taskNode(task, isSub) {
     // A task you will see again next week reads differently from a one-off
     // with the same date on it, so the rhythm is on the task, in words.
     if (task.recurrence) {
-      const rb = add("🔁 " + task.recurrence.summary,
+      const missed = task.recurrence.missed;
+      const rb = add("🔁 " + task.recurrence.summary +
+                     (missed ? ` · ${missed} missed` : ""),
                      task.recurrence.active ? "repeat-badge" : "repeat-badge over");
       rb.title = task.recurrence.active
         ? `Repeats ${task.recurrence.summary}. Only one copy is on your list ` +
-          `at a time — finish this one and the next turns up when it's due.`
+          `at a time — finish this one and the next turns up when it's due.` +
+          (missed ? ` ${missed} beat${missed === 1 ? " has" : "s have"} gone ` +
+                    `by without being done; nothing is owed for them.` : "")
         : `This was the last one — the repeat has run its course.`;
     }
     if (collapsed)
@@ -1019,8 +1023,10 @@ function render() {
   $("empty-project").textContent = project && (state.projects || []).length > 1
     ? `“${project.name}” is empty. ` : "Nothing here yet. ";
 
+  // Done, dropped, and gone by. A missed beat belongs here rather than in the
+  // list: it is not a thing to do any more, and it is not a thing you did.
   const finished = state.tasks.filter(
-    (t) => t.status === "done" || t.status === "discarded");
+    (t) => ["done", "discarded", "missed"].includes(t.status));
   $("done-section").hidden = finished.length === 0;
   const doneList = $("done-list");
   doneList.replaceChildren();
@@ -1045,7 +1051,11 @@ function render() {
 function renderRail() {
   const mine = state.tasks || [];
   const done = mine.filter((t) => t.status === "done").length;
-  const total = mine.filter((t) => t.status !== "discarded").length;
+  // Dropped work is off the plan, and so is a beat that went by: neither is
+  // something still to do, and counting them would make the bar read worse
+  // the longer a rhythm goes unmet, which helps nobody.
+  const total = mine.filter(
+    (t) => !["discarded", "missed"].includes(t.status)).length;
   $("rail-streak").textContent = total ? `${done} / ${total}` : "nothing yet";
   $("rail-streak-fill").style.width = (total ? (done / total) * 100 : 0) + "%";
 

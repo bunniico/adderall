@@ -24,6 +24,8 @@ DEFAULT_SETTINGS = {
     "day_capacity": 480,       # minutes of work a day should hold — the 8h cap
     "adaptive_capacity": True, # let that cap learn from the days you actually
                                # finish, so the warning means something
+    "missed_grace_hours": 12,  # how long an occurrence stays on the list after
+                               # its beat has been overtaken by the next one
     "day_start": 9,            # local hour your day opens...
     "day_end": 22,             # ...and the hour it closes. How long the day is
                                # and how much work fits in it are two different
@@ -705,13 +707,33 @@ def series_occurrences(series_id: str, open_only: bool = False) -> list[dict]:
 
 def has_open_occurrence(series_id: str) -> bool:
     """Is one of these already sitting on the list, waiting to be done?"""
+    return open_occurrence(series_id) is not None
+
+
+def open_occurrence(series_id: str) -> dict | None:
+    """The copy of this job that is still on the list, if there is one.
+
+    The oldest, on the vanishingly rare chance that there are two: the one
+    that has been sitting there longest is the one a sweep has to decide about.
+    """
     with connect() as conn:
         row = conn.execute(
-            "SELECT 1 FROM tasks WHERE series_id = ? "
-            "AND status IN ('todo', 'in_progress') LIMIT 1",
+            "SELECT * FROM tasks WHERE series_id = ? "
+            "AND status IN ('todo', 'in_progress') "
+            "ORDER BY deadline IS NULL, deadline, created_at LIMIT 1",
             (series_id,),
         ).fetchone()
-    return row is not None
+    return _row_to_task(row) if row else None
+
+
+def count_missed(series_id: str) -> int:
+    """How many beats of this rhythm went by without being done."""
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM tasks WHERE series_id = ? AND status = 'missed'",
+            (series_id,),
+        ).fetchone()
+    return int(row[0])
 
 
 def get_settings() -> dict:

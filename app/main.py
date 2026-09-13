@@ -92,7 +92,8 @@ class TaskUpdate(BaseModel):
     estimated_time: int | None = Field(default=None, ge=1)
     impact: int | None = Field(default=None, ge=0, le=10)
     effort: int | None = Field(default=None, ge=0, le=10)
-    status: str | None = Field(default=None, pattern="^(todo|in_progress|done|discarded)$")
+    status: str | None = Field(
+        default=None, pattern="^(todo|in_progress|done|discarded|missed)$")
     ack_thankless: bool | None = None
     collapsed: bool | None = None
     order_index: int | None = None
@@ -706,6 +707,11 @@ def _finish(task_id: str, fields: dict | None = None) -> int:
     task = db.get_task(task_id)
     if task is None:
         return 0
+    # Whether this was still open decides whether finishing it means anything
+    # to its rhythm. Ticking a copy that was already closed — one you missed
+    # and did anyway, one ticked twice — must not step the series a second
+    # time and skip a beat nobody has done.
+    was_open = task["status"] in logic.ACTIVE_STATUSES
     derived = _project_derived(task["project_id"])
     awards: list[tuple[str, int]] = []
     for tid in [task_id, *db.descendant_ids(task_id)]:
@@ -733,7 +739,7 @@ def _finish(task_id: str, fields: dict | None = None) -> int:
     # repeating job is what opens the next. Doing it here means the list, a
     # checkbox, the detail modal and Focus mode all repeat the same way,
     # because all four already come through here.
-    if task.get("series_id"):
+    if task.get("series_id") and was_open:
         recurring.close_occurrence(db.get_task(task_id) or task)
     return gained
 
