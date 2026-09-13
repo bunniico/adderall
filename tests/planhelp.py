@@ -56,6 +56,7 @@ def task(id, **kw) -> dict:
         "estimated_time": None, "actual_time": None,
         "impact": None, "effort": None, "status": "todo",
         "ack_thankless": False, "collapsed": False, "repeat_carry": True,
+        "flexibility": 3, "planned_at": None, "planned_blocks": None,
         "order_index": 0, "started_at": None, "xp_awarded": None,
         "series_id": None, "clickup_id": None,
         "created_at": NOW.isoformat(), "updated_at": NOW.isoformat(),

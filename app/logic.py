@@ -38,6 +38,37 @@ CAPACITY_COMFORT = (0.30, 0.75) # hit rates that mean the goal is doing its job
 CAPACITY_STEP = 0.5             # how far it moves toward the day you really have
 CAPACITY_ROUND = 15             # learned caps land on a readable quarter hour
 
+# How movable a task is, 1 to 5, and what each one means to the planner.
+#
+# The scheduler used to know two kinds of task: one you gave a date or a start
+# time, which it would never move, and one you did not, which it would move
+# anywhere. Real lists are not shaped like that. The nine o'clock standup
+# cannot move at all; the dentist at 14:20 cannot move at all; reading the
+# thing you keep meaning to read can go literally anywhere.
+FLEXIBILITY = {
+    1: "fixed",       # never moved by a replan; the plan is built around it
+    2: "reluctant",   # may move within its own day, never off it
+    3: "normal",      # placed on its horizon day, slides later if that is full
+    4: "loose",       # may be moved to any day in the window to make room
+    5: "whenever",    # filler: placed last, into whatever is left
+}
+DEFAULT_FLEXIBILITY = 3
+
+
+def flexibility(task: dict) -> int:
+    """A task's flexibility, clamped, defaulted, and asked only of a root.
+
+    A tree is one block, so its steps answer to the flexibility of the task
+    that is actually scheduled: their own is neither asked for nor shown.
+    """
+    value = task.get("flexibility", DEFAULT_FLEXIBILITY)
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_FLEXIBILITY
+    return max(1, min(5, value))
+
+
 DEFAULT_DAY_START = 9           # local hour the working window opens
 DEFAULT_DAY_END = 22            # ...and the hour it closes
 MIN_DAY_HOURS = 2               # a "day" shorter than this is not a day
@@ -1105,10 +1136,12 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
             return user_dl, "user"
         if not auto_deadlines:
             return None, "none"
-        planned = None if replan else parse_dt(task.get("planned_at"))
-        if planned is not None:
+        planned = parse_dt(task.get("planned_at"))
+        if planned is not None and (not replan or flexibility(task) == 1):
             # Already decided, and decided once. Re-deriving it on every read
-            # is what made the app look like it was changing its mind.
+            # is what made the app look like it was changing its mind — and at
+            # flexibility 1 a replan does not get to re-decide it either: that
+            # is what "this cannot move" means.
             return planned, "auto"
         target, minutes, floor, pin = auto_plan(task)
         if not minutes:
@@ -1157,33 +1190,47 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
                 planner.reserve(task["id"], dl, minutes)
         if not auto_deadlines:
             return
-        if not replan:
-            # A slot already given out is a slot that is taken: book it before
-            # anything new is placed, or today's fresh task would be handed the
-            # afternoon something else is already sitting in.
-            for task in roots:
-                planned = parse_dt(task.get("planned_at"))
-                if planned is None or parse_dt(task["deadline"]) is not None:
-                    continue
-                minutes = _tree_minutes(task, children, lengths)
-                if minutes:
-                    planner.reserve(task["id"], planned, minutes)
+        # A slot already given out is a slot that is taken: book it before
+        # anything new is placed, or today's fresh task would be handed the
+        # afternoon something else is already sitting in. On a replan that is
+        # only true of the things that cannot move.
+        for task in roots:
+            planned = parse_dt(task.get("planned_at"))
+            if planned is None or parse_dt(task["deadline"]) is not None:
+                continue
+            if replan and flexibility(task) != 1:
+                continue
+            minutes = _tree_minutes(task, children, lengths)
+            if minutes:
+                planner.reserve(task["id"], planned, minutes)
         queue = []
         for i, task in enumerate(roots):
             if parse_dt(task["deadline"]) is not None:
                 continue
-            if not replan and parse_dt(task.get("planned_at")) is not None:
+            planned = parse_dt(task.get("planned_at"))
+            give = flexibility(task)
+            if planned is not None and (not replan or give == 1):
                 continue                      # it has its slot; leave it there
             target, minutes, floor, pin = auto_plan(task)
             if not minutes:
                 continue
+            if give == 2 and planned is not None:
+                # "May move within its own day, never off it": a replan keeps
+                # the day it was given and looks for a slot inside it.
+                target = planned
+                floor = max(floor, planner._instant(
+                    planner.local_day(planned), planner.day_start))
             rank = priority_score(
                 task["impact"], task["effort"],
                 start_pressure(pin, now) if pin is not None else float(NEUTRAL_SCORE),
                 minutes)
-            queue.append((planner.local_day(target), -rank, i,
+            # Least flexible first, then by what it is worth. Two things want
+            # the same afternoon and one of them can be done any time next
+            # week: that is the one that moves, and it can only be the one that
+            # moves if it is placed second.
+            queue.append((planner.local_day(target), give, -rank, i,
                           task["id"], target, minutes, floor, pin))
-        for _, _, _, key, target, minutes, floor, pin in sorted(queue):
+        for _, _, _, _, key, target, minutes, floor, pin in sorted(queue):
             planner.place(key, target, minutes, not_before=floor, pin=pin)
 
     def walk(parent_id: str | None, inherited: datetime | None,

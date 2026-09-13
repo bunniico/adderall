@@ -1,0 +1,7 @@
+now 2026-08-29 12:00 UTC
+day 09:00 to 22:00 | cap 8h | buffer 25%
+
+2026-08-31 Mon  load 12h / 8h  OVER CAP
+  09:00-13:00       4h  the standup  [auto]
+  13:00-17:00       4h  write the notes  [auto]
+  17:00-21:00       4h  read the thing  [auto]
