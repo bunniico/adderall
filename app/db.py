@@ -158,6 +158,20 @@ CREATE INDEX IF NOT EXISTS idx_spend_at ON spend(at);
 -- Lifetime XP, in its own one-row table rather than in `settings`, because it
 -- is not a preference: the page may never write it, and tidying up an old
 -- finished task must never cost you a level.
+-- What the app has planned, and whether that plan is still current.
+--
+-- `rev` is bumped by every write that could move work about; `planned_rev` is
+-- the one the stored plan was made against. Equal means the plan on the tasks
+-- is current and a read may simply read it — which is what makes two reads in
+-- a row agree, and what keeps the app from quietly re-deciding your week every
+-- time you look at it. See `scheduler.py` for when a replan happens.
+CREATE TABLE IF NOT EXISTS plan (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    rev         INTEGER NOT NULL DEFAULT 0,
+    planned_rev INTEGER NOT NULL DEFAULT -1,
+    planned_at  TEXT,
+    planned_day TEXT
+);
 CREATE TABLE IF NOT EXISTS progress (
     id         INTEGER PRIMARY KEY CHECK (id = 1),
     xp         INTEGER NOT NULL DEFAULT 0,
@@ -242,6 +256,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # Indexed here rather than in SCHEMA: on an older database the column
     # does not exist until the line above has run.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)")
+    if "planned_at" not in cols:
+        # Where the app decided this task goes, and the spans it booked for it.
+        # Null on every existing row, which reads as "never planned" and is
+        # exactly right: the first replan after an upgrade fills them in.
+        conn.execute("ALTER TABLE tasks ADD COLUMN planned_at TEXT")
+        conn.execute("ALTER TABLE tasks ADD COLUMN planned_blocks TEXT")
     row = conn.execute(
         "SELECT id FROM projects ORDER BY order_index, created_at LIMIT 1"
     ).fetchone()
@@ -382,6 +402,12 @@ def _row_to_task(row: sqlite3.Row) -> dict:
     task["ack_thankless"] = bool(task["ack_thankless"])
     task["collapsed"] = bool(task["collapsed"])
     task["repeat_carry"] = bool(task["repeat_carry"])
+    # Stored as JSON because a list of spans has no shape SQLite knows.
+    if task.get("planned_blocks"):
+        try:
+            task["planned_blocks"] = json.loads(task["planned_blocks"])
+        except (TypeError, ValueError):
+            task["planned_blocks"] = None
     return task
 
 
@@ -430,6 +456,7 @@ def create_task(fields: dict) -> dict:
         names = ", ".join(cols)
         marks = ", ".join("?" for _ in cols)
         conn.execute(f"INSERT INTO tasks ({names}) VALUES ({marks})", list(cols.values()))
+    bump_plan_rev()
     return get_task(task_id)
 
 
@@ -445,13 +472,17 @@ def update_task(task_id: str, fields: dict) -> dict | None:
         )
         if cur.rowcount == 0:
             return None
+    bump_plan_rev()
     return get_task(task_id)
 
 
 def delete_task(task_id: str) -> bool:
     with connect() as conn:
         cur = conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
-        return cur.rowcount > 0
+        gone = cur.rowcount > 0
+    if gone:
+        bump_plan_rev()
+    return gone
 
 
 def sibling_ids(parent_id: str | None, project_id: str,
@@ -509,6 +540,7 @@ def move_task(task_id: str, parent_id: str | None, project_id: str,
                 )
             else:
                 conn.execute("UPDATE tasks SET order_index = ? WHERE id = ?", (idx, tid))
+    bump_plan_rev()
     return get_task(task_id)
 
 
@@ -535,6 +567,7 @@ def move_task_to_project(task_id: str, project_id: str) -> dict | None:
             "UPDATE tasks SET parent_id = NULL, order_index = ? WHERE id = ?",
             (tail, task_id),
         )
+    bump_plan_rev()
     return get_task(task_id)
 
 
@@ -736,6 +769,53 @@ def count_missed(series_id: str) -> int:
     return int(row[0])
 
 
+# ---------- the plan, and whether it is current ----------
+
+def plan_state() -> dict:
+    """`rev` (what the data is on) and what the last replan covered."""
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM plan WHERE id = 1").fetchone()
+    if row is None:
+        return {"rev": 0, "planned_rev": -1, "planned_at": None, "planned_day": None}
+    return {"rev": int(row["rev"]), "planned_rev": int(row["planned_rev"]),
+            "planned_at": row["planned_at"], "planned_day": row["planned_day"]}
+
+
+def bump_plan_rev() -> int:
+    """Something changed that could move work about. Called by every write
+    that is not the planner writing its own answer down."""
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO plan (id, rev) VALUES (1, 1) "
+            "ON CONFLICT(id) DO UPDATE SET rev = rev + 1")
+        row = conn.execute("SELECT rev FROM plan WHERE id = 1").fetchone()
+    return int(row["rev"])
+
+
+def record_plan(rev: int, at: str, day: str) -> None:
+    """Mark the stored plan as covering everything up to `rev`."""
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO plan (id, rev, planned_rev, planned_at, planned_day) "
+            "VALUES (1, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
+            "planned_rev = excluded.planned_rev, planned_at = excluded.planned_at, "
+            "planned_day = excluded.planned_day",
+            (rev, rev, at, day))
+
+
+def save_plan(task_id: str, planned_at: str | None, blocks: list | None) -> None:
+    """Write down where the planner put a task.
+
+    Deliberately not through `update_task`: this is the planner recording its
+    own answer, not a change to the task, so it touches neither `updated_at`
+    nor the rev. Otherwise every plan would invalidate itself.
+    """
+    with connect() as conn:
+        conn.execute(
+            "UPDATE tasks SET planned_at = ?, planned_blocks = ? WHERE id = ?",
+            (planned_at, json.dumps(blocks) if blocks is not None else None, task_id))
+
+
 def get_settings() -> dict:
     with connect() as conn:
         rows = conn.execute("SELECT k, v FROM settings").fetchall()
@@ -803,7 +883,16 @@ def spend_since(cutoff_iso: str) -> float:
     return float(row[0])
 
 
+# Settings the plan is made of: changing one of these means the plan was made
+# against a day that no longer exists. Changing the theme does not.
+PLANNING_SETTINGS = {"day_start", "day_end", "day_capacity", "adaptive_capacity",
+                     "buffer", "adaptive_buffer", "auto_deadlines", "spread_tasks",
+                     "timezone", "matrix_threshold", "missed_grace_hours"}
+
+
 def update_settings(changes: dict) -> dict:
+    if PLANNING_SETTINGS & set(changes):
+        bump_plan_rev()
     current = get_settings()
     with connect() as conn:
         for key, value in changes.items():

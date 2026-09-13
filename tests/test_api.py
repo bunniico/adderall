@@ -1208,6 +1208,84 @@ def test_nudge_an_explicitly_named_subtask_wins_over_the_slide(client):
         child_target.replace(microsecond=0)
 
 
+# ---- when the scheduler runs ----
+
+def test_two_reads_with_nothing_between_them_agree(client):
+    """The app must not rearrange your week every time you look at it."""
+    create(client, title="one", estimated_time=60)
+    create(client, title="two", estimated_time=90)
+    create(client, title="three", estimated_time=30)
+
+    first = client.get("/api/calendar").json()["events"]
+    second = client.get("/api/calendar").json()["events"]
+    assert [(e["id"], e["deadline"], e["blocks"]) for e in first] == \
+           [(e["id"], e["deadline"], e["blocks"]) for e in second]
+    # ...and the second read did not remake the plan to get there.
+    state = client.get("/api/state").json()["plan"]
+    assert state["rev"] == state["planned_rev"]
+
+
+def test_a_write_makes_the_app_think_again_in_the_same_response(client):
+    """Finishing something early has to free the time it was holding, now,
+    not the next time a sweep happens to run."""
+    from app import db
+    db.update_settings({"day_start": 9, "day_end": 22, "day_capacity": 480,
+                        "adaptive_capacity": False, "timezone": "UTC"})
+    # Both want the same morning; the bigger, more important one gets it, and
+    # the other queues up behind it.
+    soon = (datetime.now(timezone.utc) + timedelta(days=2)).replace(
+        hour=9, minute=0, second=0, microsecond=0)
+    create(client, title="big", estimated_time=300, impact=10, effort=0,
+           start_at=soon.isoformat())
+    state = create(client, title="after", estimated_time=120, impact=3, effort=3,
+                   start_at=soon.isoformat())
+    before = logic_parse(find(state, "after")["deadline"])
+    assert before > soon + timedelta(minutes=300)      # queued behind it
+
+    client.post(f"/api/tasks/{find(state, 'big')['id']}/complete", json={})
+    after = logic_parse(find(client.get("/api/state").json(), "after")["deadline"])
+    assert after < before                              # the morning is free now
+    plan = client.get("/api/state").json()["plan"]
+    assert plan["rev"] == plan["planned_rev"]
+
+
+def test_a_deadline_you_set_is_never_replanned(client):
+    mine = (datetime.now(timezone.utc) + timedelta(days=3)).replace(microsecond=0)
+    state = create(client, title="mine", deadline=mine.isoformat(),
+                   estimated_time=60)
+    task = find(state, "mine")
+    client.post("/api/replan", json={})
+    after = find(client.get("/api/state").json(), "mine")
+    assert logic_parse(after["deadline"]) == mine
+    assert after["deadline_source"] == "user"
+    from app import db
+    assert db.get_task(task["id"])["planned_at"] is None   # not the plan's to keep
+
+
+def test_replanning_says_when_it_last_ran(client):
+    create(client, title="something", estimated_time=60)
+    first = client.get("/api/state").json()["plan"]
+    assert first["planned_at"] is not None
+
+    client.post("/api/replan", json={})
+    second = client.get("/api/state").json()["plan"]
+    assert second["planned_at"] >= first["planned_at"]
+    assert second["rev"] > first["rev"]
+
+
+def test_a_setting_that_changes_the_day_changes_the_plan(client):
+    """...and one that does not, does not."""
+    create(client, title="thing", estimated_time=60)
+    client.get("/api/state")
+    before = client.get("/api/state").json()["plan"]["rev"]
+
+    client.put("/api/settings", json={"gamification": False})
+    assert client.get("/api/state").json()["plan"]["rev"] == before
+
+    client.put("/api/settings", json={"day_start": 7})
+    assert client.get("/api/state").json()["plan"]["rev"] > before
+
+
 # ---- clearing the pile ----
 
 def test_rescheduling_a_pile_spreads_it_instead_of_stacking_it(client):

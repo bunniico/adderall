@@ -173,6 +173,12 @@
         Repeats ahead <span class="muted">— copies a repeating task will make</span></label>
       <label class="row"><input id="cal-done" type="checkbox"> Completed</label>
       <span id="cal-count" class="muted"></span>
+      <!-- When the app last worked out where things go, and the button for
+           "think about it again". A scheduler that never says when it runs is
+           a scheduler nobody can trust. -->
+      <span id="cal-planned" class="muted"></span>
+      <button id="cal-replan" class="ghost"
+              title="Work out again where everything goes">↻ Replan</button>
     </div>
 
     <div id="cal-overdue" class="cal-overdue" hidden></div>

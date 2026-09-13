@@ -424,6 +424,7 @@ function renderCalendar() {
   const events = calEvents();
   const ahead = events.filter((e) => e.projected).length;
   const real = events.length - ahead;
+  renderPlannedAt();
   $("cal-count").textContent = cal.loaded
     ? `${real} scheduled task${real === 1 ? "" : "s"}` +
       (ahead ? ` · ${ahead} repeat${ahead === 1 ? "" : "s"} ahead` : "")
@@ -477,6 +478,32 @@ function renderOverdueRail(events) {
     strip.appendChild(more);
   }
   rail.append(head, strip);
+}
+
+/* "planned 3 minutes ago", which is the answer to "when does this thing run".
+ * Read off the state the page already has: the plan is remade on the first
+ * read after anything changes, so this doubles as "and it is up to date". */
+function renderPlannedAt() {
+  const at = state?.plan?.planned_at;
+  const el = $("cal-planned");
+  if (!at) { el.textContent = ""; return; }
+  const mins = Math.max(0, Math.round((Date.now() - new Date(at)) / 60000));
+  el.textContent = mins < 1 ? "planned just now"
+    : mins < 60 ? `planned ${mins} min ago`
+    : mins < 60 * 24 ? `planned ${Math.round(mins / 60)}h ago`
+    : `planned ${new Date(at).toLocaleDateString()}`;
+  el.title = "The app works out where things go when something changes, when " +
+             "the day turns, and when you ask. Reading your calendar never " +
+             "moves anything.";
+}
+
+async function replanNow() {
+  try {
+    applyState(await api("/replan", { method: "POST" }));
+    await loadCalendar();
+    renderCalendar();
+    toast("Worked out again where everything goes.");
+  } catch (e) { toast(e.message, true); }
 }
 
 /* ---- shared chip ---- */
@@ -1208,6 +1235,7 @@ function wireCalendar() {
     applyNudge(nudgeTargets.map((e) => ({ task_id: e.id, deadline: iso })));
   });
   $("n-drop").addEventListener("click", dropPile);
+  $("cal-replan").addEventListener("click", replanNow);
 
   // Calendar keys, borrowed from Google Calendar's: arrows page, T is today,
   // D/W/M switch view. Only while the calendar is the thing on screen, and
