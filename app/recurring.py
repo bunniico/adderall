@@ -606,6 +606,9 @@ def forecast(now: datetime | None = None, settings: dict | None = None,
                 "at": cursor,
                 "start_at": opens,
                 "due_at": closes,
+                # Which days this rhythm is allowed to put work on. Only the
+                # rule knows, and the planner has no other way to find out.
+                "days": logic.rule_days(rule),
                 "minutes": minutes,
                 "template": template,
                 "number": made + index,
@@ -629,7 +632,8 @@ def reserve_forecast(planner, occurrences: list[dict]) -> None:
     for occ in occurrences:
         if occ["minutes"]:
             planner.reserve(occ["key"], occ.get("due_at") or occ["at"],
-                            occ["minutes"], start=occ.get("start_at"))
+                            occ["minutes"], start=occ.get("start_at"),
+                            days=occ.get("days"))
 
 
 # ---------- what the page is told ----------
@@ -657,6 +661,29 @@ def describe(series: dict | None, settings: dict | None = None) -> dict | None:
         # about every morning.
         "missed": db.count_missed(series["id"]),
     }
+
+
+def repeat_days(tasks: list[dict]) -> dict[str, frozenset[int]]:
+    """{task_id: the weekdays its rhythm names}, for whichever of `tasks` repeat.
+
+    The copy on your list is an ordinary task as far as the planner is
+    concerned — it carries a deadline and a start time and nothing that says
+    "every weekday". This is how that last part reaches it, so a shift already
+    on the list is held to the same days as the ones still to come.
+    """
+    cache: dict[str, frozenset[int] | None] = {}
+    out: dict[str, frozenset[int]] = {}
+    for task in tasks:
+        sid = task.get("series_id")
+        if not sid:
+            continue
+        if sid not in cache:
+            series = db.get_series(sid)
+            cache[sid] = logic.rule_days(
+                logic.normalize_rule(series["rule"]) if series else None)
+        if cache[sid]:
+            out[task["id"]] = cache[sid]
+    return out
 
 
 def by_task(tasks: list[dict], settings: dict | None = None) -> dict[str, dict]:
