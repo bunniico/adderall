@@ -379,16 +379,19 @@ def test_an_undated_task_is_due_by_the_end_of_the_working_day(app):
 
     "Every 3 days", set at two in the morning, does not mean two in the
     morning — it means by the end of the day, which is a number the app
-    already keeps as the working window.
+    already keeps: the hour your day closes.
     """
     client, *_ = app
-    client.put("/api/settings", json={"day_start": 9, "day_capacity": 480,
+    client.put("/api/settings", json={"day_start": 9, "day_end": 22,
+                                      "day_capacity": 480,
                                       "adaptive_capacity": False})
     task = add(client)
     state = repeat(client, task["id"], freq="daily", interval=3)
     due = logic.parse_dt(roots(state)[0]["deadline"])
     assert due > datetime.now(timezone.utc)
-    assert (due.hour, due.minute) == (17, 0)      # 09:00 + eight hours, in UTC
+    # The end of the day, not the end of the work budget: eight hours of work
+    # does not mean the day is over at five.
+    assert (due.hour, due.minute) == (22, 0)
 
 
 def test_a_named_time_of_day_beats_the_working_window(app):

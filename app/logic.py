@@ -39,6 +39,8 @@ CAPACITY_STEP = 0.5             # how far it moves toward the day you really hav
 CAPACITY_ROUND = 15             # learned caps land on a readable quarter hour
 
 DEFAULT_DAY_START = 9           # local hour the working window opens
+DEFAULT_DAY_END = 22            # ...and the hour it closes
+MIN_DAY_HOURS = 2               # a "day" shorter than this is not a day
 # How far ahead the planner will look for a day with room before it gives up
 # and lets something double-book. Half a year is far past the point where the
 # answer is "you have too much on", not "the app picked the wrong Tuesday".
@@ -291,10 +293,16 @@ class DayPlanner:
 
     def __init__(self, capacity: int = DEFAULT_CAPACITY,
                  day_start: int = DEFAULT_DAY_START,
+                 day_end: int = DEFAULT_DAY_END,
                  tz: tzinfo = timezone.utc,
                  search_days: int = PLACEMENT_SEARCH_DAYS) -> None:
         self.capacity = max(30, min(24 * 60, int(capacity or DEFAULT_CAPACITY)))
         self.day_start = max(0, min(23, int(day_start))) * 60
+        # Clamped, not rejected: a day that ends before it starts is a typo, and
+        # a scheduler that refuses to schedule is worse than one that reads a
+        # sensible day out of a silly setting.
+        self.day_end = min(24 * 60, max(self.day_start + MIN_DAY_HOURS * 60,
+                                        int(day_end) * 60))
         self.tz = tz
         self.search_days = max(1, int(search_days))
         self._days: dict[date, list[list[int]]] = {}
@@ -318,8 +326,20 @@ class DayPlanner:
 
     @property
     def window_end(self) -> int:
-        """Last local minute of the working window — the cap, from day_start."""
-        return min(24 * 60, self.day_start + self.capacity)
+        """Last local minute of the working window: the end of your day.
+
+        This used to be `day_start + capacity`, which made one number mean two
+        things. At the defaults that was a window of 09:00 to 17:00 holding
+        exactly eight hours of work: solid, with no slack in it anywhere, so
+        the moment a day was full every placement path had to leave the window
+        altogether to put the work anywhere at all. Turning the hours slider
+        *down* to protect yourself made it worse, because a shorter day is
+        also a shorter window.
+
+        They are two questions now. How long your day is, and how much of it
+        is work.
+        """
+        return self.day_end
 
     # ---- the book ----
 
@@ -507,6 +527,7 @@ def day_planner(settings: dict, capacity: int | None = None) -> DayPlanner:
     if capacity is None:
         capacity = capacity_plan(settings)["minutes"]
     return DayPlanner(capacity, settings.get("day_start", DEFAULT_DAY_START),
+                      settings.get("day_end", DEFAULT_DAY_END),
                       resolve_tz(settings.get("timezone")))
 
 

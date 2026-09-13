@@ -24,7 +24,10 @@ DEFAULT_SETTINGS = {
     "day_capacity": 480,       # minutes of work a day should hold — the 8h cap
     "adaptive_capacity": True, # let that cap learn from the days you actually
                                # finish, so the warning means something
-    "day_start": 9,            # local hour the working window opens
+    "day_start": 9,            # local hour your day opens...
+    "day_end": 22,             # ...and the hour it closes. How long the day is
+                               # and how much work fits in it are two different
+                               # questions; `day_capacity` answers the second
     "spread_tasks": True,      # place auto-deadlines in days that have room,
                                # instead of stacking them all on one
     "timezone": "",            # IANA name; the page reports its own on first

@@ -41,6 +41,7 @@ SETTINGS = {
     "spread_tasks": True,
     "day_capacity": 480,
     "day_start": 9,
+    "day_end": 22,
     "timezone": "UTC",
 }
 
@@ -115,8 +116,10 @@ def dump(tasks: list[dict], settings: dict | None = None,
     now = now or NOW
     tz = logic.resolve_tz(settings.get("timezone"))
     cap = logic.capacity_plan(settings)["minutes"]
-    day_start = int(settings.get("day_start", logic.DEFAULT_DAY_START)) * 60
-    window_end = min(24 * 60, day_start + cap)
+    # Asked of the planner itself, so the header reports the day the placement
+    # below actually used rather than a second opinion about it.
+    planner = logic.day_planner(settings, cap)
+    day_start, window_end = planner.day_start, planner.window_end
 
     lines = [
         f"now {now.astimezone(tz):%Y-%m-%d %H:%M} {settings.get('timezone', 'UTC')}",
