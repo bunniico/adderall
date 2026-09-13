@@ -79,7 +79,8 @@ def _minutes(total: int) -> str:
 
 
 def blocks(tasks: list[dict], settings: dict, now: datetime | None = None,
-           ratios: list[float] | None = None) -> list[dict]:
+           ratios: list[float] | None = None,
+           derived: dict | None = None) -> list[dict]:
     """What the calendar would draw: every span of every scheduled task.
 
     Read off `blocks`, which is where the planner actually put the work. Work
@@ -89,7 +90,8 @@ def blocks(tasks: list[dict], settings: dict, now: datetime | None = None,
     two differ.
     """
     now = now or NOW
-    derived = logic.compute(tasks, settings, ratios or [], now=now)
+    if derived is None:
+        derived = logic.compute(tasks, settings, ratios or [], now=now)
     tz = logic.resolve_tz(settings.get("timezone"))
     out: list[dict] = []
     for t in tasks:
@@ -137,7 +139,8 @@ def dump(tasks: list[dict], settings: dict | None = None,
         "",
     ]
 
-    drawn = blocks(tasks, settings, now, ratios)
+    derived = logic.compute(tasks, settings, ratios or [], now=now)
+    drawn = blocks(tasks, settings, now, ratios, derived)
     by_day: dict = {}
     for block in drawn:
         by_day.setdefault(block["start"].date(), []).append(block)
@@ -171,6 +174,16 @@ def dump(tasks: list[dict], settings: dict | None = None,
                 f"  {block['start']:%H:%M}-{block['end']:%H:%M}{spill} "
                 f"{_minutes(block['length']):>6}  {indent}{block['title']}{part}"
                 f"  [{block['source']}]{due}{outside}")
+
+    # Work with nowhere legal to go. Said out loud, because the alternative is
+    # a plan that quietly draws forty of a task's seventy-nine hours and looks
+    # exactly like a plan that draws all of them.
+    short = sorted((t["title"], derived[t["id"]]["overflow_min"]) for t in tasks
+                   if derived[t["id"]].get("overflow_min"))
+    if short:
+        lines.append("")
+        lines.append("no room before the deadline:")
+        lines.extend(f"  {title}  {_minutes(mins)} unplaced" for title, mins in short)
 
     unscheduled = sorted(t["title"] for t in tasks
                          if t["id"] not in {b["id"] for b in drawn})

@@ -1,0 +1,14 @@
+now 2026-08-29 12:00 UTC
+day 09:00 to 22:00 | cap 8h | buffer 25%
+
+2026-08-29 Sat  load 10h / 8h  OVER CAP
+  12:00-22:00      10h  migrate the database (1/4)  [user]  due 1 Sep 18:00
+2026-08-30 Sun  load 13h / 8h  OVER CAP
+  09:00-22:00      13h  migrate the database (2/4)  [user]  due 1 Sep 18:00
+2026-08-31 Mon  load 13h / 8h  OVER CAP
+  09:00-22:00      13h  migrate the database (3/4)  [user]  due 1 Sep 18:00
+2026-09-01 Tue  load 9h / 8h  OVER CAP
+  09:00-18:00       9h  migrate the database (4/4)  [user]
+
+no room before the deadline:
+  migrate the database  53h45m unplaced

@@ -523,6 +523,10 @@ def _calendar_events() -> list[dict]:
                 # back from the deadline: work due first thing was done the
                 # evening before, and work too big for a day is in pieces.
                 "blocks": d["blocks"],
+                # And the minutes that did not fit anywhere before the
+                # deadline, so the calendar can say the blocks above are the
+                # part of the job that has a home rather than the whole of it.
+                "overflow_min": d["overflow_min"],
                 # A real task, as against one of the outlines below.
                 "projected": False,
             })

@@ -28,8 +28,20 @@ from tests.planhelp import NOW, SETTINGS, at, dump, task
 GOLDEN = Path(__file__).parent / "golden"
 
 
-def check(name: str, text: str) -> None:
-    """Compare a dump against its recorded copy, or record it."""
+def check(name: str, text: str, outside_window: bool = False) -> None:
+    """Compare a dump against its recorded copy, or record it.
+
+    Every dump is also held to the invariant this milestone exists for: no
+    block outside the hours the settings say you work. The dump marks those
+    itself (`<<<` and `>>>`), so the check is the marks being absent. Pass
+    `outside_window=True` for a scenario where the user put the work there
+    themselves, which is the only way it is allowed to happen.
+    """
+    if not outside_window:
+        stray = [line for line in text.splitlines() if "<<<" in line or ">>>" in line]
+        assert not stray, (
+            f"{name} put work outside the working window:\n" + "\n".join(stray)
+        )
     path = GOLDEN / f"{name}.txt"
     if os.environ.get("ADDERALL_UPDATE_GOLDEN"):
         GOLDEN.mkdir(exist_ok=True)
@@ -109,6 +121,26 @@ def test_a_start_time_in_the_evening_reopens_the_evening():
              impact=7, effort=2, order_index=2),
     ]
     check("evening_start_time", dump(tasks, SETTINGS))
+
+
+def test_seventy_nine_hours_due_before_they_can_possibly_fit():
+    """#65: more work than there is room for before the deadline.
+
+    79 hours of work due on Tuesday, from a Saturday lunchtime. Every working
+    hour between now and then adds up to 45, so 54 of them have nowhere legal
+    to go. `_lay_back` used to answer that by putting the whole remainder in
+    one span immediately before the earliest piece it had placed, which is how
+    a plan ends up with a fifty-three hour block running through three nights.
+
+    What it should say is the truth: here is the work that fits, in the hours
+    you keep, and the rest does not.
+    """
+    tasks = [
+        task("migration", title="migrate the database",
+             deadline=at(1, 18, month=9), estimated_time=79 * 60,
+             impact=9, effort=9),
+    ]
+    check("oversized_past_deadline", dump(tasks, SETTINGS))
 
 
 def test_flexibility_decides_who_gets_the_contested_day():
