@@ -191,7 +191,8 @@ function calEvents() {
       (f.category === "__none" ? !e.quadrant : e.quadrant === f.category)) &&
     (f.auto || e.deadline_source !== "auto") &&
     (f.repeats || !e.projected) &&
-    (f.done || e.status !== "done"));
+    // "Show finished" covers everything closed: ticked, dropped, or gone by.
+    (f.done || stillToDo(e)));
 }
 
 function eventEnd(e) { return new Date(e.deadline); }
@@ -237,8 +238,22 @@ function groupByDay(events) {
   return map;
 }
 
+/* Still to do, and the hour has gone. "Not done" is not the same question: a
+ * beat you missed and a task you dropped are both closed, and a rail that asks
+ * you to reschedule them is the pile this whole milestone is about. */
+const OPEN_STATUSES = ["todo", "in_progress"];
+
+/* Work that is still ahead of you. A forecast outline counts: it is the whole
+ * reason the calendar draws one. A missed beat does not: those hours are not
+ * going to be spent, and charging a day for them plans around work nobody is
+ * going to do. */
+function stillToDo(e) {
+  return OPEN_STATUSES.includes(e.status) || e.status === "planned";
+}
+
 function isOverdue(e) {
-  return e.status !== "done" && new Date(e.deadline) < new Date();
+  return OPEN_STATUSES.includes(e.status) && !e.parent_id &&
+         new Date(e.deadline) < new Date();
 }
 
 /* ---------------- how full a day is ----------------
@@ -474,7 +489,7 @@ function eventChip(e, opts = {}) {
   const chip = document.createElement("div");
   chip.className = "cal-chip quad-" + (e.quadrant || "none") +
     (opts.stacked ? " stacked" : "") + (e.projected ? " projected" : "") +
-    (e.status === "done" ? " done" : "") + (isOverdue(e) ? " overdue" : "");
+    (stillToDo(e) ? "" : " done") + (isOverdue(e) ? " overdue" : "");
 
   const open = document.createElement("button");
   open.className = "cal-chip-open";
@@ -631,7 +646,7 @@ function renderDayView(root, events) {
 function dayScheduleSummary(events, day) {
   const wrap = document.createElement("div");
   wrap.className = "cal-summary";
-  const open = events.filter((e) => e.status !== "done");
+  const open = events.filter(stillToDo);
   const total = dayLoad(open, day);
   const raw = dayLoad(open, day, "raw_length_min");
   const buffer = Math.max(0, total - raw);
@@ -711,7 +726,7 @@ function dayBlock(item, day) {
   const el = document.createElement("div");
   el.className = "cal-block quad-" + (e.quadrant || "none") +
     (e.projected ? " projected" : "") +
-    (e.status === "done" ? " done" : "") + (isOverdue(e) ? " overdue" : "");
+    (stillToDo(e) ? "" : " done") + (isOverdue(e) ? " overdue" : "");
   const height = Math.max(CAL_MIN_BLOCK_PX, (endMin - startMin) * CAL_PX_PER_MIN);
   el.style.top = startMin * CAL_PX_PER_MIN + "px";
   el.style.height = height + "px";
@@ -861,7 +876,7 @@ function dayColumn(day, list, all = list) {
   }
   col.appendChild(body);
 
-  const open = all.filter((e) => e.status !== "done");
+  const open = all.filter(stillToDo);
   const total = dayLoad(open, day);
   if (total > 0) {
     const cap = capacityMinutes();

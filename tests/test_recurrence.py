@@ -342,17 +342,26 @@ def repeat(client, task_id, **rule):
 
 
 def advance(db, recurring, minutes=1):
-    """Let the clock reach the series' next occurrence and sweep.
+    """Let the clock reach the next occurrence and sweep.
 
     Occurrences land at the end of the working day when a rule names no time,
     so how soon after finishing one the next copy appears depends on what time
     of day the suite happens to run. Tests that care about *what* the sweep
     produces read the date off the series rather than guessing at it.
+
+    Just past the copy that is waiting, when one is: a beat is missed once the
+    beat after it comes due (see `recurring.missed_at`), and jumping the clock
+    a whole rhythm forward would mean sweeping into that — which is a thing to
+    test on purpose, not by accident, in every test that moves time.
     """
     series = db.list_series()
-    if not series or not series[0]["next_at"]:
+    if not series:
         return
-    recurring.sweep(logic.parse_dt(series[0]["next_at"]) + timedelta(minutes=minutes))
+    waiting = db.open_occurrence(series[0]["id"])
+    when = (waiting or {}).get("deadline") or series[0]["next_at"]
+    if not when:
+        return
+    recurring.sweep(logic.parse_dt(when) + timedelta(minutes=minutes))
 
 
 def roots(state, title=None):
@@ -434,19 +443,100 @@ def test_finishing_one_occurrence_opens_the_next(app):
 
 
 def test_only_one_copy_is_ever_open_at_a_time(app):
-    """A fortnight away from a daily chore leaves one thing to do, not fourteen."""
+    """A fortnight away from a daily chore leaves one thing to do, not fourteen.
+
+    The one thing is *today's*, though. The beats you were away for are marked
+    missed as they go by, which is what lets the next one be made at all: the
+    copy sitting there used to block every beat behind it forever.
+    """
     client, main, db, recurring = app
     task = add(client)
     repeat(client, task["id"], freq="daily")
     now = datetime.now(timezone.utc)
     for day in range(1, 15):
         recurring.sweep(now + timedelta(days=day))
+
     open_now = [t for t in db.list_tasks() if t["status"] == "todo"]
     assert len(open_now) == 1
-    assert open_now[0]["id"] == task["id"]
+    assert open_now[0]["id"] != task["id"]        # the original went by
+    assert db.get_task(task["id"])["status"] == "missed"
+    # Nothing was ticked and nothing was paid for: a beat you missed is not an
+    # achievement, and it is not a failure you have to clear either.
+    assert db.get_task(task["id"])["xp_awarded"] is None
+    missed = [t for t in db.list_tasks() if t["status"] == "missed"]
+    assert len(missed) == 13                      # one per day away, bar today's
     # ...and the rhythm has moved on rather than staying stuck in the past.
     series = db.list_series()[0]
-    assert logic.parse_dt(series["next_at"]) > now + timedelta(days=14)
+    assert logic.parse_dt(series["next_at"]) > now + timedelta(days=13)
+
+
+def test_sweeping_again_changes_nothing(app):
+    """The sweep is idempotent, missed-closing included: it runs hourly on a
+    laptop that sleeps, and twice in a minute must reach the same place."""
+    client, main, db, recurring = app
+    task = add(client)
+    repeat(client, task["id"], freq="daily")
+    later = datetime.now(timezone.utc) + timedelta(days=3)
+
+    recurring.sweep(later)
+    after_one = [(t["id"], t["status"], t["deadline"]) for t in db.list_tasks()]
+    series_one = db.list_series()[0]["next_at"]
+    for _ in range(2):
+        recurring.sweep(later)
+    assert [(t["id"], t["status"], t["deadline"]) for t in db.list_tasks()] == after_one
+    assert db.list_series()[0]["next_at"] == series_one
+
+
+def test_a_missed_beat_does_not_re_phase_a_from_completion_rhythm(app):
+    """"Every 3 days after I finish" must not drift because the laptop was
+    shut: the beat is closed on its own date, not on the day it was noticed."""
+    client, main, db, recurring = app
+    task = add(client)
+    repeat(client, task["id"], freq="daily", interval=3, from_completion=True)
+    due = logic.parse_dt(db.get_task(task["id"])["deadline"])
+
+    recurring.sweep(due + timedelta(days=9))      # noticed a week and a bit late
+    assert db.get_task(task["id"])["status"] == "missed"
+    series = db.list_series()[0]
+    # Phased on the beat that was missed, not on the sweep that found it.
+    assert logic.parse_dt(series["anchor_at"]) == due
+
+
+def test_a_missed_beat_you_do_anyway_leaves_the_rhythm_alone(app):
+    """Ticking a copy the sweep already closed pays nothing and steps nothing:
+    the beat after it is somebody's to do, not one to skip."""
+    client, main, db, recurring = app
+    task = add(client)
+    repeat(client, task["id"], freq="daily")
+    recurring.sweep(datetime.now(timezone.utc) + timedelta(days=2))
+    assert db.get_task(task["id"])["status"] == "missed"
+    before = db.list_series()[0]["next_at"]
+
+    state = client.post(f"/api/tasks/{task['id']}/complete", json={}).json()
+    assert db.get_task(task["id"])["status"] == "done"
+    assert db.get_task(task["id"])["xp_awarded"] is None   # missed pays nothing
+    assert state["xp"]["gained"] == 0
+    assert db.list_series()[0]["next_at"] == before         # no beat skipped
+
+
+def test_a_missed_beat_is_off_the_plan_but_still_in_the_history(app):
+    """It leaves the list and the day book; it stays on the calendar, because
+    a rhythm you are not keeping is worth being able to look back at."""
+    client, main, db, recurring = app
+    task = add(client)
+    repeat(client, task["id"], freq="daily")
+    recurring.sweep(datetime.now(timezone.utc) + timedelta(days=2))
+
+    state = client.get("/api/state").json()
+    open_ids = [t["id"] for t in roots(state) if t["status"] in ("todo", "in_progress")]
+    assert task["id"] not in open_ids
+
+    events = client.get("/api/calendar").json()["events"]
+    mine = [e for e in events if e["id"] == task["id"]]
+    assert [e["status"] for e in mine] == ["missed"]
+    # And the rhythm says how it is going, which is the honest version of a
+    # row that has been sitting there for a fortnight.
+    assert mine[0]["recurrence"]["missed"] >= 1
 
 
 def test_the_sweep_makes_the_copy_when_the_day_comes(app):
