@@ -234,6 +234,14 @@
         <input id="d-effort" type="range" min="0" max="10" value="5">
       </label>
     </div>
+    <!-- Hidden on a step: a tree is scheduled as one block, so its steps
+         answer to the flexibility of the task that is actually scheduled. -->
+    <div class="grid2" id="d-give-row">
+      <label>How movable is it? <output id="d-give-val">normal</output>
+        <input id="d-give" type="range" min="1" max="5" value="3">
+        <span class="muted">1 can't move · 5 any time</span>
+      </label>
+    </div>
     <p>Quadrant: <span id="d-quadrant" class="quad-badge"></span>
        · Score: <span id="d-score" class="badge score-badge"></span></p>
     <p id="d-score-note" class="muted"></p>

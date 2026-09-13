@@ -111,6 +111,27 @@ def test_a_start_time_in_the_evening_reopens_the_evening():
     check("evening_start_time", dump(tasks, SETTINGS))
 
 
+def test_flexibility_decides_who_gets_the_contested_day():
+    """Three tasks, one day, same everything but how movable they are.
+
+    The one that cannot move gets the morning, the ordinary one takes what is
+    left of the day, and the filler goes wherever there is room after that.
+    """
+    when = at(31, 9)
+    tasks = [
+        task("filler", title="read the thing", start_at=when,
+             estimated_time=192, impact=5, effort=5, flexibility=5,
+             order_index=0),
+        task("normal", title="write the notes", start_at=when,
+             estimated_time=192, impact=5, effort=5, flexibility=3,
+             order_index=1),
+        task("fixed", title="the standup", start_at=when,
+             estimated_time=192, impact=5, effort=5, flexibility=1,
+             order_index=2),
+    ]
+    check("flexibility_contested_day", dump(tasks, SETTINGS))
+
+
 # ---------------------------------------------------------------------------
 # The two that need a database
 # ---------------------------------------------------------------------------

@@ -1208,6 +1208,66 @@ def test_nudge_an_explicitly_named_subtask_wins_over_the_slide(client):
         child_target.replace(microsecond=0)
 
 
+# ---- how movable a task is ----
+
+def test_flexibility_round_trips_and_defaults_to_ordinary(client):
+    state = create(client, title="whenever", estimated_time=30, flexibility=5)
+    task = find(state, "whenever")
+    assert task["flexibility"] == 5
+    assert find(create(client, title="ordinary"), "ordinary")["flexibility"] == 3
+
+    state = client.patch(f"/api/tasks/{task['id']}",
+                         json={"flexibility": 1}).json()
+    assert find(state, "whenever")["flexibility"] == 1
+    assert client.patch(f"/api/tasks/{task['id']}",
+                        json={"flexibility": 9}).status_code == 422
+
+
+def test_a_fixed_task_keeps_its_slot_through_a_replan(client):
+    """1 means "this cannot move": a replan that rearranges everything else
+    leaves it exactly where it was."""
+    from app import db
+    db.update_settings({"day_start": 9, "day_end": 22, "day_capacity": 480,
+                        "adaptive_capacity": False, "timezone": "UTC"})
+    fixed = find(create(client, title="standup", estimated_time=30,
+                        flexibility=1, impact=5, effort=5), "standup")
+    movable = find(create(client, title="filler", estimated_time=30,
+                          flexibility=5, impact=5, effort=5), "filler")
+    before = {t["title"]: t["deadline"]
+              for t in client.get("/api/state").json()["tasks"]}
+
+    # Something big lands in the middle of the week and everything is replanned
+    # around it.
+    create(client, title="the big thing", estimated_time=400, impact=10,
+           effort=0)
+    after = {t["title"]: t["deadline"]
+             for t in client.get("/api/state").json()["tasks"]}
+
+    assert after["standup"] == before["standup"]
+    from app import db as database
+    assert database.get_task(fixed["id"])["planned_at"] == before["standup"]
+    assert database.get_task(movable["id"])["planned_at"] is not None
+
+
+def test_the_least_movable_thing_gets_the_slot(client):
+    """Two tasks want the same day and only one of them can have it. The one
+    that can be done any time is the one that moves."""
+    from app import db
+    db.update_settings({"day_start": 9, "day_end": 22, "day_capacity": 240,
+                        "adaptive_capacity": False, "timezone": "UTC"})
+    soon = (datetime.now(timezone.utc) + timedelta(days=2)).replace(
+        hour=9, minute=0, second=0, microsecond=0)
+    # Same everything, so flexibility is the only thing that can separate them.
+    create(client, title="loose", estimated_time=180, impact=5, effort=5,
+           flexibility=5, start_at=soon.isoformat())
+    state = create(client, title="pinned down", estimated_time=180, impact=5,
+                   effort=5, flexibility=1, start_at=soon.isoformat())
+
+    stuck = logic_parse(find(state, "pinned down")["deadline"])
+    loose = logic_parse(find(state, "loose")["deadline"])
+    assert stuck < loose          # the immovable one went first
+
+
 # ---- when the scheduler runs ----
 
 def test_two_reads_with_nothing_between_them_agree(client):

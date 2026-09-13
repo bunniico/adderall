@@ -1658,6 +1658,7 @@ function openDetail(id) {
   $("d-estimate").value = task.estimated_time ?? "";
   $("d-impact").value = task.impact ?? 5;
   $("d-effort").value = task.effort ?? 5;
+  $("d-give").value = task.flexibility ?? 3;
   // Moving between tabs only means anything once there is more than one.
   const projects = state.projects || [];
   const select = $("d-project");
@@ -1676,6 +1677,7 @@ function openDetail(id) {
   $("d-when-block").hidden = isStep;
   $("d-start-presets").hidden = isStep;
   $("d-start-note").hidden = isStep;
+  $("d-give-row").hidden = isStep;
   const root = isStep ? rootAncestor(task) : null;
   const whenNote = $("d-when-note");
   whenNote.hidden = !isStep;
@@ -1803,11 +1805,19 @@ function updateStartNote() {
   }
 }
 
+/* What each rung of the flexibility slider means, in the words the planner
+ * actually treats them as. */
+const GIVE_LABEL = {
+  1: "can't move", 2: "same day only", 3: "normal",
+  4: "move it if you must", 5: "any time at all",
+};
+
 function updateDetailDerived() {
   const impact = Number($("d-impact").value);
   const effort = Number($("d-effort").value);
   $("d-impact-val").textContent = impact;
   $("d-effort-val").textContent = effort;
+  $("d-give-val").textContent = GIVE_LABEL[Number($("d-give").value)] || "normal";
   const th = settings?.matrix_threshold ?? 5;
   const quad = impact >= th
     ? (effort >= th ? "major_project" : "quick_win")
@@ -1843,6 +1853,7 @@ async function saveDetail() {
     impact: Number($("d-impact").value),
     effort: Number($("d-effort").value),
   };
+  if (!$("d-give-row").hidden) fields.flexibility = Number($("d-give").value);
   const est = $("d-estimate").value;
   if (est) fields.estimated_time = Number(est);
   // Only when the fields are on screen: a step is scheduled by its root, and
@@ -3045,6 +3056,7 @@ function wire() {
   $("s-clickup-sync").addEventListener("click", syncClickUp);
   $("s-buffer").addEventListener("input", () =>
     $("s-buffer-val").textContent = $("s-buffer").value + "%");
+  $("d-give").addEventListener("input", updateDetailDerived);
   $("s-capacity").addEventListener("input", () =>
     $("s-capacity-val").textContent =
       fmtMinutes(Math.round(Number($("s-capacity").value) * 60)));

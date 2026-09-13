@@ -118,6 +118,11 @@ CREATE TABLE IF NOT EXISTS tasks (
     status        TEXT NOT NULL DEFAULT 'todo',
     ack_thankless INTEGER NOT NULL DEFAULT 0,
     collapsed     INTEGER NOT NULL DEFAULT 0,
+    -- How movable this is, 1 to 5. 1 is a fixed point the plan is built
+    -- around; 5 is filler that goes wherever there is room left. 3 is the
+    -- default and is how everything behaved before the column existed. See
+    -- `logic.FLEXIBILITY`.
+    flexibility   INTEGER NOT NULL DEFAULT 3,
     -- Whether a step belongs to the next occurrence of a repeating task, not
     -- just this one. On by default, matching how every step has always
     -- behaved; turned off, a step is a one-off added to this occurrence and
@@ -184,6 +189,7 @@ TASK_FIELDS = {
     "estimated_time",
     "actual_time", "impact", "effort", "status", "ack_thankless", "collapsed",
     "order_index", "started_at", "series_id", "clickup_id", "repeat_carry",
+    "flexibility",
 }
 
 
@@ -256,6 +262,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # Indexed here rather than in SCHEMA: on an older database the column
     # does not exist until the line above has run.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)")
+    if "flexibility" not in cols:
+        # Everything that exists was scheduled as though it were ordinary, so
+        # 3 everywhere keeps every existing plan exactly where it is.
+        conn.execute(
+            "ALTER TABLE tasks ADD COLUMN flexibility INTEGER NOT NULL DEFAULT 3")
     if "planned_at" not in cols:
         # Where the app decided this task goes, and the spans it booked for it.
         # Null on every existing row, which reads as "never planned" and is
