@@ -816,7 +816,13 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
     """Compute all derived fields for a flat task list.
 
     Returns {task_id: {buffered_estimate, quadrant, urgency, deadline,
-    deadline_source, order_path, sort_key, list_sort_key, actionable}}.
+    deadline_source, inherited_deadline, order_path, sort_key, list_sort_key,
+    actionable}}.
+
+    Only a top-level task gets a `deadline`. Subtasks are steps inside their
+    root's one block, not appointments of their own, so they carry
+    `inherited_deadline` — the date the tree is aimed at — and nothing the
+    calendar or the day planner reads.
 
     `sort_key` is the app's opinion of what comes first — urgency, then
     quadrant — unless the `manual_order` setting is on, in which case it is
@@ -877,7 +883,17 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
         days = HORIZON_DAYS.get(derived[task["id"]]["quadrant"], 3)
         return created + timedelta(days=days), minutes, now, None
 
-    def resolve_deadline(task: dict, parent_deadline: datetime | None) -> tuple[datetime | None, str]:
+    def resolve_deadline(task: dict) -> tuple[datetime | None, str]:
+        """The deadline for one top-level task. Steps never reach here.
+
+        Steps used to: each was given `parent_deadline` minus the estimates of
+        every later sibling, which tiled a tree backwards from its deadline
+        with no notion of a day in it. Six two-hour steps due at five in the
+        afternoon started at five in the morning, and each step, carrying a
+        date of its own, went overdue on its own and had to be rescheduled on
+        its own. A tree is one commitment. It gets one block, and the steps
+        inside it are a checklist, not six appointments.
+        """
         user_dl = parse_dt(task["deadline"])
         if user_dl:
             # A deadline you set is the answer, and a start time alongside it
@@ -887,20 +903,6 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
             return user_dl, "user"
         if not auto_deadlines:
             return None, "none"
-        if parent_deadline:
-            # Backward scheduling: this child must finish early enough to leave
-            # room for the buffered estimates of every later sibling. A start
-            # time on a step is not consulted here — the parent's slot is the
-            # plan, and the steps tile it — but it still counts toward the
-            # step's urgency, so "not until Thursday" is heard either way.
-            sibs = children.get(task["parent_id"], [])
-            idx = next(i for i, s in enumerate(sibs) if s["id"] == task["id"])
-            tail_min = sum(
-                (derived[s["id"]]["buffered_estimate"] or DEFAULT_ESTIMATE_MIN)
-                for s in sibs[idx + 1:]
-                if s["status"] in ACTIVE_STATUSES
-            )
-            return parent_deadline - timedelta(minutes=tail_min), "auto"
         target, minutes, floor, pin = auto_plan(task)
         if not minutes:
             return target, "auto"  # nothing left to do in here, nothing to book
@@ -964,11 +966,21 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
         for _, _, _, key, target, minutes, floor, pin in sorted(queue):
             planner.place(key, target, minutes, not_before=floor, pin=pin)
 
-    def walk(parent_id: str | None, parent_deadline: datetime | None,
+    def walk(parent_id: str | None, inherited: datetime | None,
              prefix: tuple[int, ...]) -> None:
+        """Fill in one branch of the tree, top down.
+
+        `inherited` is the deadline the work down here is aimed at, which is
+        its root's and only ever its root's. A step carries no deadline of its
+        own: it is not drawn on the calendar, not placed in a day, and never
+        overdue by itself. It still reads the one above it for urgency,
+        because "when does this need doing" has the same answer all the way
+        down a tree.
+        """
         for i, task in enumerate(children.get(parent_id, [])):
-            dl, source = resolve_deadline(task, parent_deadline)
-            if spread and parent_id is None and source == "user" and dl:
+            root = parent_id is None
+            dl, source = resolve_deadline(task) if root else (None, "none")
+            if spread and root and source == "user" and dl:
                 # A deadline you set is a fixed point, and the day it lands on
                 # is that much fuller for everything placed around it after.
                 minutes = _tree_minutes(task, children, lengths)
@@ -977,16 +989,23 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
             d = derived[task["id"]]
             d["deadline"] = dl.isoformat(timespec="seconds") if dl else None
             d["deadline_source"] = source
+            # The date this task is working toward: its own if it is a root,
+            # its root's if it is a step. Not a deadline of its own — nothing
+            # schedules off it — but the honest answer to how much time is
+            # left, which is what urgency is asking.
+            aimed = dl if root else inherited
+            d["inherited_deadline"] = (aimed.isoformat(timespec="seconds")
+                                       if aimed else None)
             # Where this task sits in the hand-arranged tree, top down. Two
             # of these compare exactly the way the list reads: [0] < [0, 1]
             # (a task before its own subtasks) < [1].
             d["order_path"] = [*prefix, i]
             if task["status"] in ACTIVE_STATUSES:
-                d["urgency"] = urgency(dl, d["buffered_estimate"], now,
+                d["urgency"] = urgency(aimed, d["buffered_estimate"], now,
                                        parse_dt(task.get("start_at")))
             else:
                 d["urgency"] = 0.0
-            walk(task["id"], dl, (*prefix, i))
+            walk(task["id"], aimed, (*prefix, i))
 
     if spread:
         prebook()
@@ -1008,8 +1027,11 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
         # Containers are judged on the work they still hold, not their own
         # (usually meaningless) estimate and deadline.
         if d["has_subtasks"] and t["status"] in ACTIVE_STATUSES:
-            d["urgency"] = urgency(parse_dt(d["rollup_deadline"]),
-                                   d["rollup_remaining"], now,
+            # A container part-way down a tree holds no deadline of its own to
+            # roll up, so it is judged on the one its root is aimed at.
+            toward = (parse_dt(d["rollup_deadline"])
+                      or parse_dt(d["inherited_deadline"]))
+            d["urgency"] = urgency(toward, d["rollup_remaining"], now,
                                    parse_dt(t.get("start_at")))
         # Length before score: how long a task takes is one of the four things
         # the score is made of, and for a container that is the work inside it.
@@ -1268,7 +1290,12 @@ def nudge_plan(tasks: list[dict], derived: dict[str, dict], task_id: str,
         task_id: {"deadline": new_deadline.isoformat(timespec="seconds")}
     }
 
-    current = parse_dt(derived.get(task_id, {}).get("deadline"))
+    # A step has no deadline of its own in the plan any more, so the shift is
+    # measured from the one stored on its row when it has one. Old lists move
+    # coherently that way instead of leaving their start times behind in the
+    # past, where they would read as "you should be doing this now" forever.
+    current = (parse_dt(derived.get(task_id, {}).get("deadline"))
+               or parse_dt(task.get("deadline")))
     if current is None:
         return moves
     delta = new_deadline - current.replace(microsecond=0)

@@ -198,11 +198,12 @@
     <label>Context / description
       <textarea id="d-description" rows="2" placeholder="Anything specific about your situation — the AI uses this when breaking the task down"></textarea>
     </label>
-    <div class="grid2">
+    <div class="grid2" id="d-when-block">
       <!-- When to begin, and when it has to be finished by. Two different
            questions, and for most tasks the first one is the one you can
            actually answer: dinner is a six o'clock thing whether or not it
-           has a deadline at all. -->
+           has a deadline at all. Hidden on a step: a tree is scheduled as one
+           block and the steps are the checklist inside it. -->
       <label>Start at <span id="d-start-source" class="tag"></span>
         <input id="d-start" type="datetime-local">
       </label>
@@ -210,6 +211,7 @@
         <input id="d-deadline" type="datetime-local">
       </label>
     </div>
+    <p id="d-when-note" class="muted" hidden></p>
     <div id="d-start-presets" class="nudge-presets"></div>
     <p id="d-start-note" class="muted"></p>
     <div class="grid2">

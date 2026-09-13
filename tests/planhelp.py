@@ -98,9 +98,10 @@ def blocks(tasks: list[dict], settings: dict, now: datetime | None = None,
             "id": t["id"], "title": t["title"],
             "start": end - timedelta(minutes=length), "end": end,
             "length": length, "source": d["deadline_source"],
-            # Containers are drawn, but their minutes are their steps' minutes,
-            # so counting both would charge every day twice.
-            "counts": not d["has_subtasks"],
+            # A tree is drawn as one block and charged for once. Steps carry no
+            # deadline and so are never drawn; the test for what a day costs is
+            # therefore "is this a root", not "is this a leaf".
+            "counts": not t["parent_id"],
             "depth": len(d["order_path"]) - 1,
         })
     out.sort(key=lambda b: (b["start"], b["title"]))

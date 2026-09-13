@@ -1093,13 +1093,16 @@ def test_calendar_reports_where_a_deadline_came_from(client):
     assert event(payload, "theirs")["deadline_source"] == "auto"
 
 
-def test_calendar_event_carries_its_ancestry(client):
+def test_a_step_gets_no_calendar_block_of_its_own(client):
+    """One tree, one block. Six steps used to mean six chips on the day, which
+    is the same afternoon drawn six times and six things to reschedule."""
     state = create(client, title="project")
     parent = find(state, "project")
     client.post("/api/tasks", json={"title": "step", "parent_id": parent["id"]})
-    ev = event(client.get("/api/calendar").json(), "step")
-    assert ev["path"] == ["project"]
-    assert ev["parent_id"] == parent["id"]
+    payload = client.get("/api/calendar").json()
+    titles = [e["title"] for e in payload["events"]]
+    assert "project" in titles
+    assert "step" not in titles
 
 
 # ---- nudging past-due work ----
@@ -1135,16 +1138,19 @@ def test_nudge_slides_subtask_deadlines_by_the_same_amount(client):
         "deadline": iso_in(days=-3)}).json()
     child = find(state, "pack")
 
-    gap_before = (logic_parse(parent["deadline"]) - logic_parse(child["deadline"]))
+    # Read the rows, not the calendar: a step has no block of its own to look
+    # at any more. The stored date still slides, so old lists stay coherent.
+    from app import db
+    gap_before = (logic_parse(parent["deadline"])
+                  - logic_parse(db.get_task(child["id"])["deadline"]))
     target = datetime.now(timezone.utc) + timedelta(days=4)
     client.post("/api/nudge", json={
         "nudges": [{"task_id": parent["id"], "deadline": target.isoformat()}]})
 
-    payload = client.get("/api/calendar").json()
-    gap_after = (logic_parse(event(payload, "trip")["deadline"])
-                 - logic_parse(event(payload, "pack")["deadline"]))
+    moved_child = logic_parse(db.get_task(child["id"])["deadline"])
+    gap_after = logic_parse(db.get_task(parent["id"])["deadline"]) - moved_child
     assert gap_after == gap_before          # the plan kept its shape
-    assert logic_parse(event(payload, "pack")["deadline"]) > datetime.now(timezone.utc)
+    assert moved_child > datetime.now(timezone.utc)
 
 
 def test_nudge_moves_the_whole_overdue_pile_in_one_call(client):
@@ -1175,8 +1181,8 @@ def test_nudge_an_explicitly_named_subtask_wins_over_the_slide(client):
         {"task_id": parent["id"], "deadline": parent_target.isoformat()},
         {"task_id": child["id"], "deadline": child_target.isoformat()},
     ]})
-    payload = client.get("/api/calendar").json()
-    assert logic_parse(event(payload, "pack")["deadline"]) == \
+    from app import db
+    assert logic_parse(db.get_task(child["id"])["deadline"]) == \
         child_target.replace(microsecond=0)
 
 
@@ -1530,7 +1536,8 @@ def test_nudging_a_parent_and_its_child_at_once_gives_each_its_own_start(client)
         {"task_id": find(child, "child")["id"], "deadline": c_at.isoformat()},
     ]}).json()
 
-    kid = find(state, "child")
+    from app import db
+    kid = db.get_task(find(state, "child")["id"])
     assert datetime.fromisoformat(kid["deadline"]) == c_at
     # Its start kept its own one-hour lead, measured from its own new deadline.
     assert c_at - datetime.fromisoformat(kid["start_at"]) == timedelta(hours=1)
