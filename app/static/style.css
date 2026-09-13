@@ -605,6 +605,11 @@ textarea { resize: vertical; }
   font: 400 9.5px/1 var(--mono); color: var(--muted-3); padding-top: 6px;
 }
 .empty-hint { color: var(--muted); text-align: center; margin-top: 40px; }
+.toast-undo {
+  margin-left: 12px; padding: 2px 10px; border-radius: 6px;
+  border: 1px solid currentColor; background: none; color: inherit;
+  font: inherit; cursor: pointer;
+}
 .done-section { margin-top: 24px; color: var(--muted); }
 .done-section summary { cursor: pointer; }
 #done-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }

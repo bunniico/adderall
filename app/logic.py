@@ -1452,6 +1452,65 @@ def ancestor_titles(tasks: list[dict], task: dict) -> list[str]:
     return path
 
 
+# How far out each "from" choice starts looking, as local days from today.
+RESCHEDULE_FLOORS = {"room": 0, "tomorrow": 1, "next_week": 7}
+
+
+def reschedule_plan(tasks: list[dict], settings: dict, ids: list[str],
+                    floor: str = "tomorrow", ratios: list[float] | None = None,
+                    now: datetime | None = None) -> list[dict]:
+    """New deadlines for a pile of overdue tasks, spread over days that fit.
+
+    "Reschedule all" used to write one instant onto every task in the
+    selection: twelve things due at nine tomorrow morning, on a day that holds
+    eight hours. The pile was not cleared, it was moved a day to the right and
+    made denser, and the next morning it was a pile again.
+
+    This hands the work to the day book instead, the same one everything else
+    is planned against, so what comes back is a spread. Highest score first,
+    because a pile you are digging out of is exactly where the order matters:
+    the thing that mattered most should get the first slot rather than
+    whatever happens to be at the top of the list.
+
+    Returns one row per task, in the order they were placed: the id, the new
+    deadline, and the one it had, which is what an undo needs.
+    """
+    now = now or datetime.now(timezone.utc)
+    ratios = ratios or []
+    wanted = [t for t in tasks if t["id"] in set(ids)]
+    if not wanted:
+        return []
+    derived = compute(tasks, settings, ratios, now=now)
+
+    # A book holding every commitment that is *not* moving, so the pile is
+    # spread into the room actually left rather than on top of the week.
+    planner = day_planner(settings, now=now)
+    staying = [t for t in tasks if t["id"] not in set(ids)]
+    reserve_fixed(planner, staying, settings, ratios)
+
+    days = RESCHEDULE_FLOORS.get(floor)
+    if days is None:
+        start = parse_dt(floor) or now
+    else:
+        local = now.astimezone(planner.tz) + timedelta(days=days)
+        start = planner._instant(local.date(), planner.day_start)
+    start = max(start, now)
+
+    out: list[dict] = []
+    for task in sorted(wanted, key=lambda t: -derived[t["id"]]["score"]):
+        d = derived[task["id"]]
+        when = planner.place(task["id"], start, d["length_min"], not_before=start)
+        out.append({
+            "task_id": task["id"],
+            "title": task["title"],
+            "deadline": when.isoformat(timespec="seconds"),
+            "was": d.get("deadline"),
+            "length_min": d["length_min"],
+            "blocks": task_blocks(planner, task["id"], {**d, "deadline": when.isoformat()}),
+        })
+    return out
+
+
 def nudge_plan(tasks: list[dict], derived: dict[str, dict], task_id: str,
                new_deadline: datetime) -> dict[str, dict[str, str]]:
     """The fields to write when a past-due task is pushed to a new date.

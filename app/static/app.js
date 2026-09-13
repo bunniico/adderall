@@ -1176,13 +1176,23 @@ function subtaskComposer(parentId) {
 /* ---------------- toasts & celebration ---------------- */
 
 let toastTimer = null;
-function toast(msg, isError = false) {
+/* `undo` is a {label, run} pair: a button in the toast, for the handful of
+ * things that change a lot of rows at once. Everything else in the app changes
+ * one thing at a time and can be put back by hand. */
+function toast(msg, isError = false, undo = null) {
   const el = $("toast");
-  el.textContent = msg;
+  el.replaceChildren(document.createTextNode(msg));
   el.className = "toast" + (isError ? " error" : "");
+  if (undo) {
+    const btn = document.createElement("button");
+    btn.className = "toast-undo";
+    btn.textContent = undo.label || "Undo";
+    btn.addEventListener("click", () => { el.hidden = true; undo.run(); });
+    el.appendChild(btn);
+  }
   el.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.hidden = true; }, 4000);
+  toastTimer = setTimeout(() => { el.hidden = true; }, undo ? 10000 : 4000);
 }
 
 function celebrate() {

@@ -150,22 +150,29 @@ def test_a_daily_chore_left_alone_for_a_fortnight(app_db):
     check("repeat_missed_fortnight", "\n".join(lines) + "\n")
 
 
-def test_a_dozen_overdue_tasks_nudged_to_tomorrow(app_db):
-    """#35: "reschedule all" writes one instant onto every task in the pile."""
-    from fastapi.testclient import TestClient
+def test_a_dozen_overdue_tasks_cleared_onto_the_days_that_fit(app_db):
+    """#35: the pile, rescheduled.
 
-    db, main, _recurring = app_db
-    client = TestClient(main.app)
+    "Reschedule all" used to write one instant onto every task, which is the
+    same pile on a different day. It goes through the day book now, in score
+    order, and comes back as a spread.
+    """
+    from app import logic
+
+    db, _main, _recurring = app_db
     project = db.ensure_project()
     for i in range(12):
         db.create_task({"title": f"overdue {i + 1}", "project_id": project["id"],
                         "deadline": at(20 + i % 5, 9 + i % 6),
-                        "estimated_time": 48, "order_index": i})
+                        "estimated_time": 48, "order_index": i,
+                        "impact": (i * 3) % 11, "effort": (i * 7) % 11})
 
-    tomorrow = at(30, 9)                     # what "tomorrow morning" resolves to
-    response = client.post("/api/nudge", json={"nudges": [
-        {"task_id": t["id"], "deadline": tomorrow} for t in db.list_tasks()
-    ]})
-    assert response.status_code == 200
+    # What `/api/reschedule` does, against this file's fixed clock rather than
+    # the real one — a golden that moves with the calendar is not a golden.
+    tasks = db.list_tasks()
+    moves = logic.reschedule_plan(tasks, db.get_settings(),
+                                  [t["id"] for t in tasks], "tomorrow", now=NOW)
+    for move in moves:
+        db.update_task(move["task_id"], {"deadline": move["deadline"]})
 
-    check("bulk_nudge_twelve", dump(db.list_tasks(), db.get_settings(), NOW))
+    check("bulk_reschedule_twelve", dump(db.list_tasks(), db.get_settings(), NOW))
