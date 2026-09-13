@@ -243,6 +243,73 @@ def _repeat_plan(db, recurring, when: str | None) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _weekend_plan(db, recurring) -> str:
+    """A weekday rhythm too big for its own evenings, and a one-off beside it.
+
+    Both want more hours than one day holds, so both have to run over onto a
+    following day. The rhythm names weekdays and the one-off names nothing,
+    which is the whole distinction #67 turns on.
+    """
+    from app import logic
+    project = db.ensure_project()
+    job = db.create_task({"title": "work", "project_id": project["id"],
+                          "estimated_time": 480})
+    recurring.start_series(job, {"freq": "weekly", "interval": 1,
+                                 "weekdays": [1, 2, 3, 4, 5], "time": "17:00"},
+                           now=NOW)
+    # No rule of its own, so nothing says a Saturday is off limits to it.
+    db.create_task({"title": "one-off", "project_id": project["id"],
+                    "estimated_time": 480, "deadline": at(4, 17, month=9),
+                    "start_at": at(4, 17, month=9)})
+
+    tz = logic.resolve_tz(SETTINGS["timezone"])
+    occurrences = recurring.forecast(now=NOW, settings=SETTINGS, days=10)
+    planner = logic.day_planner(SETTINGS, now=NOW)
+    recurring.reserve_forecast(planner, occurrences)
+    logic.reserve_fixed(planner, db.list_tasks(project["id"]), SETTINGS)
+
+    lines = ["work, 8h, every weekday at 17:00 — and a one-off that repeats "
+             "on nothing", ""]
+    for occ in occurrences:
+        due = (occ.get("due_at") or occ["at"]).astimezone(tz)
+        lines.append(f"work, due {WEEKDAYS[due.weekday()]} {due:%-d %b %H:%M}")
+        lines.extend(_spans(planner, occ["key"], tz))
+    for task in db.list_tasks(project["id"]):
+        if task["title"] != "one-off":
+            continue
+        lines.append("one-off, due 4 Sep 17:00")
+        lines.extend(_spans(planner, task["id"], tz))
+    return "\n".join(lines) + "\n"
+
+
+def _spans(planner, key, tz) -> list[str]:
+    """One line per booked span, shouting about any that land on a weekend."""
+    out = []
+    for a, b in planner.spans(key):
+        a, b = a.astimezone(tz), b.astimezone(tz)
+        weekend = "   (a weekend)" if a.weekday() >= 5 else ""
+        out.append(f"  {WEEKDAYS[a.weekday()]} {a:%-d %b %H:%M}-{b:%H:%M}{weekend}")
+    return out
+
+
+def test_a_weekday_rhythm_never_spills_onto_the_weekend(app_db):
+    """#67: a rhythm that names weekdays may only lay work on weekdays.
+
+    Since #66 the hour in a repeat rule starts the work rather than ending it,
+    so eight hours beginning at five in the evening cannot finish inside the
+    day and run over onto the next one. For Friday's shift the next one is a
+    Saturday, which the rule does not name and which is the one day the person
+    who set "every weekday" was explicitly keeping.
+
+    The one-off beside it names no days at all, so nothing says a Saturday is
+    off limits to *it*. That asymmetry is deliberate and is the tradeoff this
+    issue records: the rule is read from the task, not applied globally.
+    """
+    db, _main, recurring = app_db
+    check("weekend_is_not_yours", _weekend_plan(db, recurring),
+          outside_window=True)
+
+
 def test_a_weekday_rhythm_at_nine_is_worked_the_day_before(app_db):
     """#63/#66: "work, every weekday, at 09:00" put Monday's shift on Sunday.
 

@@ -376,6 +376,11 @@ class DayPlanner:
         books against, and the one the caller has to rank by."""
         return self._local(when).date()
 
+    def _allows(self, day: date, days: frozenset[int] | None) -> bool:
+        """May work go on this local day? Anything with no rule may go
+        anywhere, which is every task that does not repeat on named days."""
+        return days is None or day.weekday() in days
+
     def _midnight(self, day: date) -> datetime:
         return datetime.combine(day, time(0, 0), tzinfo=self.tz)
 
@@ -479,7 +484,8 @@ class DayPlanner:
         return free
 
     def _first_fit(self, day: date, length: int, not_before: datetime | None,
-                   pin: datetime | None = None) -> tuple[date, int] | None:
+                   pin: datetime | None = None,
+                   days: frozenset[int] | None = None) -> tuple[date, int] | None:
         """The first day from `day` onward with both room under the cap and a
         gap long enough to hold the work in one piece.
 
@@ -497,6 +503,9 @@ class DayPlanner:
         """
         for _ in range(self.search_days + 1):
             pinned = pin is not None and self._local(pin).date() == day
+            if not pinned and not self._allows(day, days):
+                day += timedelta(days=1)
+                continue
             base = self._minute_of(day, pin) if pinned else None
             floor = self._floor(day, not_before, base)
             until = (min(24 * 60, max(self.window_end, floor + length))
@@ -508,7 +517,8 @@ class DayPlanner:
             day += timedelta(days=1)
         return None
 
-    def _emptiest(self, day: date) -> tuple[date, int]:
+    def _emptiest(self, day: date,
+                  days: frozenset[int] | None = None) -> tuple[date, int]:
         """The last resort: the least-booked day from `day` on, and the first
         minute of it nothing has already claimed.
 
@@ -530,6 +540,9 @@ class DayPlanner:
         """
         best: tuple[int, date] | None = None
         for _ in range(self.search_days + 1):
+            if not self._allows(day, days):
+                day += timedelta(days=1)
+                continue
             load = self.load(day)
             if best is None or load < best[0]:
                 best = (load, day)
@@ -542,7 +555,8 @@ class DayPlanner:
 
     # ---- laying work out, backwards and forwards ----
 
-    def _lay_back(self, deadline: datetime, length: int
+    def _lay_back(self, deadline: datetime, length: int,
+                  days: frozenset[int] | None = None
                   ) -> tuple[list[tuple[datetime, datetime]], int]:
         """Where `length` minutes finishing by `deadline` actually happen,
         and how many of them could not.
@@ -584,6 +598,13 @@ class DayPlanner:
                 break
             if honour_now and day < today:
                 break              # nothing earlier than now is available
+            # The deadline's own day is the commitment and is always allowed;
+            # every earlier day it reaches back through has to be one the
+            # rhythm names.
+            if day != local.date() and not self._allows(day, days):
+                day -= timedelta(days=1)
+                ceiling = self.window_end
+                continue
             floor = self.day_start
             if honour_now and day == today:
                 floor = max(floor, self._minute_of(day, self.now))
@@ -615,7 +636,8 @@ class DayPlanner:
         return sorted(spans), max(0, remaining)
 
     def _lay_forward(self, day: date, length: int, not_before: datetime | None,
-                     pin: datetime | None) -> list[tuple[datetime, datetime]]:
+                     pin: datetime | None,
+                     days: frozenset[int] | None = None) -> list[tuple[datetime, datetime]]:
         """Where `length` minutes starting from `day` actually happen.
 
         For work that will not fit in one window: a fourteen hour job is laid
@@ -630,6 +652,12 @@ class DayPlanner:
             if remaining <= 0:
                 break
             pinned = pin is not None and self._local(pin).date() == day
+            # A day the rhythm does not name is not a day it may use. The
+            # pinned day is the exception: that hour is the commitment itself,
+            # and refusing it would leave the work nowhere to begin.
+            if not pinned and not self._allows(day, days):
+                day += timedelta(days=1)
+                continue
             base = self._minute_of(day, pin) if pinned else None
             floor = self._floor(day, not_before, base)
             # A pinned day answers to the start time you set, not to the cap.
@@ -650,7 +678,7 @@ class DayPlanner:
             # of them takes the rest and runs past the end of it: there is
             # nowhere left that is better, and dropping the work is not an
             # option the caller has.
-            chosen, start = self._emptiest(first)
+            chosen, start = self._emptiest(first, days)
             spans.append((self._instant(chosen, start),
                           self._instant(chosen, start + remaining)))
         return spans
@@ -673,7 +701,8 @@ class DayPlanner:
         return self._short.get(key, 0)
 
     def reserve(self, key: str, deadline: datetime, length: int,
-                start: datetime | None = None) -> datetime:
+                start: datetime | None = None,
+                days: frozenset[int] | None = None) -> datetime:
         """Book something that already has a time: a deadline you set yourself.
 
         Fixed points go in before anything is placed around them, so the app
@@ -692,9 +721,9 @@ class DayPlanner:
         length = max(1, int(length))
         if start is not None:
             spans, short = self._lay_forward(
-                self.local_day(start), length, start, start), 0
+                self.local_day(start), length, start, start, days), 0
         else:
-            spans, short = self._lay_back(deadline, length)
+            spans, short = self._lay_back(deadline, length, days)
         for opened, closed in spans:
             self.book(opened, closed)
         self._spans[key] = spans
@@ -704,7 +733,8 @@ class DayPlanner:
 
     def place(self, key: str, target: datetime, length: int,
               not_before: datetime | None = None,
-              pin: datetime | None = None) -> datetime:
+              pin: datetime | None = None,
+              days: frozenset[int] | None = None) -> datetime:
         """The deadline for `length` minutes of work wanted around `target`.
 
         Never earlier than the day the horizon asked for, and never onto a day
@@ -720,7 +750,7 @@ class DayPlanner:
             return self._placed[key]
         length = max(1, int(length))
         day = self._local(target).date()
-        slot = self._first_fit(day, length, not_before, pin)
+        slot = self._first_fit(day, length, not_before, pin, days)
         if slot is not None:
             chosen, start = slot
             spans = [(self._instant(chosen, start),
@@ -729,7 +759,7 @@ class DayPlanner:
             # It does not fit in one piece anywhere: more than a day's work, or
             # a diary with no gap that size left in it. Lay it across the days
             # rather than running it through the night.
-            spans = self._lay_forward(day, length, not_before, pin)
+            spans = self._lay_forward(day, length, not_before, pin, days)
         for start, end in spans:
             self.book(start, end)
         self._spans[key] = spans
@@ -829,7 +859,8 @@ def _tree_minutes(task: dict, children: dict, lengths: dict) -> int:
 
 
 def reserve_fixed(planner: DayPlanner, tasks: list[dict], settings: dict,
-                  ratios: list[float] | None = None) -> None:
+                  ratios: list[float] | None = None,
+                  repeat_days: dict[str, frozenset[int]] | None = None) -> None:
     """Book every tree that already has a deadline you set.
 
     Run over every project *before* any auto-deadline is placed, so work in
@@ -853,7 +884,8 @@ def reserve_fixed(planner: DayPlanner, tasks: list[dict], settings: dict,
             # "begins at nine, due by the end of the day" was laid backwards
             # out of the day it was meant to start in.
             planner.reserve(task["id"], deadline, minutes,
-                            start=parse_dt(task.get("start_at")))
+                            start=parse_dt(task.get("start_at")),
+                            days=(repeat_days or {}).get(task["id"]))
 
 
 def block_length(derived: dict) -> int:
@@ -1121,7 +1153,8 @@ def list_sort_key(task: dict, d: dict, field: str, descending: bool) -> list:
 def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None,
             now: datetime | None = None,
             planner: DayPlanner | None = None,
-            replan: bool = False) -> dict[str, dict]:
+            replan: bool = False,
+            repeat_days: dict[str, frozenset[int]] | None = None) -> dict[str, dict]:
     """Compute all derived fields for a flat task list.
 
     Returns {task_id: {buffered_estimate, quadrant, urgency, deadline,
@@ -1263,6 +1296,10 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
         project. Both are memoised on the task id, so when a shared planner has
         already been through this list all of it is a no-op.
         """
+        def allowed(task: dict) -> frozenset[int] | None:
+            """The days this task's own rhythm names, if it has one."""
+            return (repeat_days or {}).get(task["id"])
+
         roots = children.get(None, [])
         for task in roots:
             dl = parse_dt(task["deadline"])
@@ -1270,7 +1307,9 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
                 continue
             minutes = _tree_minutes(task, children, lengths)
             if minutes:
-                planner.reserve(task["id"], dl, minutes)
+                planner.reserve(task["id"], dl, minutes,
+                                start=parse_dt(task.get("start_at")),
+                                days=allowed(task))
         if not auto_deadlines:
             return
         # A slot already given out is a slot that is taken: book it before
@@ -1285,7 +1324,7 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
                 continue
             minutes = _tree_minutes(task, children, lengths)
             if minutes:
-                planner.reserve(task["id"], planned, minutes)
+                planner.reserve(task["id"], planned, minutes, days=allowed(task))
         queue = []
         for i, task in enumerate(roots):
             if parse_dt(task["deadline"]) is not None:
@@ -1312,9 +1351,10 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
             # week: that is the one that moves, and it can only be the one that
             # moves if it is placed second.
             queue.append((planner.local_day(target), give, -rank, i,
-                          task["id"], target, minutes, floor, pin))
-        for _, _, _, _, key, target, minutes, floor, pin in sorted(queue):
-            planner.place(key, target, minutes, not_before=floor, pin=pin)
+                          task["id"], target, minutes, floor, pin, allowed(task)))
+        for _, _, _, _, key, target, minutes, floor, pin, give_days in sorted(queue):
+            planner.place(key, target, minutes, not_before=floor, pin=pin,
+                          days=give_days)
 
     def walk(parent_id: str | None, inherited: datetime | None,
              prefix: tuple[int, ...]) -> None:
@@ -1781,6 +1821,32 @@ MONTH_NAMES = ("January", "February", "March", "April", "May", "June", "July",
 # that a malformed rule can never spin.
 RECUR_SCAN_DAYS = 366 * 2
 RECUR_SCAN_MONTHS = 12 * 20
+
+
+def rule_days(rule: dict | None) -> frozenset[int] | None:
+    """Which local weekdays a rhythm is allowed to put work on, or None.
+
+    "Every weekday" says two things, and the planner only ever heard one of
+    them. It heard when the next copy falls; it never heard that Saturday is
+    not yours. So work too big for its own evening ran over onto the next
+    calendar day, and for Friday's shift the next calendar day is exactly the
+    day the person who typed "every weekday" was keeping (#63, #67).
+
+    Only a weekly rule naming weekdays constrains anything — `normalize_rule`
+    clears `weekdays` for every other frequency, and a weekly rule naming none
+    means "this same weekday", which is a phase rather than a restriction. A
+    task with no rule at all gets None: nothing about it says any day is off
+    limits, which is the tradeoff #67 records.
+
+    Returned in Python's numbering (Monday is 0), because that is what
+    `date.weekday()` speaks and the planner compares against.
+    """
+    named = (rule or {}).get("weekdays") or []
+    if not named:
+        return None
+    # The rule counts from Sunday, the way the calendar and the JS do; see
+    # `_js_weekday`, which is this conversion in the other direction.
+    return frozenset((day - 1) % 7 for day in named)
 
 
 def _js_weekday(d: date) -> int:

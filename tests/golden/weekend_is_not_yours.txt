@@ -1,0 +1,20 @@
+work, 8h, every weekday at 17:00 — and a one-off that repeats on nothing
+
+work, due Tue 1 Sep 22:00
+  Tue 1 Sep 17:00-22:00
+  Wed 2 Sep 09:00-14:00
+work, due Wed 2 Sep 22:00
+  Wed 2 Sep 17:00-22:00
+  Thu 3 Sep 09:00-14:00
+work, due Thu 3 Sep 22:00
+  Thu 3 Sep 17:00-22:00
+  Fri 4 Sep 09:00-14:00
+work, due Fri 4 Sep 22:00
+  Fri 4 Sep 17:00-22:00
+  Mon 7 Sep 09:00-14:00
+work, due Mon 7 Sep 22:00
+  Mon 7 Sep 17:00-22:00
+  Tue 8 Sep 09:00-14:00
+one-off, due 4 Sep 17:00
+  Sat 5 Sep 11:00-17:00   (a weekend)
+  Sun 6 Sep 09:00-13:00   (a weekend)

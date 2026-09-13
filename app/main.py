@@ -324,9 +324,14 @@ def _derive_all(projects: list[dict], by_project: dict[str, list[dict]],
     replan = state["rev"] != state["planned_rev"]
 
     planner = logic.day_planner(settings, _capacity(settings)["minutes"], now=now)
+    # Which days each repeating task's own rule names. Looked up once, across
+    # every project, because the planner cannot ask: a copy on the list looks
+    # like any other task to it (`recurring.repeat_days`).
+    repeat_days = recurring.repeat_days(
+        [t for tasks in by_project.values() for t in tasks])
     for project in projects:
         logic.reserve_fixed(planner, by_project.get(project["id"], []),
-                            settings, ratios)
+                            settings, ratios, repeat_days=repeat_days)
     if forecast is None:
         forecast = recurring.forecast(settings=settings, ratios=ratios)
     recurring.reserve_forecast(planner, forecast)
@@ -338,7 +343,7 @@ def _derive_all(projects: list[dict], by_project: dict[str, list[dict]],
         book["planner"] = planner
     derived = {p["id"]: logic.compute(by_project.get(p["id"], []), settings,
                                       ratios, now=now, planner=planner,
-                                      replan=replan)
+                                      replan=replan, repeat_days=repeat_days)
                for p in projects}
     if replan:
         _write_plan(projects, by_project, derived, state["rev"], now, settings)
