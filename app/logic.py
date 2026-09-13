@@ -360,6 +360,11 @@ class DayPlanner:
         # a day however you look at it. The calendar draws these rather than
         # guessing a start by counting back from the deadline.
         self._spans: dict[str, list[tuple[datetime, datetime]]] = {}
+        # Minutes of a task's work that had nowhere legal to go. Work due
+        # sooner than the hours you keep can deliver it is a real thing to be
+        # told about, and the plan says so here rather than by inventing a
+        # night to do it in.
+        self._short: dict[str, int] = {}
 
     # ---- local time <-> instants ----
 
@@ -538,8 +543,9 @@ class DayPlanner:
     # ---- laying work out, backwards and forwards ----
 
     def _lay_back(self, deadline: datetime, length: int
-                  ) -> list[tuple[datetime, datetime]]:
-        """Where `length` minutes finishing by `deadline` actually happen.
+                  ) -> tuple[list[tuple[datetime, datetime]], int]:
+        """Where `length` minutes finishing by `deadline` actually happen,
+        and how many of them could not.
 
         Backwards from the deadline through window time, day by day. This used
         to be one line — book `deadline - length` to `deadline` — with no
@@ -593,13 +599,20 @@ class DayPlanner:
             day -= timedelta(days=1)
             ceiling = self.window_end
 
-        if remaining > 0:
-            # Half a year of evenings and nowhere free in any of them. Put what
-            # is left immediately before the earliest piece: a plan with a
-            # block in an odd place beats a plan missing an hour of work.
-            earliest = min((start for start, _ in spans), default=deadline)
-            spans.append((earliest - timedelta(minutes=remaining), earliest))
-        return sorted(spans)
+        # Half a year of evenings and nowhere free in any of them. This used
+        # to put whatever was left in one span immediately before the earliest
+        # piece it had managed to place, on the reasoning that a block in an
+        # odd place beats a plan missing an hour of work. That was wrong twice
+        # over: the span was bounded by nothing, so seventy-nine hours due on
+        # Tuesday became a single fifty-three hour block running through three
+        # nights, and it was the one thing this whole milestone promised would
+        # stop happening.
+        #
+        # There is no answer to "when will you do this" that is both honest
+        # and inside your day, because the hours do not exist. So the work
+        # that fits is laid where it fits, and the rest is handed back as a
+        # number for the caller to say out loud.
+        return sorted(spans), max(0, remaining)
 
     def _lay_forward(self, day: date, length: int, not_before: datetime | None,
                      pin: datetime | None) -> list[tuple[datetime, datetime]]:
@@ -648,6 +661,17 @@ class DayPlanner:
         """Where this task's work sits, in order. Empty if it was never placed."""
         return self._spans.get(key, [])
 
+    def knows(self, key: str) -> bool:
+        """Did this planner place this task? Not the same question as whether
+        it has spans: a deadline with no room left before it is placed, and
+        has none."""
+        return key in self._placed
+
+    def shortfall(self, key: str) -> int:
+        """Minutes of this task's work with nowhere legal to go: more work
+        than there are working hours left before the deadline you set."""
+        return self._short.get(key, 0)
+
     def reserve(self, key: str, deadline: datetime, length: int) -> datetime:
         """Book something that already has a time: a deadline you set yourself.
 
@@ -659,10 +683,11 @@ class DayPlanner:
         if key in self._placed:
             return self._placed[key]
         length = max(1, int(length))
-        spans = self._lay_back(deadline, length)
+        spans, short = self._lay_back(deadline, length)
         for start, end in spans:
             self.book(start, end)
         self._spans[key] = spans
+        self._short[key] = short
         self._placed[key] = deadline
         return deadline
 
@@ -721,7 +746,10 @@ def task_blocks(planner: DayPlanner, task_id: str, derived: dict) -> list[list[s
     for a deadline the planner never had a say in (spreading turned off).
     """
     spans = planner.spans(task_id)
-    if spans:
+    # `knows` rather than `if spans`, because "the planner looked and found
+    # nowhere" is an answer, and falling through to the guess below would
+    # redraw the very block the planner declined to book.
+    if spans or planner.knows(task_id):
         return [[start.isoformat(timespec="seconds"),
                  end.isoformat(timespec="seconds")] for start, end in spans]
     stored = derived.get("planned_blocks")
@@ -1309,6 +1337,11 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
         # stops being true once the plan respects the hours you keep.
         d["blocks"] = task_blocks(planner, t["id"],
                                   {**d, "planned_blocks": t.get("planned_blocks")})
+        # And how much of it has nowhere to be. Zero for nearly everything;
+        # non-zero means you have asked for more hours before a deadline than
+        # the days between here and it contain, and the blocks above are the
+        # part that fits rather than the whole job.
+        d["overflow_min"] = planner.shortfall(t["id"])
         # Computed after urgency, so containers score off what they actually
         # still hold rather than off their own empty shell. Containers then
         # have this replaced outright by the pass below.

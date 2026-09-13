@@ -1093,6 +1093,34 @@ def test_calendar_reports_where_a_deadline_came_from(client):
     assert event(payload, "theirs")["deadline_source"] == "auto"
 
 
+def test_a_calendar_event_says_how_much_of_the_work_has_nowhere_to_go(client):
+    """#65: more hours than there are before the deadline. The blocks are the
+    part that fits; the page is told how much is missing rather than being
+    handed a night-long block that makes the sums add up."""
+    from app import db
+    db.update_settings({"day_start": 9, "day_end": 22, "timezone": "UTC"})
+    due = (datetime.now(timezone.utc) + timedelta(days=2)).replace(
+        hour=18, minute=0, second=0, microsecond=0)
+    create(client, title="migration", deadline=due.isoformat(),
+           estimated_time=79 * 60)
+
+    ev = event(client.get("/api/calendar").json(), "migration")
+    assert ev["overflow_min"] > 0, "79 hours do not fit in two days"
+    booked = sum((logic_parse(end) - logic_parse(start)).total_seconds() // 60
+                 for start, end in ev["blocks"])
+    assert booked + ev["overflow_min"] == ev["length_min"]
+    for start, end in ev["blocks"]:
+        start, end = logic_parse(start), logic_parse(end)
+        assert start.date() == end.date(), "no block runs through the night"
+        assert 9 <= start.hour and end.hour <= 22
+
+    # Everything that does fit says so with a zero, not by leaving the key out.
+    # A deadline of its own, because the two days before the one above are now
+    # full to the last minute and half an hour would not fit there either.
+    create(client, title="small", deadline=iso_in(days=10), estimated_time=30)
+    assert event(client.get("/api/calendar").json(), "small")["overflow_min"] == 0
+
+
 def test_a_calendar_event_says_where_its_work_sits(client):
     """Not "one run back from the deadline": work due first thing in the
     morning was done the evening before, and the page is told so."""

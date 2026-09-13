@@ -859,6 +859,58 @@ def test_how_long_a_day_is_and_how_much_work_fits_in_it_are_two_settings():
     assert shorter.capacity == 240
 
 
+def test_work_that_cannot_fit_before_its_deadline_is_reported_not_invented():
+    """#65: `_lay_back` used to answer "nowhere left" with one unbounded span.
+
+    Three days of working hours, seventy-nine hours of work, and the old
+    remainder fallback put the difference in a single block immediately before
+    the earliest piece it had placed. Nothing bounded that span, so it ran for
+    fifty-three hours straight through three nights, outside the window on
+    every one of them.
+    """
+    settings = {**SETTINGS, "day_start": 9, "day_end": 22, "day_capacity": 480,
+                "adaptive_capacity": False, "timezone": "UTC"}
+    planner = logic.day_planner(settings, now=NOW)
+    deadline = NOW + timedelta(days=3)
+    spans, short = planner._lay_back(deadline, 79 * 60)
+
+    assert short > 0, "the hours do not exist; the plan has to say so"
+    assert sum(int((b - a).total_seconds() // 60) for a, b in spans) + short \
+        == 79 * 60, "every minute is either placed or counted as unplaced"
+
+    for start, end in spans:
+        assert start.date() == end.date(), "no block runs through the night"
+        assert start.hour >= 9 and (end.hour, end.minute) <= (22, 0), \
+            f"{start} to {end} is outside the working window"
+
+
+def test_a_deadline_with_no_room_at_all_draws_nothing_rather_than_guessing():
+    """The end of the same case. `task_blocks` falls back to counting the
+    length back from the deadline for a task the planner never touched; a task
+    the planner *did* look at and found no room for must not get that guess
+    handed to it, or the block the planner declined to book is drawn anyway.
+    """
+    settings = {**SETTINGS, "day_start": 9, "day_end": 22, "timezone": "UTC"}
+    planner = logic.day_planner(settings, now=NOW)
+    # Every working minute between now and the deadline, spoken for.
+    planner.book(NOW, NOW + timedelta(days=2))
+    deadline = NOW + timedelta(days=1)
+
+    planner.reserve("late", deadline, 240)
+    assert planner.knows("late")
+    assert planner.spans("late") == []
+    assert planner.shortfall("late") == 240
+    assert logic.task_blocks(planner, "late",
+                             {"deadline": deadline.isoformat(),
+                              "length_min": 240}) == []
+
+    # A task it never saw keeps the old answer, which is the whole reason the
+    # fallback is there.
+    assert logic.task_blocks(planner, "never-seen",
+                             {"deadline": deadline.isoformat(),
+                              "length_min": 240}) != []
+
+
 def test_a_day_that_ends_before_it_starts_is_clamped_not_refused():
     """A silly setting reads as the nearest sensible day rather than stopping
     the scheduler, the same way a malformed repeat rule does."""
