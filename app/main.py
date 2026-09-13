@@ -360,7 +360,12 @@ def _write_plan(projects: list[dict], by_project: dict[str, list[dict]],
             d = derived[project["id"]].get(task["id"])
             if d is None:
                 continue
-            auto = d.get("deadline_source") == "auto" and d.get("deadline")
+            # A task that is over has no plan. The planner stopped booking it
+            # the moment it closed, so anything stored here is a slot it no
+            # longer holds, and its blocks are now a record of when the work
+            # happened (`logic.finished_blocks`) rather than a claim on time.
+            live = task["status"] in logic.ACTIVE_STATUSES
+            auto = live and d.get("deadline_source") == "auto" and d.get("deadline")
             planned_at = d["deadline"] if auto else None
             blocks = d.get("blocks") if auto else None
             if task.get("planned_at") != planned_at or \

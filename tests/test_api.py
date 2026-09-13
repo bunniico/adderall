@@ -1093,6 +1093,89 @@ def test_calendar_reports_where_a_deadline_came_from(client):
     assert event(payload, "theirs")["deadline_source"] == "auto"
 
 
+def _day_blocks(payload):
+    """Every root task's spans, with the status that drew them."""
+    return [(logic_parse(a), logic_parse(b), e["title"], e["status"])
+            for e in payload["events"] if not e["parent_id"] for a, b in e["blocks"]]
+
+
+def _stacked(payload):
+    """Pairs of blocks sitting on top of each other. Should always be empty."""
+    spans = sorted(_day_blocks(payload))
+    return [(x, y) for i, x in enumerate(spans) for y in spans[i + 1:]
+            if y[0] < x[1] and x[0] < y[1]]
+
+
+def test_a_finished_task_is_drawn_where_the_work_happened_not_where_it_was_planned(client):
+    """Ticking something off frees its hours, and the day book hands them
+    straight to live work. The finished task used to keep its old blocks
+    anyway, so it was redrawn on top of whatever had taken its slot and the
+    day view split the two into parallel columns.
+
+    A task that is over is drawn from the moment it was started, for as long
+    as it actually took.
+    """
+    from app import db
+    db.update_settings({"day_start": 9, "day_end": 22, "day_capacity": 480,
+                        "timezone": "UTC"})
+    # More work than one day holds, so the freed slot is certain to be reused.
+    ids = [find(create(client, title=f"t{i}", estimated_time=150,
+                       impact=8, effort=3), f"t{i}")["id"] for i in range(10)]
+    client.get("/api/calendar")            # settle a plan on them
+
+    client.post(f"/api/tasks/{ids[0]}/start")
+    client.post(f"/api/tasks/{ids[0]}/complete", json={"actual_time": 90})
+
+    payload = client.get("/api/calendar").json()
+    assert not _stacked(payload), \
+        "no two blocks may sit on top of each other: " + repr(_stacked(payload)[:2])
+
+    done = next(e for e in payload["events"] if e["id"] == ids[0])
+    assert done["status"] == "done"
+    assert len(done["blocks"]) == 1, "the work happened once"
+    start, end = (logic_parse(x) for x in done["blocks"][0])
+    assert (end - start).total_seconds() == 90 * 60, "as long as it actually took"
+    assert start == logic_parse(db.get_task(ids[0])["started_at"])
+
+    # And the stored plan is cleared, rather than left holding a slot the task
+    # no longer owns next to a record of when the work actually happened.
+    row = db.get_task(ids[0])
+    assert row["planned_at"] is None and row["planned_blocks"] is None
+
+
+def test_a_task_finished_without_being_started_is_not_drawn_at_all(client):
+    """No start, no honest place on the timeline. The old slot is gone — it
+    belongs to whatever the planner has since given it to."""
+    from app import db
+    db.update_settings({"day_start": 9, "day_end": 22, "timezone": "UTC"})
+    ids = [find(create(client, title=f"t{i}", estimated_time=150,
+                       impact=8, effort=3), f"t{i}")["id"] for i in range(10)]
+    client.get("/api/calendar")
+    client.post(f"/api/tasks/{ids[0]}/complete", json={})
+
+    payload = client.get("/api/calendar").json()
+    assert not _stacked(payload)
+    done = next(e for e in payload["events"] if e["id"] == ids[0])
+    assert done["blocks"] == []
+
+
+def test_a_missed_beat_is_not_drawn_either(client):
+    """Those hours were not spent. Drawing them puts work nobody did on top
+    of work somebody still has to."""
+    from app import db
+    db.update_settings({"day_start": 9, "day_end": 22, "timezone": "UTC"})
+    ids = [find(create(client, title=f"t{i}", estimated_time=150,
+                       impact=8, effort=3), f"t{i}")["id"] for i in range(10)]
+    client.get("/api/calendar")
+    db.update_task(ids[0], {"status": "missed"})
+    db.bump_plan_rev()
+
+    payload = client.get("/api/calendar").json()
+    assert not _stacked(payload)
+    missed = next(e for e in payload["events"] if e["id"] == ids[0])
+    assert missed["blocks"] == []
+
+
 def test_a_start_time_you_set_decides_which_end_the_work_is_laid_from(client):
     """#63/#66: a task with both a start time and a deadline was laid
     backwards from the deadline, and the start was never read at all.
