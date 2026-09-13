@@ -380,7 +380,12 @@ def test_setting_a_repeat_dates_the_task_and_describes_itself(app):
     # Tuesday" about something with no date is how you give it a Tuesday.
     assert got["deadline_source"] == "user"
     assert logic.parse_dt(got["deadline"]).weekday() == 1   # Python's Tuesday
-    assert got["deadline"] == got["recurrence"]["anchor_at"]
+    # The anchor is the beat: the hour the rule named, which is when the work
+    # starts. The deadline is the close of that same Tuesday — see
+    # `logic.occurrence_window`.
+    assert got["start_at"] == got["recurrence"]["anchor_at"]
+    assert logic.parse_dt(got["start_at"]).date() == \
+        logic.parse_dt(got["deadline"]).date()
 
 
 def test_an_undated_task_is_due_by_the_end_of_the_working_day(app):
@@ -403,12 +408,58 @@ def test_an_undated_task_is_due_by_the_end_of_the_working_day(app):
     assert (due.hour, due.minute) == (22, 0)
 
 
-def test_a_named_time_of_day_beats_the_working_window(app):
+def test_a_named_time_of_day_is_the_hour_the_work_starts(app):
+    """#63: the repeat dialog labels that field **At**, so it is the hour the
+    job happens, not the hour it must be finished by.
+
+    It used to be stored as the deadline, and work is laid backwards from a
+    deadline through the hours you keep — so "every weekday at 09:00" put
+    Monday's shift on Sunday. The hour is the start now, and the copy is due
+    by the end of that working day.
+    """
     client, *_ = app
+    client.put("/api/settings", json={"day_start": 9, "day_end": 22,
+                                      "day_capacity": 480,
+                                      "adaptive_capacity": False})
     task = add(client)
     state = repeat(client, task["id"], freq="daily", time="07:30")
-    due = logic.parse_dt(roots(state)[0]["deadline"])
-    assert (due.hour, due.minute) == (7, 30)
+    got = roots(state)[0]
+    start = logic.parse_dt(got["start_at"])
+    due = logic.parse_dt(got["deadline"])
+    assert (start.hour, start.minute) == (7, 30), "the hour you named"
+    assert (due.hour, due.minute) == (22, 0), "due by the close of that day"
+    assert start.date() == due.date(), "both ends of the same day"
+
+
+def test_a_weekday_rhythm_never_lands_its_work_on_the_weekend(app):
+    """#63, end to end: "work, 8h, every weekday at 09:00" drew a work block
+    on Sunday.
+
+    The hour was read as the deadline and eight hours of it was laid backwards
+    out of Monday, off the end of the day and into the day before. Read as a
+    start, each shift sits on the weekday it belongs to.
+    """
+    client, *_ = app
+    client.put("/api/settings", json={"day_start": 9, "day_end": 22,
+                                      "day_capacity": 480, "timezone": "UTC",
+                                      "adaptive_capacity": False})
+    task = add(client, title="work", estimated_time=480)
+    # 0=Sunday, so Monday to Friday is 1..5.
+    repeat(client, task["id"], freq="weekly", weekdays=[1, 2, 3, 4, 5],
+           time="09:00")
+
+    shifts = [e for e in client.get("/api/calendar").json()["events"]
+              if e["title"] == "work"]
+    assert len(shifts) > 5, "the forecast should reach past the first week"
+    for shift in shifts:
+        due = logic.parse_dt(shift["deadline"])
+        assert due.weekday() < 5, "the rule names weekdays only"
+        assert shift["blocks"], "every shift is drawn somewhere"
+        for opened, _closed in shift["blocks"]:
+            start = logic.parse_dt(opened)
+            assert start.date() == due.date(), \
+                f"{shift['title']} due {due} has work on {start.date()}"
+            assert start.weekday() < 5, "and never on a Saturday or Sunday"
 
 
 def test_a_task_that_already_has_a_deadline_keeps_it_as_the_first_beat(app):

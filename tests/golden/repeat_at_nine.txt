@@ -1,0 +1,21 @@
+work, 8h, every weekday at 09:00
+the copy on the list is due 2026-08-31T22:00:00+00:00, starting 2026-08-31T09:00:00+00:00
+
+due Tue 1 Sep 22:00  starting 09:00
+  Tue 1 Sep 09:00-19:00
+due Wed 2 Sep 22:00  starting 09:00
+  Wed 2 Sep 09:00-19:00
+due Thu 3 Sep 22:00  starting 09:00
+  Thu 3 Sep 09:00-19:00
+due Fri 4 Sep 22:00  starting 09:00
+  Fri 4 Sep 09:00-19:00
+due Mon 7 Sep 22:00  starting 09:00
+  Mon 7 Sep 09:00-19:00
+due Tue 8 Sep 22:00  starting 09:00
+  Tue 8 Sep 09:00-19:00
+due Wed 9 Sep 22:00  starting 09:00
+  Wed 9 Sep 09:00-19:00
+due Thu 10 Sep 22:00  starting 09:00
+  Thu 10 Sep 09:00-19:00
+due Fri 11 Sep 22:00  starting 09:00
+  Fri 11 Sep 09:00-19:00

@@ -1,0 +1,30 @@
+work, 8h, every weekday at 17:00
+the copy on the list is due 2026-08-31T22:00:00+00:00, starting 2026-08-31T17:00:00+00:00
+
+due Tue 1 Sep 22:00  starting 17:00
+  Tue 1 Sep 17:00-22:00
+  Wed 2 Sep 09:00-14:00   (not the day it is due)
+due Wed 2 Sep 22:00  starting 17:00
+  Wed 2 Sep 17:00-22:00
+  Thu 3 Sep 09:00-14:00   (not the day it is due)
+due Thu 3 Sep 22:00  starting 17:00
+  Thu 3 Sep 17:00-22:00
+  Fri 4 Sep 09:00-14:00   (not the day it is due)
+due Fri 4 Sep 22:00  starting 17:00
+  Fri 4 Sep 17:00-22:00
+  Sat 5 Sep 09:00-14:00   (not the day it is due)
+due Mon 7 Sep 22:00  starting 17:00
+  Mon 7 Sep 17:00-22:00
+  Tue 8 Sep 09:00-14:00   (not the day it is due)
+due Tue 8 Sep 22:00  starting 17:00
+  Tue 8 Sep 17:00-22:00
+  Wed 9 Sep 09:00-14:00   (not the day it is due)
+due Wed 9 Sep 22:00  starting 17:00
+  Wed 9 Sep 17:00-22:00
+  Thu 10 Sep 09:00-14:00   (not the day it is due)
+due Thu 10 Sep 22:00  starting 17:00
+  Thu 10 Sep 17:00-22:00
+  Fri 11 Sep 09:00-14:00   (not the day it is due)
+due Fri 11 Sep 22:00  starting 17:00
+  Fri 11 Sep 17:00-22:00
+  Sat 12 Sep 09:00-14:00   (not the day it is due)

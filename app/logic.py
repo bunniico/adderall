@@ -672,20 +672,31 @@ class DayPlanner:
         than there are working hours left before the deadline you set."""
         return self._short.get(key, 0)
 
-    def reserve(self, key: str, deadline: datetime, length: int) -> datetime:
+    def reserve(self, key: str, deadline: datetime, length: int,
+                start: datetime | None = None) -> datetime:
         """Book something that already has a time: a deadline you set yourself.
 
         Fixed points go in before anything is placed around them, so the app
         schedules its own work in the space that is actually left. The deadline
         is yours and is handed straight back; where the work leading up to it
         goes is `_lay_back`'s answer, and it is inside your day.
+
+        `start` is the hour the work *begins*, when you named one. It changes
+        which end the work is laid from, and that is the whole difference
+        between the two readings of "work every weekday at nine": laid back
+        from nine, Monday's shift happens on Sunday; laid forward from it,
+        Monday's shift happens on Monday, which is what you said.
         """
         if key in self._placed:
             return self._placed[key]
         length = max(1, int(length))
-        spans, short = self._lay_back(deadline, length)
-        for start, end in spans:
-            self.book(start, end)
+        if start is not None:
+            spans, short = self._lay_forward(
+                self.local_day(start), length, start, start), 0
+        else:
+            spans, short = self._lay_back(deadline, length)
+        for opened, closed in spans:
+            self.book(opened, closed)
         self._spans[key] = spans
         self._short[key] = short
         self._placed[key] = deadline
@@ -837,7 +848,12 @@ def reserve_fixed(planner: DayPlanner, tasks: list[dict], settings: dict,
             continue
         minutes = _tree_minutes(task, children, lengths)
         if minutes:
-            planner.reserve(task["id"], deadline, minutes)
+            # A start time you set is honoured here rather than ignored. This
+            # path read the deadline and nothing else, so a task that said
+            # "begins at nine, due by the end of the day" was laid backwards
+            # out of the day it was meant to start in.
+            planner.reserve(task["id"], deadline, minutes,
+                            start=parse_dt(task.get("start_at")))
 
 
 def block_length(derived: dict) -> int:
@@ -2020,6 +2036,34 @@ def _at_time(day: date, rule: dict, anchor_local: datetime, tz: tzinfo) -> datet
     fixed = _parse_time(rule.get("time"))
     hour, minute = fixed if fixed else (anchor_local.hour, anchor_local.minute)
     return datetime.combine(day, time(hour, minute), tzinfo=tz).astimezone(timezone.utc)
+
+
+def occurrence_window(at: datetime, rule: dict | None,
+                      settings: dict) -> tuple[datetime | None, datetime]:
+    """When a rhythm's copy begins, and when it is due.
+
+    The repeat dialog labels its time field **At**: the hour the job happens.
+    That hour used to be stored as the copy's *deadline*, and since work is
+    laid backwards from a deadline through the hours you keep, "work every
+    weekday at 09:00" put Monday's eight hours on Sunday — a day the rule does
+    not even name, and the complaint in #63.
+
+    So an hour named in the rule is the hour the work starts, and the copy is
+    due by the end of that working day. A rule naming no hour is unchanged:
+    `recurring._end_of_working_day` already seeds it at the close of the day,
+    and `at` is that instant already.
+    """
+    if not (rule or {}).get("time"):
+        return None, at
+    tz = resolve_tz(settings.get("timezone"))
+    local = at.astimezone(tz)
+    closes = (datetime.combine(local.date(), time(0, 0), tzinfo=tz)
+              + timedelta(minutes=day_planner(settings).window_end))
+    # An hour past the close of the day is its own deadline. Nothing else
+    # would be: a day that ends at 22:00 and a job that starts at 23:00 is a
+    # deliberate late night, and moving its deadline backwards would put the
+    # work before the start you asked for.
+    return at, max(at, closes.astimezone(timezone.utc))
 
 
 def next_occurrence(rule: dict | None, after: datetime,
