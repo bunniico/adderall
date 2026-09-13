@@ -1322,12 +1322,14 @@ def test_day_cap_learns_from_days_you_actually_finish(client):
 def test_day_cap_settings_roundtrip(client):
     res = client.put("/api/settings", json={
         "day_capacity": 300, "adaptive_capacity": False,
-        "day_start": 7, "timezone": "America/New_York",
+        "day_start": 7, "day_end": 20, "timezone": "America/New_York",
         "capacity": {"minutes": 9999},   # derived: echoed back, never stored
     }).json()
     assert res["day_capacity"] == 300
     assert res["adaptive_capacity"] is False
+    # Two ends of a day, and a budget that is not either of them.
     assert res["day_start"] == 7
+    assert res["day_end"] == 20
     assert res["timezone"] == "America/New_York"
     assert res["capacity"]["minutes"] == 300
 

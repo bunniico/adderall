@@ -2188,18 +2188,20 @@ async function compileBraindump() {
 
 /* ---------------- settings ---------------- */
 
-/* The hours of the day, as options for "the working day starts at". Built
- * rather than written out so they read in the reader's own locale — 9 AM or
- * 09:00, whichever their clock uses. */
+/* The hours of the day, as options for both ends of it. Built rather than
+ * written out so they read in the reader's own locale — 9 AM or 09:00,
+ * whichever their clock uses. */
 function fillDayStarts() {
-  const select = $("s-day-start");
-  if (select.options.length) return;
-  for (let h = 0; h < 24; h++) {
-    const opt = document.createElement("option");
-    opt.value = String(h);
-    opt.textContent = new Date(2000, 0, 1, h)
-      .toLocaleTimeString(undefined, { hour: "numeric" });
-    select.appendChild(opt);
+  for (const id of ["s-day-start", "s-day-end"]) {
+    const select = $(id);
+    if (select.options.length) continue;
+    for (let h = 0; h < 24; h++) {
+      const opt = document.createElement("option");
+      opt.value = String(h);
+      opt.textContent = new Date(2000, 0, 1, h)
+        .toLocaleTimeString(undefined, { hour: "numeric" });
+      select.appendChild(opt);
+    }
   }
 }
 
@@ -2248,6 +2250,7 @@ function openSettings() {
   $("s-capacity-val").textContent = fmtMinutes(settings.day_capacity ?? 480);
   $("s-adaptive-capacity").checked = settings.adaptive_capacity !== false;
   $("s-day-start").value = String(settings.day_start ?? 9);
+  $("s-day-end").value = String(settings.day_end ?? 22);
   $("s-spread").checked = settings.spread_tasks !== false;
   $("s-capacity-note").textContent = capacityLearned();
   $("s-threshold").value = settings.matrix_threshold;
@@ -2295,6 +2298,7 @@ async function saveSettings() {
     day_capacity: Math.round(Number($("s-capacity").value) * 60),
     adaptive_capacity: $("s-adaptive-capacity").checked,
     day_start: Number($("s-day-start").value),
+    day_end: Number($("s-day-end").value),
     spread_tasks: $("s-spread").checked,
     matrix_threshold: Number($("s-threshold").value),
     ai_scoring: $("s-ai-scoring").checked,

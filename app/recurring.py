@@ -112,8 +112,8 @@ def _end_of_working_day(now: datetime, settings: dict, tz) -> datetime:
     of day. "Take the bins out, every 3 days" set at two in the morning must
     not arrive already overdue by forty seconds, and it does not mean two in
     the morning either: a chore with no time on it is due by the end of the
-    day, which is a number this app already keeps (the working window, from
-    `day_start` for as long as a day holds).
+    day, which is a number this app already keeps (`day_end`, the hour your
+    day closes).
     """
     window = logic.day_planner(settings).window_end
     minute = min(window, 24 * 60 - 1)

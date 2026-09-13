@@ -1,8 +1,8 @@
 now 2026-08-29 12:00 UTC
-day 09:00 to 17:00 | cap 8h | buffer 25%
+day 09:00 to 22:00 | cap 8h | buffer 25%
 
 2026-08-29 Sat  load 1h / 8h
-  18:00-19:00       1h  cook dinner  [auto]  >>> after the day ends
+  18:00-19:00       1h  cook dinner  [auto]
 2026-08-30 Sun  load 30m / 8h
   09:00-09:30      30m  answer the email  [auto]
   ... 1 day with nothing ...

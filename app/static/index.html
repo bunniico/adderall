@@ -381,9 +381,10 @@
     <fieldset class="s-group">
       <legend>How much a day holds</legend>
 
-      <label>A day's worth of work: <output id="s-capacity-val"></output>
+      <label>Roughly how many hours of work in a day? <output id="s-capacity-val"></output>
         <input id="s-capacity" type="range" min="1" max="16" step="0.5" value="8">
-        <span class="muted">The calendar warns when a day goes past this, and
+        <span class="muted">How much work a day is allowed to hold, not how
+          long the day is. The calendar warns when a day goes past this, and
           new deadlines are packed up to it and no further.</span>
       </label>
 
@@ -393,10 +394,18 @@
         actually have. A goal you have never once hit isn't a plan.</span></label>
       <p id="s-capacity-note" class="muted"></p>
 
-      <label>The working day starts at
+      <label>What time does your day start?
         <select id="s-day-start"></select>
-        <span class="muted">Work the app schedules itself is laid out from
-          here, in your own timezone.</span>
+        <span class="muted">Not when you wake up: when you have had your
+          coffee and your meds and you are actually ready to go. Nothing the
+          app schedules is put before this, in your own timezone.</span>
+      </label>
+
+      <label>...and when are you done for the day?
+        <select id="s-day-end"></select>
+        <span class="muted">The other end of the same window. Nothing the app
+          schedules runs past it — only a start time or a deadline you set
+          yourself can put work outside these hours.</span>
       </label>
 
       <label class="row"><input id="s-spread" type="checkbox">

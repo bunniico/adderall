@@ -830,6 +830,44 @@ def test_same_shaped_tasks_spread_instead_of_stacking():
     assert blocks[0][0].isoformat() == "2026-08-30T09:00:00+00:00"
 
 
+def test_how_long_a_day_is_and_how_much_work_fits_in_it_are_two_settings():
+    """`window_end` used to be `day_start + capacity`, so one number meant
+    both, and a day at its budget was packed solid with no slack anywhere."""
+    planner = logic.day_planner({**SETTINGS, "day_start": 9, "day_end": 22,
+                                 "day_capacity": 480,
+                                 "adaptive_capacity": False})
+    assert planner.day_start == 9 * 60
+    assert planner.window_end == 22 * 60          # not 17:00
+    assert planner.capacity == 480                # the budget, unchanged
+
+    # Turning the hours slider down shortens the work, not the day.
+    shorter = logic.day_planner({**SETTINGS, "day_start": 9, "day_end": 22,
+                                 "day_capacity": 240,
+                                 "adaptive_capacity": False})
+    assert shorter.window_end == 22 * 60
+    assert shorter.capacity == 240
+
+
+def test_a_day_that_ends_before_it_starts_is_clamped_not_refused():
+    """A silly setting reads as the nearest sensible day rather than stopping
+    the scheduler, the same way a malformed repeat rule does."""
+    planner = logic.day_planner({**SETTINGS, "day_start": 20, "day_end": 6})
+    assert planner.window_end == (20 + logic.MIN_DAY_HOURS) * 60
+
+
+def test_a_full_day_still_has_gaps_to_place_the_next_thing_in():
+    """The point of the split: work meets the budget and the window is still
+    open, so the next task lands inside it instead of escaping it."""
+    settings = {**SETTINGS, "day_start": 9, "day_end": 22, "day_capacity": 480,
+                "adaptive_capacity": False, "timezone": "UTC"}
+    tasks = [make_task(f"t{i}", estimated_time=120, impact=8, effort=2)
+             for i in range(4)]
+    derived = logic.compute(tasks, settings, now=NOW)
+    for start, end in spans(derived, [t["id"] for t in tasks]):
+        assert 9 * 60 <= start.hour * 60 + start.minute
+        assert end.hour * 60 + end.minute <= 22 * 60
+
+
 def test_placement_respects_the_daily_cap():
     """A smaller cap fills fewer tasks into a day, and says so."""
     tasks = [make_task(f"t{i}", estimated_time=120, impact=8, effort=2)
@@ -1087,7 +1125,7 @@ def test_average_hourly_xp_is_none_with_nothing_to_divide_by():
 # useful thing to schedule from.
 
 TZ_SETTINGS = {**SETTINGS, "spread_tasks": True, "day_start": 9,
-               "day_capacity": 480, "timezone": "UTC"}
+               "day_end": 22, "day_capacity": 480, "timezone": "UTC"}
 
 
 def test_start_pressure_peaks_at_the_hour_and_decays_with_the_wait():
@@ -1162,10 +1200,10 @@ def test_a_task_starting_soon_takes_the_slot_from_one_that_can_wait():
     """The pushing half: two tasks want the same afternoon, together they do
     not fit in it, and only one of them has a reason to want it *now*.
 
-    260 buffered minutes each and 300 left in today's window, so exactly one
-    of them can have today. Placement used to follow list order, which would
-    have given it to the chores purely for having been typed first and left
-    dinner starting at twenty past four.
+    260 buffered minutes each against an eight-hour budget, so exactly one of
+    them can have today. Placement used to follow list order, which would have
+    given it to the chores purely for having been typed first and left dinner
+    starting at twenty past four.
     """
     soon = NOW + timedelta(hours=1)
     dinner = make_task("dinner", estimated_time=200, start_at=soon.isoformat(),
