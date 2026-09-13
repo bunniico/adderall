@@ -737,14 +737,53 @@ def day_planner(settings: dict, capacity: int | None = None,
                       resolve_tz(settings.get("timezone")), now=now)
 
 
-def task_blocks(planner: DayPlanner, task_id: str, derived: dict) -> list[list[str]]:
+def finished_blocks(task: dict, derived: dict) -> list[list[str]]:
+    """Where a task that is over actually happened, if it happened anywhere.
+
+    Ticking something off hands its hours straight back — that is the whole
+    point of ticking it off, and the planner gives them to live work on the
+    next read. The finished task went on being drawn at the slot it no longer
+    owned, so it landed on top of whatever had taken it and the day view drew
+    the two side by side, as though you had been in two places at once.
+
+    A task that is over is not a claim on time; it is a record of time. So it
+    is drawn from the moment you started it, for as long as it actually took.
+
+    Nothing is drawn for a task you never started: there is no honest place on
+    the timeline for it, and its old slot belongs to something else now.
+    Nothing is drawn for a beat you missed either — those hours were not
+    spent, and work nobody did has no business sitting on top of work somebody
+    still has to.
+    """
+    started = parse_dt(task.get("started_at"))
+    if started is None or task["status"] != "done":
+        return []
+    # `actual_time` is what the clock said; the completion route fills it in
+    # from `started_at` when you did not time it yourself. The estimate is the
+    # last resort, for a row that predates either.
+    minutes = int(task.get("actual_time") or derived.get("length_min") or 0)
+    if minutes <= 0:
+        return []
+    end = started + timedelta(minutes=minutes)
+    return [[started.isoformat(timespec="seconds"),
+             end.isoformat(timespec="seconds")]]
+
+
+def task_blocks(planner: DayPlanner, task_id: str, derived: dict,
+                task: dict | None = None) -> list[list[str]]:
     """Where a task's work sits, as the calendar draws it.
 
     What the planner booked, when it placed this task: one span usually, more
     when the work was laid across several days. Otherwise a single block
     ending on the deadline, which is the old rule and still the right answer
     for a deadline the planner never had a say in (spreading turned off).
+
+    A task that is over is a different question entirely, and
+    `finished_blocks` answers it: the planner has stopped booking it, so
+    anything the plan still remembers about it is a slot it no longer holds.
     """
+    if task is not None and task["status"] not in ACTIVE_STATUSES:
+        return finished_blocks(task, derived)
     spans = planner.spans(task_id)
     # `knows` rather than `if spans`, because "the planner looked and found
     # nowhere" is an answer, and falling through to the guess below would
@@ -1336,7 +1375,8 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
         # only right when the work runs straight into it, which is exactly what
         # stops being true once the plan respects the hours you keep.
         d["blocks"] = task_blocks(planner, t["id"],
-                                  {**d, "planned_blocks": t.get("planned_blocks")})
+                                  {**d, "planned_blocks": t.get("planned_blocks")},
+                                  task=t)
         # And how much of it has nowhere to be. Zero for nearly everything;
         # non-zero means you have asked for more hours before a deadline than
         # the days between here and it contain, and the blocks above are the
