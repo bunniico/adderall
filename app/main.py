@@ -202,6 +202,17 @@ class NudgeRequest(BaseModel):
     nudges: list[Nudge] = Field(min_length=1, max_length=500)
 
 
+class RescheduleRequest(BaseModel):
+    task_ids: list[str] = Field(min_length=1, max_length=500)
+    # "room", "tomorrow", "next_week", or an instant of your own.
+    floor: str = "tomorrow"
+    preview: bool = False
+
+
+class DropRequest(BaseModel):
+    task_ids: list[str] = Field(min_length=1, max_length=500)
+
+
 class SettingsUpdate(BaseModel):
     model_config = {"extra": "allow"}
 
@@ -1352,6 +1363,67 @@ def nudge(body: NudgeRequest):
     for tid, fields in moves.items():
         db.update_task(tid, fields)
     return _state()
+
+
+@app.post("/api/reschedule")
+def reschedule(body: RescheduleRequest):
+    """Clear a pile of overdue work onto the days that can actually hold it.
+
+    The difference from `/api/nudge` is the whole point of it. Nudge writes the
+    instant you picked, which is right for one task and wrong for twelve: the
+    same instant on every one of them is not a plan, it is the same pile on a
+    different day. This asks the day book where each of them fits, in the order
+    they deserve, and hands back the spread.
+
+    `preview` answers the question without writing anything, so the dialog can
+    show you what it is about to do and you can say no.
+    """
+    tasks = db.list_tasks()
+    known = {t["id"] for t in tasks}
+    for task_id in body.task_ids:
+        if task_id not in known:
+            raise HTTPException(404, f"Task not found: {task_id}")
+
+    settings = db.get_settings()
+    ratios = db.completion_ratios()
+    by_project: dict[str, list[dict]] = {}
+    for t in tasks:
+        by_project.setdefault(t["project_id"], []).append(t)
+
+    # Planned per project, because that is the unit `compute` works in, and
+    # the plans are then read back together: the days themselves are shared,
+    # which is what `logic.reschedule_plan` books against.
+    moves: list[dict] = []
+    for project_id, group in by_project.items():
+        ids = [t["id"] for t in group if t["id"] in set(body.task_ids)]
+        if ids:
+            moves.extend(logic.reschedule_plan(group, settings, ids,
+                                               body.floor, ratios))
+    moves.sort(key=lambda m: m["deadline"])
+    if body.preview:
+        return {"moves": moves, "applied": False}
+
+    for move in moves:
+        db.update_task(move["task_id"], {"deadline": move["deadline"]})
+    return {"moves": moves, "applied": True, "state": _state()}
+
+
+@app.post("/api/tasks/drop")
+def drop_tasks(body: DropRequest):
+    """"These are not happening." A pile is mostly work that stopped being
+    real days ago, and saying so is more honest than giving all of it a date
+    nobody believes. Dropping a repeating copy drops that copy, not the job,
+    exactly as it does one at a time."""
+    dropped: list[dict] = []
+    for task_id in body.task_ids:
+        _require_task(task_id)
+    for task_id in body.task_ids:
+        was = db.get_task(task_id)
+        task = db.update_task(task_id, {"status": "discarded"})
+        if task and task.get("series_id") and was["status"] in logic.ACTIVE_STATUSES:
+            recurring.close_occurrence(task)
+        dropped.append({"task_id": task_id, "was": was["status"]})
+    return {"dropped": dropped, "state": _state()}
 
 
 @app.get("/api/settings")

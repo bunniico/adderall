@@ -540,10 +540,17 @@
     <p id="n-summary"></p>
     <p id="n-length" class="muted"></p>
     <div id="n-presets" class="nudge-presets"></div>
-    <label>Or pick the moment yourself
+    <!-- The pile, which is a different question from one late task: not
+         "what time?" but "from when should the app start looking?" -->
+    <div id="n-floors" class="nudge-presets" hidden></div>
+    <p id="n-preview" class="muted" hidden></p>
+    <label id="n-when-row">Or pick the moment yourself
       <input id="n-when" type="datetime-local">
     </label>
     <div class="modal-actions">
+      <button type="button" id="n-drop" class="ghost" hidden
+              title="Take these off the list — they are not happening">
+        These aren't happening</button>
       <button type="button" id="n-save" class="accent wide">Nudge</button>
     </div>
   </div>

@@ -1208,6 +1208,87 @@ def test_nudge_an_explicitly_named_subtask_wins_over_the_slide(client):
         child_target.replace(microsecond=0)
 
 
+# ---- clearing the pile ----
+
+def test_rescheduling_a_pile_spreads_it_instead_of_stacking_it(client):
+    """"Reschedule all" used to write one instant onto every task. Twelve
+    things due at nine tomorrow is the same pile on a different day."""
+    from app import db
+    db.update_settings({"day_start": 9, "day_end": 22, "day_capacity": 480,
+                        "adaptive_capacity": False, "timezone": "UTC"})
+    ids = []
+    for i in range(12):
+        state = create(client, title=f"overdue {i}", deadline=iso_in(days=-2),
+                       estimated_time=60)
+        ids.append(find(state, f"overdue {i}")["id"])
+
+    res = client.post("/api/reschedule", json={"task_ids": ids,
+                                               "floor": "tomorrow"}).json()
+    assert res["applied"] is True
+    moves = res["moves"]
+    assert len(moves) == 12
+    # Twelve distinct times, none of them in the past, none of them tonight.
+    assert len({m["deadline"] for m in moves}) == 12
+    for move in moves:
+        assert logic_parse(move["deadline"]) > datetime.now(timezone.utc)
+        for start, end in move["blocks"]:
+            assert 9 <= logic_parse(start).hour
+            assert logic_parse(end).hour <= 22
+    # 12 × 78 buffered minutes against an eight-hour day: more than one day's
+    # worth, so it lands on more than one day.
+    days = {logic_parse(m["deadline"]).date() for m in moves}
+    assert len(days) >= 2
+
+
+def test_a_preview_says_what_it_would_do_and_writes_nothing(client):
+    state = create(client, title="overdue", deadline=iso_in(days=-1),
+                   estimated_time=60)
+    task = find(state, "overdue")
+    before = find(client.get("/api/state").json(), "overdue")["deadline"]
+
+    res = client.post("/api/reschedule", json={
+        "task_ids": [task["id"]], "floor": "next_week", "preview": True}).json()
+    assert res["applied"] is False
+    assert len(res["moves"]) == 1
+    assert res["moves"][0]["was"] == before
+    assert find(client.get("/api/state").json(), "overdue")["deadline"] == before
+
+
+def test_the_pile_goes_back_in_the_order_it_deserves(client):
+    """Highest score first: digging out is exactly where order matters."""
+    from app import db
+    db.update_settings({"day_start": 9, "day_end": 22, "day_capacity": 240,
+                        "adaptive_capacity": False, "timezone": "UTC"})
+    small = find(create(client, title="trivial", deadline=iso_in(days=-1),
+                        estimated_time=120, impact=1, effort=9), "trivial")
+    big = find(create(client, title="matters", deadline=iso_in(days=-1),
+                      estimated_time=120, impact=9, effort=1), "matters")
+
+    res = client.post("/api/reschedule", json={
+        "task_ids": [small["id"], big["id"]], "floor": "tomorrow"}).json()
+    order = [m["title"] for m in res["moves"]]
+    assert order[0] == "matters"
+
+
+def test_dropping_a_pile_says_these_are_not_happening(client):
+    ids = [find(create(client, title=t, deadline=iso_in(days=-3)), t)["id"]
+           for t in ("one", "two", "three")]
+    res = client.post("/api/tasks/drop", json={"task_ids": ids}).json()
+    assert [d["was"] for d in res["dropped"]] == ["todo"] * 3
+    from app import db
+    assert all(db.get_task(i)["status"] == "discarded" for i in ids)
+    # Nothing left in the calendar to reschedule.
+    assert client.get("/api/calendar").json()["events"] == []
+
+
+def test_reschedule_and_drop_reject_unknown_tasks(client):
+    assert client.post("/api/reschedule",
+                       json={"task_ids": ["nope"]}).status_code == 404
+    assert client.post("/api/tasks/drop",
+                       json={"task_ids": ["nope"]}).status_code == 404
+    assert client.post("/api/reschedule", json={"task_ids": []}).status_code == 422
+
+
 def test_nudge_rejects_unknown_tasks_and_unparseable_dates(client):
     state = create(client, title="real", deadline=iso_in(days=-1))
     task = find(state, "real")

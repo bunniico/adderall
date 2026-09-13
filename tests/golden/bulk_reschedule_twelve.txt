@@ -1,0 +1,17 @@
+now 2026-08-29 12:00 UTC
+day 09:00 to 22:00 | cap 8h | buffer 25%
+
+2026-08-30 Sun  load 8h / 8h
+  09:00-10:00       1h  overdue 8  [user]
+  10:00-11:00       1h  overdue 11  [user]
+  11:00-12:00       1h  overdue 3  [user]
+  12:00-13:00       1h  overdue 4  [user]
+  13:00-14:00       1h  overdue 6  [user]
+  14:00-15:00       1h  overdue 7  [user]
+  15:00-16:00       1h  overdue 9  [user]
+  16:00-17:00       1h  overdue 10  [user]
+2026-08-31 Mon  load 4h / 8h
+  09:00-10:00       1h  overdue 1  [user]
+  10:00-11:00       1h  overdue 12  [user]
+  11:00-12:00       1h  overdue 2  [user]
+  12:00-13:00       1h  overdue 5  [user]
