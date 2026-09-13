@@ -1307,3 +1307,18 @@ body.calendar-mode #list-view { display: none; }
   .xp-gain.rise { opacity: 1; }
   button:active, .task-btn:active, .twisty:active { transform: none; }
 }
+
+/* Work the planner could find no room for: a real deadline with no hours left
+   before it. It has no block on the grid, so it gets a rail of its own rather
+   than being drawn at an hour nobody is going to work. */
+.cal-nowhere {
+  border: 1px solid var(--lav-line); border-radius: 8px;
+  background: rgba(124, 108, 224, .10);
+  padding: 8px 10px; margin-bottom: 10px;
+}
+.cal-nowhere-head { font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+.cal-nowhere-body { display: flex; flex-wrap: wrap; gap: 6px; }
+.cal-nowhere-all {
+  margin-top: 8px; font-size: 11px; padding: 3px 8px;
+  border-radius: 6px; cursor: pointer;
+}

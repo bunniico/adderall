@@ -1202,6 +1202,44 @@ def test_a_start_time_you_set_decides_which_end_the_work_is_laid_from(client):
         assert 9 <= opened.hour and closed.hour <= 22
 
 
+def test_work_with_nowhere_to_go_is_sent_as_no_blocks_at_all(client):
+    """The contract the calendar draws from, and the one #65 quietly changed.
+
+    Before #65, `_lay_back` invented a span when it ran out of room, so a task
+    always had blocks. Now it returns none, and the page must read that as an
+    answer rather than as a missing one — `eventSegments` used to count back
+    from the deadline whenever `blocks` was empty, which drew an over-committed
+    day as a pile of overlapping blocks starting before the day opened.
+
+    So: an empty list, every time, and `overflow_min` accounting for the whole
+    job rather than part of it.
+    """
+    from app import db
+    db.update_settings({"day_start": 9, "day_end": 22, "day_capacity": 480,
+                        "timezone": "UTC"})
+    # Far more work than the hours between now and these deadlines hold.
+    for i in range(18):
+        create(client, title=f"t{i}", estimated_time=120 + (i % 4) * 60,
+               impact=9 - i % 5, effort=3 + i % 4,
+               deadline=iso_in(hours=6 + i))
+
+    evs = [e for e in client.get("/api/calendar").json()["events"]
+           if not e["parent_id"]]
+    nowhere = [e for e in evs if not e["blocks"]]
+    assert nowhere, "eighteen tasks in a day must not all fit"
+    for e in nowhere:
+        assert e["blocks"] == [], "an empty list, not a missing key"
+        assert e["overflow_min"] == e["length_min"], \
+            "none of it was placed, so all of it is overflow"
+
+    # And what *is* drawn is still a real plan: no two blocks on top of each
+    # other, which is what the page showed before it trusted the empty list.
+    spans = sorted((logic_parse(a), logic_parse(b), e["title"])
+                   for e in evs for a, b in e["blocks"])
+    for x, y in zip(spans, spans[1:]):
+        assert y[0] >= x[1], f"{x[2]!r} and {y[2]!r} are drawn on top of each other"
+
+
 def test_a_calendar_event_says_how_much_of_the_work_has_nowhere_to_go(client):
     """#65: more hours than there are before the deadline. The blocks are the
     part that fits; the page is told how much is missing rather than being

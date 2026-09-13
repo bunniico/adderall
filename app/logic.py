@@ -567,10 +567,21 @@ class DayPlanner:
         remaining = length
 
         if dl_min > self.window_end:
-            take = min(remaining, dl_min - self.window_end)
-            spans.append((self._instant(day, dl_min - take),
-                          self._instant(day, dl_min)))
-            remaining -= take
+            # The stretch past the close of your day is yours because you
+            # named that hour. It is not yours twice, though: this used to
+            # take the whole of it without looking, so two deadlines late on
+            # the same evening each claimed all of it and were drawn on top of
+            # each other. Filled from the free part, latest first, like every
+            # other stretch in this method.
+            for start, end in reversed(self._gaps(day, self.window_end, dl_min)):
+                take = min(remaining, end - start)
+                if take <= 0:
+                    continue
+                spans.append((self._instant(day, end - take),
+                              self._instant(day, end)))
+                remaining -= take
+                if remaining <= 0:
+                    break
 
         # Only a deadline still ahead of you keeps the hours already gone out
         # of its plan. One that has passed is historical either way, and work
