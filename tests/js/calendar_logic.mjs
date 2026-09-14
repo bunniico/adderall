@@ -1,9 +1,10 @@
-/* Which days the calendar files an event under.
+/* The two decisions in calendar.js worth testing on their own.
  *
- * `groupByDay` is the one piece of calendar.js worth testing on its own: it
- * decides what the week and month views draw, its edge cases are all off-by-one
- * (a span ending at midnight, two spans on one day, no spans at all), and none
- * of them are visible in a screenshot.
+ * `groupByDay` decides what the week and month views draw, and its edge cases
+ * are all off-by-one: a span ending at midnight, two spans on one day, no
+ * spans at all. `biggerThanADay` decides the ⚠ and the ⚡ on every chip and
+ * block, and turns on a boundary (is exactly a day "more than a day"?) and on
+ * a status. None of it is visible in a screenshot.
  *
  * calendar.js is a browser script rather than a module — plain declarations,
  * no exports — so it is evaluated here with the handful of globals it closes
@@ -20,7 +21,7 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const src = readFileSync(join(here, "..", "..", "app", "static", "calendar.js"), "utf8");
 
-const { groupByDay } = new Function(`
+const { groupByDay, biggerThanADay } = new Function(`
   const settings = {};
   const $ = () => ({ addEventListener() {}, classList: { add() {} }, style: {} });
   const document = { createElement: () => ({
@@ -32,7 +33,7 @@ const { groupByDay } = new Function(`
   const applyState = () => {};
   const toast = () => {};
   ${src}
-  return { groupByDay };
+  return { groupByDay, biggerThanADay };
 `)();
 
 const ev = (title, deadline, blocks) =>
@@ -68,5 +69,32 @@ for (const [name, event, want] of cases) {
                   `\n      want ${JSON.stringify(want)}`);
   }
 }
+
+/* `biggerThanADay` decides the ⚠ and the ⚡ on every chip and block. The day
+ * is 8h here: no `cal.capacity` and no `settings.day_capacity` in the stub, so
+ * `capacityMinutes()` falls to its own default. */
+const big = (length, extra = {}) =>
+  ({ ...ev("x", "2026-09-14T22:00:00Z", []), length_min: length, ...extra });
+
+const sizes = [
+  ["ten hours of work is more than a day", big(600), true],
+  ["exactly a day is not more than one", big(480), false],
+  ["a day and a minute is", big(481), true],
+  ["a task you already finished was evidently doable",
+   big(600, { status: "done" }), false],
+  ["so was one you dropped", big(600, { status: "discarded" }), false],
+  ["a task with no estimate does not warn", big(0), false],
+  ["a projected occurrence still warns (the ⚡ is gated separately)",
+   big(600, { status: "planned", projected: true }), true],
+];
+
+for (const [name, event, want] of sizes) {
+  const got = biggerThanADay(event);
+  if (got !== want) {
+    failed++;
+    console.error(`FAIL  ${name}\n      got  ${got}\n      want ${want}`);
+  }
+}
+
 if (failed) process.exit(1);
-console.log(`${cases.length} groupByDay cases pass`);
+console.log(`${cases.length} groupByDay and ${sizes.length} biggerThanADay cases pass`);
