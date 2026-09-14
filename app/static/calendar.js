@@ -243,12 +243,38 @@ function byTime(a, b) {
   return new Date(a.deadline) - new Date(b.deadline);
 }
 
+/* Which days each event belongs on — every day its work actually touches,
+ * not just the one its deadline falls on.
+ *
+ * The day view has filtered on segments since work stopped always running
+ * straight into its deadline; week and month were left keying off the
+ * deadline alone, so a task laid across Saturday and Sunday but due on Monday
+ * appeared only on Monday. The load footer under each column was already
+ * segment-aware, which is how a column could read "12h 30m" above a body
+ * showing a dash (#68).
+ *
+ * An event with no segments at all keeps its deadline day: work the planner
+ * could find no room for has no day of its own, and the day it is due is
+ * where the rail that says so lives.
+ */
 function groupByDay(events) {
   const map = new Map();
+  const file = (key, e) => {
+    const list = map.get(key);
+    if (!list) map.set(key, [e]);
+    else if (!list.includes(e)) list.push(e);   // two spans, one day, one chip
+  };
   for (const e of events) {
-    const key = dayKey(new Date(e.deadline));
-    if (!map.has(key)) map.set(key, []);
-    map.get(key).push(e);
+    const segments = eventSegments(e);
+    if (!segments.length) {
+      file(dayKey(new Date(e.deadline)), e);
+      continue;
+    }
+    for (const [from, to] of segments) {
+      for (let day = startOfDay(from); day < to; day = addDays(day, 1)) {
+        file(dayKey(day), e);
+      }
+    }
   }
   return map;
 }
@@ -923,15 +949,17 @@ function renderWeekView(root, events) {
   for (let i = 0; i < 7; i++) {
     const day = addDays(start, i);
     const list = (byDay.get(dayKey(day)) || []).sort(byScore);
-    grid.appendChild(dayColumn(day, list, events));
+    grid.appendChild(dayColumn(day, list));
   }
   root.appendChild(grid);
 }
 
-/* `list` is what is *due* on this day, which is what the chips show. `all` is
- * every event there is, because what the day *costs* is the work sitting in it,
- * and some of that belongs to deadlines on other days. */
-function dayColumn(day, list, all = list) {
+/* `list` is every event with work on this day — which is both what the chips
+ * show and what the day costs. It used to take a second `all` argument for the
+ * load, because the chips knew only about deadlines while the footer knew
+ * about spans; now that `groupByDay` files an event under every day its work
+ * touches, one list answers both and the two cannot disagree. */
+function dayColumn(day, list) {
   const col = document.createElement("div");
   col.className = "cal-col" + (sameDay(day, new Date()) ? " today" : "");
 
@@ -960,7 +988,7 @@ function dayColumn(day, list, all = list) {
   }
   col.appendChild(body);
 
-  const open = all.filter(stillToDo);
+  const open = list.filter(stillToDo);
   const total = dayLoad(open, day);
   if (total > 0) {
     const cap = capacityMinutes();
