@@ -553,6 +553,46 @@ async function replanNow() {
  * title instead of beside it: in a seven-column week, or a month cell, a
  * one-line chip spends most of its width on the clock and leaves the title
  * as "Ship the qu…", which is no use to anyone. */
+/* More work than a day of yours holds.
+ *
+ * Not the same question as "did this fit", which the nowhere-to-go rail
+ * answers: this one *is* placed, across as many days as it needs. The point is
+ * that a job nobody can do in a day is usually a job nobody has broken down
+ * yet, and the calendar is where you notice — a 79 hour task looks like an
+ * ordinary block with a date that has gone past (#64).
+ *
+ * Asked of the buffered length against the same `capacityMinutes()` the day
+ * columns warn on, so the badge and the footer cannot disagree about what a
+ * day holds. Only open work: a task you have finished was evidently doable.
+ */
+function biggerThanADay(e) {
+  return stillToDo(e) && (e.length_min || 0) > capacityMinutes();
+}
+
+function tooBigNote(e) {
+  return "This task exceeds the amount of work you typically do in a day. " +
+    "Consider splitting this task into multiple chunks. " +
+    `${fmtMinutes(e.length_min)} against a day of ` +
+    `${fmtMinutes(capacityMinutes())}. ${capacityNote()}`;
+}
+
+/* The ⚡ split, where there is something to split. Not on a projected
+ * occurrence: that is an outline of a copy the repeat has not made yet, so
+ * there is no task to hang subtasks off. Opening it opens the copy that is
+ * real, which is where the button lives. */
+function splitButton(e) {
+  const btn = document.createElement("button");
+  btn.className = "cal-chip-split";
+  btn.textContent = "⚡";
+  btn.title = "Ask the AI to break this into steps";
+  btn.setAttribute("aria-label", "Break down " + e.title);
+  btn.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    breakdown(e.id, btn);
+  });
+  return btn;
+}
+
 function eventChip(e, opts = {}) {
   const chip = document.createElement("div");
   chip.className = "cal-chip quad-" + (e.quadrant || "none") +
@@ -578,7 +618,11 @@ function eventChip(e, opts = {}) {
   title.className = "cal-chip-title";
   // A block you will see again next week reads differently from a one-off on
   // the same date, and on a chip there is only room to say so with a mark.
-  title.textContent = (e.recurrence?.active ? "🔁 " : "") + e.title;
+  // The same goes for a job too big for a day. Marks rather than elements:
+  // a stacked chip's opener is a two-column grid, and a fourth child reflows
+  // it. The tooltip carries the explanation (`chipTooltip`).
+  title.textContent = (biggerThanADay(e) ? "⚠ " : "") +
+    (e.recurrence?.active ? "🔁 " : "") + e.title;
   open.appendChild(title);
 
   const score = document.createElement("span");
@@ -590,6 +634,8 @@ function eventChip(e, opts = {}) {
 
   open.addEventListener("click", () => openEvent(e));
   chip.appendChild(open);
+
+  if (biggerThanADay(e) && !e.projected) chip.appendChild(splitButton(e));
 
   if (opts.nudge && isOverdue(e)) {
     const btn = document.createElement("button");
@@ -605,6 +651,7 @@ function eventChip(e, opts = {}) {
 
 function chipTooltip(e) {
   const bits = [e.title];
+  if (biggerThanADay(e)) bits.push(tooBigNote(e));
   if (e.path?.length) bits.push("in " + e.path.join(" › "));
   bits.push(`${e.project_name} · ${fmtMinutes(e.length_min)}`);
   // Said first, because it changes what every other line here means: this is
@@ -870,6 +917,10 @@ function dayBlock(item, day) {
   meta.className = "cal-block-meta";
   meta.textContent = [
     `${fmtMinutes(e.length_min)}`,
+    // Said on the block too, not only on the chip: the day view is where a
+    // job too big for a day is most obviously one, because you can see it
+    // running off the bottom.
+    biggerThanADay(e) ? "⚠ more than a day" : null,
     e.projected ? "repeats — not on your list yet" : null,
     bufferMin ? `incl. ${fmtMinutes(bufferMin)} buffer` : null,
     e.project_name && !cal.filters.project ? e.project_name : null,
@@ -883,6 +934,12 @@ function dayBlock(item, day) {
   score.textContent = Math.round(e.score ?? 0);
   score.title = `Score ${Math.round(e.score ?? 0)}/100`;
   el.appendChild(score);
+
+  if (biggerThanADay(e) && !e.projected) {
+    const split = splitButton(e);
+    split.classList.add("cal-block-split");
+    el.appendChild(split);
+  }
 
   if (isOverdue(e)) {
     const btn = document.createElement("button");
