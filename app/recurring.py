@@ -301,7 +301,8 @@ def _exhaust(series_id: str) -> None:
 # ---------- closing one occurrence, opening the next ----------
 
 def close_occurrence(task: dict, closed_at: datetime | None = None,
-                     settings: dict | None = None) -> dict | None:
+                     settings: dict | None = None,
+                     template: dict | None = None) -> dict | None:
     """Called when an occurrence is finished, dropped, or deleted.
 
     Three things happen, in this order: the series takes a fresh picture of
@@ -310,6 +311,13 @@ def close_occurrence(task: dict, closed_at: datetime | None = None,
     enough to be worth seeing — the copy is made there and then rather than
     waiting for the nightly sweep. Finishing Monday's chore on Monday evening
     should put Tuesday's on the list before you close the laptop.
+
+    `template` is that picture, taken in advance. Finishing and dropping leave
+    the row in place with a closed status, so the picture can be taken here;
+    deleting does not, and the row has to be gone before this runs at all.
+    Otherwise `materialize` sees the very row being deleted still sitting open
+    on the list, holds the rhythm where it is, makes nothing — and then the
+    row goes, leaving an active series with no copy anywhere (#78).
     """
     series = db.get_series(task.get("series_id"))
     if not series or not series["active"]:
@@ -322,7 +330,8 @@ def close_occurrence(task: dict, closed_at: datetime | None = None,
         _exhaust(series["id"])
         return None
 
-    fields: dict = {"template": snapshot(task["id"]) or series["template"]}
+    fields: dict = {
+        "template": template or snapshot(task["id"]) or series["template"]}
     anchor = logic.parse_dt(series["anchor_at"])
 
     if rule["from_completion"]:
