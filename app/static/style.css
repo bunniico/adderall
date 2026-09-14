@@ -1323,6 +1323,18 @@ body.calendar-mode #list-view { display: none; }
   border-radius: 6px; cursor: pointer;
 }
 
+/* The ⚡ on a job bigger than a day of yours. On a chip it is a flex child
+   beside the nudge, the way ⏩ already is — `.cal-chip` is not a positioned
+   ancestor, so an absolute one would escape it. On a block, which *is*
+   positioned, it sits in the corner next to ⏩. */
+.cal-chip-split {
+  flex: none; background: none; border: none; border-radius: 0;
+  padding: 0 6px; font-size: 12px; color: var(--lav-soft);
+}
+.cal-chip-split:hover { background: var(--lav); color: #f4efff; }
+.cal-chip.stacked .cal-chip-split { align-self: stretch; }
+.cal-block-split { position: absolute; bottom: 2px; right: 24px; padding: 0 4px; }
+
 /* Which days are yours to work: seven boxes, in the week's own order. */
 .day-picker { display: flex; flex-wrap: wrap; gap: 10px; margin: 4px 0; }
 .day-picker label {
