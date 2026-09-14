@@ -1036,9 +1036,14 @@ def delete_task(task_id: str):
     task = db.get_task(task_id)
     if task is None:
         raise HTTPException(404, "Task not found")
-    if task.get("series_id"):
-        recurring.close_occurrence(task)
+    # The picture first, while there is still something to photograph; then
+    # the row; then the rhythm steps on. That order matters: `close_occurrence`
+    # makes the next copy, and it will not make one while the copy being
+    # deleted is still sitting open on the list (#78).
+    template = recurring.snapshot(task_id) if task.get("series_id") else None
     db.delete_task(task_id)
+    if task.get("series_id"):
+        recurring.close_occurrence(task, template=template)
     return _state()
 
 

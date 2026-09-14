@@ -1072,6 +1072,37 @@ def test_new_work_is_scheduled_around_the_days_a_rhythm_owns(app):
     assert sink["deadline"][:10] not in booked
 
 
+def test_deleting_a_copy_leaves_the_next_one_on_the_list(app):
+    """#78: delete a repeating copy and nothing was left anywhere.
+
+    Deleting one copy deletes the copy, not the job — the series steps past
+    it and carries on, exactly as finishing or dropping it does. But
+    `close_occurrence` ran while the row it was closing was still on the list,
+    so `materialize` saw an open occurrence, held the rhythm where it was and
+    made nothing. Then the row was deleted. The series stayed active and the
+    calendar went on drawing the work, with no task behind it in any list —
+    the ghost in #78 — until the next hourly sweep happened to fix it.
+    """
+    client, _main, db, _recurring = app
+    task = add(client, title="bins", estimated_time=20)
+    repeat(client, task["id"], freq="daily")
+    assert client.delete(f"/api/tasks/{task['id']}").status_code == 200
+
+    rows = [t for t in db.list_tasks() if t["title"] == "bins"]
+    assert rows, "the rhythm carries on, so a copy must be on the list"
+    assert all(r["id"] != task["id"] for r in rows), "and not the deleted one"
+    assert rows[0]["status"] == "todo"
+
+
+def test_deleting_the_copy_of_a_stopped_rhythm_leaves_nothing_behind(app):
+    """The other half: with no rhythm to carry on, a deleted task stays
+    deleted rather than growing a replacement."""
+    client, _main, db, _recurring = app
+    task = add(client, title="one off", estimated_time=20)
+    client.delete(f"/api/tasks/{task['id']}")
+    assert not [t for t in db.list_tasks() if t["title"] == "one off"]
+
+
 def test_the_forecast_does_not_move_a_deadline_you_set(app):
     """Booking the future must not shove a fixed point off its day."""
     client, *_ = app
