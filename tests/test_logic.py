@@ -1093,13 +1093,26 @@ def test_today_is_never_scheduled_in_the_hours_already_gone():
     assert start >= NOW
 
 
-def test_overdue_work_stays_overdue():
+def test_a_deadline_you_set_stays_overdue():
     """Spreading must not quietly reschedule the past into the future."""
-    long_ago = (NOW - timedelta(days=10)).isoformat()
-    t = make_task("a", estimated_time=60, impact=8, effort=2, created_at=long_ago)
+    t = make_task("a", estimated_time=60, impact=8, effort=2,
+                  deadline=(NOW - timedelta(days=2)).isoformat())
     derived = logic.compute([t], SETTINGS, now=NOW)
     assert logic.parse_dt(derived["a"]["deadline"]) < NOW
     assert derived["a"]["urgency"] == 10.0
+
+
+def test_the_app_never_gives_itself_a_date_that_has_gone():
+    """The horizon counts from when you wrote the task down, so for anything
+    older than it the day it names is already in the past. A date the app
+    picked for itself and cannot meet is not a plan — it is the overdue pile,
+    refilling itself after every reschedule."""
+    long_ago = (NOW - timedelta(days=10)).isoformat()
+    t = make_task("a", estimated_time=60, impact=8, effort=2, created_at=long_ago)
+    derived = logic.compute([t], SETTINGS, now=NOW)
+    assert derived["a"]["deadline_source"] == "auto"
+    assert logic.parse_dt(derived["a"]["deadline"]) > NOW
+    assert spans(derived, ["a"])[0][0] >= NOW
 
 
 def test_planner_shared_across_projects_keeps_them_off_each_other():

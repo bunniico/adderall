@@ -208,6 +208,43 @@ def test_sync_updates_by_clickup_id_instead_of_duplicating(monkeypatch, temp_db)
     assert tasks[0]["deadline"] == "2030-01-01T00:00:00+00:00"
 
 
+def test_sync_keeps_a_deadline_you_set_when_clickup_has_none(monkeypatch, temp_db):
+    """The pile that kept coming back. A ClickUp task with no due date says
+    nothing about when this is due, so a re-sync must not answer for it: the
+    deadline a reschedule wrote here survives the next sweep."""
+    db = temp_db
+    monkeypatch.setattr(clickup, "fetch_assigned_tasks",
+                        lambda token: [_remote("c1", "No due date in ClickUp")])
+    clickup.sync({"clickup_api_token": "pk_test"})
+    project = next(p for p in db.list_projects() if p["name"] == "ClickUp")
+    task = db.list_tasks(project["id"])[0]
+    db.update_task(task["id"], {"deadline": "2030-02-01T15:00:00+00:00"})
+
+    result = clickup.sync({"clickup_api_token": "pk_test"})
+
+    assert result["updated"] == []
+    assert db.get_task(task["id"])["deadline"] == "2030-02-01T15:00:00+00:00"
+
+
+def test_sync_still_applies_a_due_date_clickup_does_have(monkeypatch, temp_db):
+    """The qualifier is "while ClickUp has one", not "never again": a task you
+    do keep a due date on in ClickUp is still ClickUp's to date."""
+    db = temp_db
+    monkeypatch.setattr(clickup, "fetch_assigned_tasks",
+                        lambda token: [_remote("c1", "Has a due date")])
+    clickup.sync({"clickup_api_token": "pk_test"})
+    project = next(p for p in db.list_projects() if p["name"] == "ClickUp")
+    task = db.list_tasks(project["id"])[0]
+    db.update_task(task["id"], {"deadline": "2030-02-01T15:00:00+00:00"})
+
+    monkeypatch.setattr(clickup, "fetch_assigned_tasks",
+                        lambda token: [_remote("c1", "Has a due date",
+                                               deadline="2030-03-09T09:00:00+00:00")])
+    clickup.sync({"clickup_api_token": "pk_test"})
+
+    assert db.get_task(task["id"])["deadline"] == "2030-03-09T09:00:00+00:00"
+
+
 def test_sync_does_not_relocate_a_task_you_moved_yourself(monkeypatch, temp_db):
     db = temp_db
     monkeypatch.setattr(clickup, "fetch_assigned_tasks",
