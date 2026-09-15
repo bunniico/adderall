@@ -6,7 +6,8 @@ see, is mirrored into a `ClickUp` project as a normal task. A re-sync matches
 existing rows by the ClickUp task id stored in `clickup_id` (see db.py) and
 refreshes their title, description and due date — ClickUp stays the source
 of truth for those three fields on an imported task, the same way the AI
-owns a field only until you edit it yourself. Everything else (estimate,
+owns a field only until you edit it yourself. The due date carries one
+qualifier: ClickUp owns it only while ClickUp has one. Everything else (estimate,
 impact/effort, status, subtasks, which project it lives in) is yours; sync
 never touches it. Nothing is pushed back to ClickUp, and nothing already
 imported is ever deleted or auto-completed here — a task that stops showing
@@ -164,8 +165,15 @@ def sync(settings: dict | None = None) -> dict:
             # Project membership is left alone on update: once imported, a
             # task is yours to move — sync must not drag it back to the
             # ClickUp tab because you filed it somewhere else.
-            changed = {k: rt[k] for k in ("title", "description", "deadline")
-                      if local.get(k) != rt[k]}
+            # A ClickUp task with no due date is not saying "this has no
+            # deadline", it is saying nothing at all — and answering that by
+            # clearing the deadline wiped, on the next sweep, whatever you had
+            # scheduled here. So the due date is synced only when there is one
+            # to sync: rescheduling an imported task sticks, and a due date you
+            # do keep in ClickUp still wins the moment you set it there.
+            fields = ("title", "description", "deadline") if rt["deadline"] \
+                else ("title", "description")
+            changed = {k: rt[k] for k in fields if local.get(k) != rt[k]}
             if changed:
                 db.update_task(local["id"], changed)
                 updated.append(local["id"])

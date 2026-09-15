@@ -1245,6 +1245,15 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
         start in the past. Without one the app falls back to the quadrant
         horizon it has always used: a day, computed from when the task was
         written down, with the hour left to the planner.
+
+        That horizon is counted from the day the task was written down, so for
+        anything older than it the day it names has already gone — and the
+        planner leaves days wholly in the past alone (see `_floor`), which is
+        the right rule for a deadline you set and the wrong one here. The app
+        was handing itself dates it could not meet: a task imported a fortnight
+        ago arrived in the overdue pile and went back there after every
+        reschedule. Work the app schedules for itself starts today at the
+        earliest.
         """
         start = parse_dt(task.get("start_at"))
         minutes = _tree_minutes(task, children, lengths)
@@ -1252,7 +1261,7 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
             return start, minutes, max(now, start), start
         created = parse_dt(task["created_at"]) or now
         days = HORIZON_DAYS.get(derived[task["id"]]["quadrant"], 3)
-        return created + timedelta(days=days), minutes, now, None
+        return max(created + timedelta(days=days), now), minutes, now, None
 
     def resolve_deadline(task: dict) -> tuple[datetime | None, str]:
         """The deadline for one top-level task. Steps never reach here.
@@ -1361,8 +1370,10 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
                 continue
             if give == 2 and planned is not None:
                 # "May move within its own day, never off it": a replan keeps
-                # the day it was given and looks for a slot inside it.
-                target = planned
+                # the day it was given and looks for a slot inside it. Unless
+                # that day has been and gone, which is not a day it can be kept
+                # on: the same floor the horizon answers to applies here.
+                target = max(planned, now)
                 floor = max(floor, planner._instant(
                     planner.local_day(planned), planner.day_start))
             rank = priority_score(

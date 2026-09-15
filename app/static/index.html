@@ -220,6 +220,12 @@
     <p id="d-when-note" class="muted" hidden></p>
     <div id="d-start-presets" class="nudge-presets"></div>
     <p id="d-start-note" class="muted"></p>
+    <!-- The answer to the two questions above: the hours the scheduler has
+         actually booked for this. Read-only, because it is worked out rather
+         than set — the way to move it is a start time — and it lived only on
+         the calendar until now, which made the plan look like it had no
+         opinion about when the work happens. -->
+    <p id="d-slot" class="muted" hidden></p>
     <div class="grid2">
       <label>Raw estimate (minutes)
         <input id="d-estimate" type="number" min="1" placeholder="e.g. 45">

@@ -1655,6 +1655,7 @@ function openDetail(id) {
   $("d-start").value = isoToLocalInput(task.start_at);
   renderStartPresets();
   updateStartNote();
+  updateSlotNote(task);
   $("d-estimate").value = task.estimated_time ?? "";
   $("d-impact").value = task.impact ?? 5;
   $("d-effort").value = task.effort ?? 5;
@@ -1804,6 +1805,37 @@ function updateStartNote() {
     note.textContent = `Starts ${when.toLocaleString()} — parked until then, ` +
       `and out of the running for today's hours.`;
   }
+}
+
+/* The hours the scheduler has actually booked, said out loud.
+ *
+ * "Start at" and "Deadline" are the two questions you answer: not before
+ * this, and finished by that. Neither of them is *when the work happens* —
+ * that is the planner's answer to them, and it was only ever drawn on the
+ * calendar, which left the dialog looking as though the plan had no opinion
+ * about it. It is read-only because it is derived: a start time is how you
+ * move it, and that field is right above this line. */
+function updateSlotNote(task) {
+  const note = $("d-slot");
+  const blocks = task.blocks || [];
+  // A step has no slot of its own — its root's block is the whole family's,
+  // and `d-when-note` already says so.
+  const live = task.status === "todo" || task.status === "in_progress";
+  note.hidden = !!task.parent_id || !live || !blocks.length;
+  if (note.hidden) return;
+  const first = new Date(blocks[0][0]);
+  const last = new Date(blocks.at(-1)[1]);
+  const day = { weekday: "short", month: "short", day: "numeric" };
+  const clock = { hour: "numeric", minute: "2-digit" };
+  const when = blocks.length === 1
+    ? `${first.toLocaleDateString(undefined, day)}, ` +
+      `${first.toLocaleTimeString([], clock)}–${last.toLocaleTimeString([], clock)}`
+    : `across ${blocks.length} blocks, ` +
+      `${first.toLocaleString(undefined, { ...day, ...clock })} to ` +
+      `${last.toLocaleString(undefined, { ...day, ...clock })}`;
+  note.textContent = task.deadline_source === "user"
+    ? `🗓 Booked ${when} — laid back from the deadline you set.`
+    : `🗓 Booked ${when} — the app picked the slot. A start time moves it.`;
 }
 
 /* What each rung of the flexibility slider means, in the words the planner
