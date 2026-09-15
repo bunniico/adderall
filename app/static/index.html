@@ -241,6 +241,11 @@
         <input id="d-give" type="range" min="1" max="5" value="3">
         <span class="muted">1 can't move · 5 any time</span>
       </label>
+      <label class="row"><input id="d-workday" type="checkbox">
+        Only on working days <span class="muted">— keep this one off your
+        days off. On by default; untick it for something you are happy to
+        do at the weekend. A deadline you set yourself still wins.</span>
+      </label>
     </div>
     <p>Quadrant: <span id="d-quadrant" class="quad-badge"></span>
        · Score: <span id="d-score" class="badge score-badge"></span></p>
@@ -407,6 +412,14 @@
         number (or clear it every single day), it moves to meet the days you
         actually have. A goal you have never once hit isn't a plan.</span></label>
       <p id="s-capacity-note" class="muted"></p>
+
+      <label>Which days do you work?
+        <span id="s-working-days" class="day-picker"></span>
+        <span class="muted">Nothing the app schedules for itself goes on a day
+          you have not ticked. A deadline or a start time you set yourself
+          still does, and so does a repeating job whose own rule names that
+          day — a preference should not make a commitment impossible.</span>
+      </label>
 
       <label>What time does your day start?
         <select id="s-day-start"></select>

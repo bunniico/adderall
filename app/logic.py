@@ -735,6 +735,16 @@ class DayPlanner:
                 self.local_day(start), length, start, start, days), 0
         else:
             spans, short = self._lay_back(deadline, length, days)
+            if short and days is not None:
+                # Your days off are a preference about where the app puts work
+                # it chose the day for. A deadline is a commitment you made,
+                # and a preference must not make a commitment impossible: four
+                # hours due at eight on Monday morning has no working hour
+                # before it at all, and dropping the work is a worse answer
+                # than spending part of the weekend on it. The same rule
+                # `task_days` applies when a rhythm's own days and your days
+                # off do not overlap.
+                spans, short = self._lay_back(deadline, length)
         for opened, closed in spans:
             self.book(opened, closed)
         self._spans[key] = spans
@@ -896,7 +906,8 @@ def reserve_fixed(planner: DayPlanner, tasks: list[dict], settings: dict,
             # out of the day it was meant to start in.
             planner.reserve(task["id"], deadline, minutes,
                             start=parse_dt(task.get("start_at")),
-                            days=(repeat_days or {}).get(task["id"]))
+                            days=task_days(task, settings,
+                                           (repeat_days or {}).get(task["id"])))
 
 
 def block_length(derived: dict) -> int:
@@ -1308,8 +1319,9 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
         already been through this list all of it is a no-op.
         """
         def allowed(task: dict) -> frozenset[int] | None:
-            """The days this task's own rhythm names, if it has one."""
-            return (repeat_days or {}).get(task["id"])
+            """Every day constraint on this task: its own rhythm, and whether
+            it is one of the things you keep off your days off."""
+            return task_days(task, settings, (repeat_days or {}).get(task["id"]))
 
         roots = children.get(None, [])
         for task in roots:
@@ -1852,12 +1864,52 @@ def rule_days(rule: dict | None) -> frozenset[int] | None:
     Returned in Python's numbering (Monday is 0), because that is what
     `date.weekday()` speaks and the planner compares against.
     """
-    named = (rule or {}).get("weekdays") or []
-    if not named:
-        return None
-    # The rule counts from Sunday, the way the calendar and the JS do; see
-    # `_js_weekday`, which is this conversion in the other direction.
-    return frozenset((day - 1) % 7 for day in named)
+    return _days_from_js((rule or {}).get("weekdays"))
+
+
+def _days_from_js(named) -> frozenset[int] | None:
+    """A Sunday-is-0 list, as the set of Python weekdays it names.
+
+    None for a list that names nothing or names everything: both mean "no day
+    is off limits", and a constraint that excludes nothing is better expressed
+    as no constraint than as a set the planner has to test against all week.
+    """
+    days = frozenset((day - 1) % 7 for day in (named or []) if 0 <= day <= 6)
+    return None if not days or len(days) == 7 else days
+
+
+def working_days(settings: dict) -> frozenset[int] | None:
+    """The days that are yours to work, from settings.
+
+    The hours of a day were always a setting; which days there are was not, so
+    the planner treated your Saturday as another Tuesday and filled it (#74).
+
+    A setting naming no days at all reads as no restriction rather than as a
+    week with nothing in it: a scheduler that refuses to schedule is worse
+    than one that reads a sensible week out of a silly setting, which is the
+    same call `DayPlanner.__init__` makes about a day that ends before it
+    starts.
+    """
+    return _days_from_js(settings.get("working_days"))
+
+
+def task_days(task: dict, settings: dict,
+              rule: frozenset[int] | None = None) -> frozenset[int] | None:
+    """Every day constraint on one task at once.
+
+    Two of them, and they narrow rather than override: a rhythm that happens
+    on Mondays and Wednesdays, kept off your days off, may use whichever of
+    those two you actually work. An empty intersection would mean the work can
+    never happen at all, so it falls back to the rule — the rhythm you set
+    explicitly beats the general preference about weekends.
+    """
+    mine = working_days(settings) if task.get("workday_only", 1) else None
+    if mine is None:
+        return rule
+    if rule is None:
+        return mine
+    both = rule & mine
+    return both or rule
 
 
 def _js_weekday(d: date) -> int:

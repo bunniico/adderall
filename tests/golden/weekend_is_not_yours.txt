@@ -16,5 +16,6 @@ work, due Mon 7 Sep 22:00
   Mon 7 Sep 17:00-22:00
   Tue 8 Sep 09:00-14:00
 one-off, due 4 Sep 17:00
-  Sat 5 Sep 11:00-17:00   (a weekend)
-  Sun 6 Sep 09:00-13:00   (a weekend)
+  Tue 8 Sep 16:00-17:00
+  Wed 9 Sep 09:00-17:00
+  Thu 10 Sep 09:00-10:00

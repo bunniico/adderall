@@ -1334,3 +1334,10 @@ body.calendar-mode #list-view { display: none; }
 .cal-chip-split:hover { background: var(--lav); color: #f4efff; }
 .cal-chip.stacked .cal-chip-split { align-self: stretch; }
 .cal-block-split { position: absolute; bottom: 2px; right: 24px; padding: 0 4px; }
+
+/* Which days are yours to work: seven boxes, in the week's own order. */
+.day-picker { display: flex; flex-wrap: wrap; gap: 10px; margin: 4px 0; }
+.day-picker label {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 12px; cursor: pointer; margin: 0;
+}
