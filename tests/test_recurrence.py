@@ -1085,13 +1085,41 @@ def test_deleting_a_copy_leaves_the_next_one_on_the_list(app):
     """
     client, _main, db, _recurring = app
     task = add(client, title="bins", estimated_time=20)
-    repeat(client, task["id"], freq="daily")
+    # `lead_days=7` rather than the default 1, so the next beat is always
+    # inside the horizon whatever time of day the suite runs at. An undated
+    # task's first beat is the end of today, so after 22:00 it rolls to
+    # tomorrow and the one after lands two days out — past a one-day lead,
+    # where `materialize` declines by design ("real, just not yet"). That is
+    # correct behaviour and nothing to do with this fix, but it made the test
+    # fail between 22:00 and midnight.
+    repeat(client, task["id"], freq="daily", lead_days=7)
     assert client.delete(f"/api/tasks/{task['id']}").status_code == 200
 
     rows = [t for t in db.list_tasks() if t["title"] == "bins"]
     assert rows, "the rhythm carries on, so a copy must be on the list"
     assert all(r["id"] != task["id"] for r in rows), "and not the deleted one"
     assert rows[0]["status"] == "todo"
+
+
+def test_deleting_a_copy_whose_next_beat_is_far_off_plants_nothing_yet(app):
+    """The other side of the same rule, pinned so it cannot be mistaken for
+    the bug above: with a beat outside the lead horizon there is nothing to
+    plant yet, and the sweep will come back to it. What must still happen is
+    that the rhythm steps on rather than staying where the deleted copy was.
+    """
+    from datetime import datetime, timezone
+    client, _main, db, _recurring = app
+    task = add(client, title="bins", estimated_time=20)
+    repeat(client, task["id"], freq="monthly", lead_days=1)
+    series_id = db.get_task(task["id"])["series_id"]
+
+    client.delete(f"/api/tasks/{task['id']}")
+    after = db.get_series(series_id)
+    assert not [t for t in db.list_tasks() if t["title"] == "bins"]
+    assert after["active"], "the job is not over, it is just not due yet"
+    # `next_at` already pointed at the beat *after* the deleted copy, so there
+    # is nothing for the delete to step past — only to leave pointing forward.
+    assert logic.parse_dt(after["next_at"]) > datetime.now(timezone.utc)
 
 
 def test_deleting_the_copy_of_a_stopped_rhythm_leaves_nothing_behind(app):
