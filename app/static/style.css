@@ -1318,6 +1318,8 @@ body.calendar-mode #list-view { display: none; }
 }
 .cal-nowhere-head { font-size: 12px; font-weight: 600; margin-bottom: 6px; }
 .cal-nowhere-body { display: flex; flex-wrap: wrap; gap: 6px; }
+/* Why part of this pile has no button: it is a copy a repeat has not made yet. */
+.cal-nowhere-note { font-size: 11px; margin: 6px 0 0; }
 .cal-nowhere-all {
   margin-top: 8px; font-size: 11px; padding: 3px 8px;
   border-radius: 6px; cursor: pointer;

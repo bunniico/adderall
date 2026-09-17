@@ -1,10 +1,12 @@
-/* The two decisions in calendar.js worth testing on their own.
+/* The decisions in calendar.js worth testing on their own.
  *
  * `groupByDay` decides what the week and month views draw, and its edge cases
  * are all off-by-one: a span ending at midnight, two spans on one day, no
  * spans at all. `biggerThanADay` decides the ⚠ and the ⚡ on every chip and
  * block, and turns on a boundary (is exactly a day "more than a day"?) and on
- * a status. None of it is visible in a screenshot.
+ * a status. `nowhereBand` decides who the reschedule button carries, which is
+ * the difference between a new deadline and "Task not found" (#89). None of it
+ * is visible in a screenshot.
  *
  * calendar.js is a browser script rather than a module — plain declarations,
  * no exports — so it is evaluated here with the handful of globals it closes
@@ -21,19 +23,35 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const src = readFileSync(join(here, "..", "..", "app", "static", "calendar.js"), "utf8");
 
-const { groupByDay, biggerThanADay } = new Function(`
+/* Enough of a DOM to build a band in and click the button on it: children and
+ * listeners are kept so the test can look for them, and the rest is inert. */
+const DOM = `
+  const el = (tag) => ({
+    tag, children: [], listeners: {}, classList: { add() {}, toggle() {} },
+    style: {},
+    appendChild(kid) { this.children.push(kid); return kid; },
+    append(...kids) { this.children.push(...kids); },
+    replaceChildren(...kids) { this.children = kids; },
+    addEventListener(name, fn) { (this.listeners[name] ||= []).push(fn); },
+    setAttribute() {}, showModal() {}, close() {},
+    click() { for (const fn of this.listeners.click || []) fn({ stopPropagation() {} }); },
+    querySelector: () => null,
+  });
+  const byId = new Map();
+  const $ = (id) => { if (!byId.has(id)) byId.set(id, el(id)); return byId.get(id); };
+  const document = { createElement: el, body: { classList: { toggle() {} } } };
+`;
+
+const { groupByDay, biggerThanADay, nowhereBand, targets } = new Function(`
   const settings = {};
-  const $ = () => ({ addEventListener() {}, classList: { add() {} }, style: {} });
-  const document = { createElement: () => ({
-    classList: { add() {} }, style: {},
-    append() {}, appendChild() {}, addEventListener() {}, setAttribute() {},
-  }) };
+  ${DOM}
   const fmtMinutes = (m) => m + "m";
+  const isoToLocalInput = (iso) => iso;
   const api = async () => ({});
   const applyState = () => {};
   const toast = () => {};
   ${src}
-  return { groupByDay, biggerThanADay };
+  return { groupByDay, biggerThanADay, nowhereBand, targets: () => nudgeTargets };
 `)();
 
 const ev = (title, deadline, blocks) =>
@@ -96,5 +114,59 @@ for (const [name, event, want] of sizes) {
   }
 }
 
+/* Who "Reschedule these" carries. A projected occurrence has no row in the
+ * database — nudging one asks the server to move a task that does not exist —
+ * so the button has to leave them behind, and say nothing at all when they are
+ * all it has (#89). */
+const homeless = (title, extra = {}) => ({
+  ...ev(title, "2026-09-15T20:00:00Z", []),
+  length_min: 61, overflow_min: 61, ...extra,
+});
+const repeat = (title) =>
+  homeless(title, { id: `series:s1:${title}`, status: "planned", projected: true });
+
+const find = (node, cls) => {
+  if ((node.className || "").split(" ").includes(cls)) return node;
+  for (const kid of node.children) {
+    const hit = find(kid, cls);
+    if (hit) return hit;
+  }
+  return null;
+};
+
+const bands = [
+  ["one real task: the button says so, and carries it",
+   [homeless("late")], "Reschedule this", ["late"]],
+  ["two real tasks carry both",
+   [homeless("a"), homeless("b")], "Reschedule these", ["a", "b"]],
+  ["a repeat's forecast is not a task: no button at all",
+   [repeat("laundry")], null, null],
+  ["mixed, the button leaves the forecast behind",
+   [homeless("late"), repeat("laundry")], "Reschedule this", ["late"]],
+];
+
+for (const [name, events, label, want] of bands) {
+  const button = find(nowhereBand(events), "cal-nowhere-all");
+  let got = null;
+  if (button) {
+    button.click();
+    got = targets().map((e) => e.id);
+  }
+  const ok = (button?.textContent ?? null) === label &&
+             JSON.stringify(got) === JSON.stringify(want);
+  if (!ok) {
+    failed++;
+    console.error(`FAIL  ${name}\n      got  ${button?.textContent ?? "no button"}` +
+                  ` ${JSON.stringify(got)}\n      want ${label} ${JSON.stringify(want)}`);
+  }
+  // The forecast still says what it is rather than vanishing from the rail.
+  const noted = !!find(nowhereBand(events), "cal-nowhere-note");
+  if (noted !== events.some((e) => e.projected)) {
+    failed++;
+    console.error(`FAIL  ${name} (the note explaining the forecast)`);
+  }
+}
+
 if (failed) process.exit(1);
-console.log(`${cases.length} groupByDay and ${sizes.length} biggerThanADay cases pass`);
+console.log(`${cases.length} groupByDay, ${sizes.length} biggerThanADay and ` +
+            `${bands.length} nowhereBand cases pass`);
