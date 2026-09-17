@@ -767,13 +767,22 @@ function renderDayView(root, events) {
   }
 }
 
-/* The rail for work that will not fit. Every chip here is a real task with a
- * real deadline and no hour to do it in, which is a thing to act on rather
- * than a thing to hide: each one opens, and each one can be nudged. */
+/* The rail for work that will not fit: an hour's worth of job with no hour to
+ * do it in, which is a thing to act on rather than a thing to hide. Each chip
+ * opens, and the ones that are tasks can be nudged.
+ *
+ * Not all of them are. A repeat's future is booked against the day book like
+ * any other commitment, so an occurrence can run out of room and land here —
+ * and it has no row in the database to give a new deadline to. Offering to
+ * reschedule one is how "Reschedule these" ended in "Task not found" (#89), so
+ * the button only ever carries the real tasks, and the forecast says what it
+ * is instead. */
 function nowhereBand(events) {
   const wrap = document.createElement("div");
   wrap.className = "cal-nowhere";
 
+  const real = events.filter((e) => !e.projected);
+  const ahead = events.length - real.length;
   const total = events.reduce((n, e) => n + (e.overflow_min || e.length_min || 0), 0);
   const head = document.createElement("div");
   head.className = "cal-nowhere-head";
@@ -781,7 +790,8 @@ function nowhereBand(events) {
     `due today with nowhere to go — ${fmtMinutes(total)} of work and no hours ` +
     `left before the deadline.`;
   head.title = "There are fewer working hours between now and these deadlines " +
-    "than the work needs. Nudge them to a later day, or drop them. " +
+    "than the work needs. " +
+    (real.length ? "Nudge them to a later day, or drop them. " : "") +
     capacityNote();
   wrap.appendChild(head);
 
@@ -792,11 +802,25 @@ function nowhereBand(events) {
   }
   wrap.appendChild(body);
 
-  const all = document.createElement("button");
-  all.className = "cal-nowhere-all";
-  all.textContent = "Reschedule these";
-  all.addEventListener("click", () => openNudge(events));
-  wrap.appendChild(all);
+  if (ahead) {
+    const note = document.createElement("p");
+    note.className = "cal-nowhere-note muted";
+    const subject = ahead === events.length
+      ? (ahead === 1 ? "This one is a copy" : "These are copies")
+      : (ahead === 1 ? "One of these is a copy" : `${ahead} of these are copies`);
+    note.textContent = `🔁 ${subject} a repeat has not made yet, so there is ` +
+      `no deadline to move. Change the rhythm, or make room on the day by ` +
+      `moving what is already on it.`;
+    wrap.appendChild(note);
+  }
+
+  if (real.length) {
+    const all = document.createElement("button");
+    all.className = "cal-nowhere-all";
+    all.textContent = real.length === 1 ? "Reschedule this" : "Reschedule these";
+    all.addEventListener("click", () => openNudge(real));
+    wrap.appendChild(all);
+  }
   return wrap;
 }
 
