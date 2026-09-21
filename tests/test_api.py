@@ -452,6 +452,66 @@ def test_dragging_while_sorted_keeps_the_order_you_were_looking_at(client):
     assert settings["manual_order"] is True
 
 
+def test_nesting_a_task_leaves_the_sorter_alone(client):
+    """Which task something belongs inside is true however the list is read."""
+    _dated(client, "keeper", days=1)
+    _dated(client, "home", days=2)
+    _dated(client, "wanderer", days=3)
+    client.put("/api/settings", json={"sort_field": "deadline", "sort_dir": "asc"})
+    state = client.get("/api/state").json()
+    assert roots(state) == ["keeper", "home", "wanderer"]
+
+    ids = {t["title"]: t["id"] for t in state["tasks"]}
+    state = client.post(f"/api/tasks/{ids['wanderer']}/move",
+                        json={"target_id": ids["home"], "mode": "into"}).json()
+
+    assert [s["title"] for s in find(state, "home")["subtasks"]] == ["wanderer"]
+    settings = client.get("/api/settings").json()
+    assert settings["sort_field"] == "deadline"
+    assert settings["manual_order"] is False
+    # and the list is still being read by deadline, not by hand
+    assert roots(state) == ["keeper", "home"]
+
+
+def test_a_nested_task_lands_where_the_sort_puts_it(client):
+    state = create(client, title="project", impact=5, effort=5, estimated_time=30)
+    pid = find(state, "project")["id"]
+    create(client, title="strong step", parent_id=pid,
+           impact=9, effort=1, estimated_time=30)
+    create(client, title="weak step", parent_id=pid,
+           impact=1, effort=9, estimated_time=30)
+    state = create(client, title="loose", impact=6, effort=4, estimated_time=30)
+    loose = find(state, "loose")["id"]
+    client.put("/api/settings", json={"sort_field": "score", "sort_dir": "desc"})
+
+    state = client.post(f"/api/tasks/{loose}/move",
+                        json={"target_id": pid, "mode": "into"}).json()
+    # it went in ahead of the step it outscores and behind the one it doesn't
+    assert [s["title"] for s in find(state, "project")["subtasks"]] == [
+        "strong step", "loose", "weak step"]
+    # the steps it landed among stay put when the sort is read the other way:
+    # placing it was a one-off, not a standing rule over the breakdown
+    client.put("/api/settings", json={"sort_field": "score", "sort_dir": "asc"})
+    assert [s["title"] for s in
+            find(client.get("/api/state").json(), "project")["subtasks"]] == [
+        "strong step", "loose", "weak step"]
+
+
+def test_nesting_on_a_hand_arranged_list_still_lands_at_the_end(client):
+    state = create(client, title="project")
+    pid = find(state, "project")["id"]
+    client.post(f"/api/tasks/{pid}/breakdown", json={})
+    state = create(client, title="loose", impact=10, effort=1, estimated_time=5)
+    loose = find(state, "loose")["id"]
+    client.put("/api/settings", json={"manual_order": True})
+
+    state = client.post(f"/api/tasks/{loose}/move",
+                        json={"target_id": pid, "mode": "into"}).json()
+    assert [s["title"] for s in find(state, "project")["subtasks"]] == [
+        "step 1", "step 2", "step 3", "loose"]
+    assert client.get("/api/settings").json()["sort_field"] == "manual"
+
+
 def test_the_sorter_and_the_manual_order_checkbox_are_one_switch(client):
     assert client.get("/api/settings").json()["sort_field"] == "smart"
     assert client.put("/api/settings",

@@ -1557,6 +1557,11 @@ async function patchTask(id, fields) {
  * The same moves are on the keyboard once the handle is focused, because
  * drag-and-drop is unusable for plenty of the people this app is for.
  *
+ * Nesting is the one that leaves the sorter alone: which task something
+ * belongs inside is true however the list is being read, so the server places
+ * it among its new steps by whatever sort is in force rather than switching
+ * the list to manual order.
+ *
  * The server is told "before/after/inside that task" rather than an index, so
  * a drop always means what it looked like on screen — the visible order and
  * the stored order aren't the same thing until manual ordering kicks in. */
@@ -1565,14 +1570,16 @@ let dragId = null;      // task being dragged
 let pendingDrop = null; // {targetId, mode} under the pointer right now
 
 async function moveTask(id, body) {
-  const wasAuto = settings && sortMode().field !== "manual";
+  const wasAuto =
+    settings && body.mode !== "into" && sortMode().field !== "manual";
   try {
     applyState(await api(`/tasks/${id}/move`, {
       method: "POST", body: JSON.stringify(body),
     }));
   } catch (e) { toast(e.message, true); return; }
-  // The first move takes the list off whatever it was sorted by; say so once,
-  // then stop. The sorter itself has already flipped to Manual on the server.
+  // The first hand-placement takes the list off whatever it was sorted by; say
+  // so once, then stop. The sorter itself has already flipped to Manual on the
+  // server.
   if (wasAuto) {
     try { settings = await api("/settings"); } catch {}
     renderSortBar();
