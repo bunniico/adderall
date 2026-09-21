@@ -95,7 +95,15 @@ def _plant(template: dict, project_id: str, parent_id: str | None,
     than each of its parts.
     """
     task = db.create_task({
-        **{f: template.get(f) for f in TEMPLATE_FIELDS},
+        # Only the fields the template actually carries. A picture taken
+        # before a field existed says nothing about it, and "nothing" is not
+        # the same as NULL: `workday_only` is NOT NULL with a default of on,
+        # so handing it an explicit None failed the insert outright and the
+        # sweep made no copy at all — a rhythm that silently stopped, on
+        # exactly the old series least likely to be noticed. Left out, the
+        # column's own default answers, which is what an absent opinion
+        # means. The fields that are nullable read the same either way.
+        **{f: template[f] for f in TEMPLATE_FIELDS if template.get(f) is not None},
         "description": template.get("description") or "",
         "collapsed": bool(template.get("collapsed")),
         "project_id": project_id,

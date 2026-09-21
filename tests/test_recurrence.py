@@ -1166,3 +1166,41 @@ def test_the_forecast_does_not_move_a_deadline_you_set(app):
     assert logic.parse_dt(events["dentist"]["deadline"]) == logic.parse_dt(when)
     assert events["dentist"]["deadline_source"] == "user"
     assert fixed["id"]
+
+
+def test_a_series_older_than_a_field_still_makes_its_copy(app):
+    """A template written before `workday_only` existed has no such key.
+
+    Nothing re-snapshots a series whose last occurrence closed before that
+    setting shipped, so the stale picture sits in the row until the next beat
+    comes due — and then `_plant` was handing the column an explicit NULL,
+    which it refuses. The sweep logged a traceback and made nothing: a rhythm
+    that silently stopped, which is the one failure this whole module exists
+    to prevent.
+
+    So a field the template has no opinion about is left out of the insert
+    entirely, and the column's own default answers instead.
+    """
+    _client, _main, db, recurring = app
+    now = datetime.now(timezone.utc)
+    project = db.ensure_project()
+    old = {"title": "take the bins out", "description": "",
+           "estimated_time": 10, "impact": 5, "effort": 2, "subtasks": []}
+    assert "workday_only" not in old
+    db.create_series(
+        project["id"],
+        {"freq": "daily", "interval": 1, "count": None, "until": None,
+         "weekdays": [], "time": None, "month_day": None, "nth": None,
+         "weekday": None, "from_completion": False, "lead_days": 0},
+        old,
+        anchor_at=(now - timedelta(days=2)).isoformat(timespec="seconds"),
+        next_at=(now - timedelta(days=1)).isoformat(timespec="seconds"))
+
+    recurring.sweep(now)
+
+    copies = [t for t in db.list_tasks() if t["title"] == "take the bins out"]
+    assert len(copies) == 1, "the beat came due and no copy was made"
+    # No opinion means the column's default, which is on: work that never
+    # asked to spill onto your days off must not start doing so because its
+    # rhythm is older than the setting.
+    assert copies[0]["workday_only"] is True
