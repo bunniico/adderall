@@ -351,8 +351,10 @@ function capacityNote() {
 function setCalendarMode(on) {
   cal.mode = on;
   document.body.classList.toggle("calendar-mode", on);
-  $("calendar-view").hidden = !on;
-  $("list-view").hidden = on;
+  // Which of the three panes shows is one decision, made in one place: the
+  // calendar covers everything, and underneath it the strip decides between
+  // the task list and the Overview (see `syncPanes`).
+  syncPanes();
   // The calendar has its own project filter; two project pickers on screen at
   // once would just disagree with each other.
   $("project-tabs").hidden = on;
@@ -361,7 +363,9 @@ function setCalendarMode(on) {
     ? "Back to the task list"
     : "See everything with a date on it, across every project";
   saveCalendarPrefs();
-  if (!on) return;
+  // Coming back out lands on whichever tab you left — which may be the
+  // Overview, whose numbers have gone stale while it was behind the calendar.
+  if (!on) { refreshOverview(false); return; }
   if (!cal.loaded || cal.stale) loadCalendar().then(renderCalendar);
   else renderCalendar();
 }

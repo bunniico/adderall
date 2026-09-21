@@ -143,6 +143,48 @@
   </aside>
   </div><!-- /#list-view -->
 
+  <!-- Overview: what the lists add up to. Like the calendar it spans every
+       project, but it stays inside the tab strip, because it is a way of
+       reading your lists rather than a different thing to look at. Everything
+       in it is drawn from the same numbers the list and the calendar are
+       drawn from — there is nothing here the app knows only here. -->
+  <section id="overview-view" class="overview" hidden aria-label="Overview">
+    <div id="ov-stats" class="ov-stats"></div>
+
+    <div class="ov-grid">
+      <section class="ov-card ov-span">
+        <h2>Finished work</h2>
+        <p id="ov-trend-sub" class="ov-sub"></p>
+        <div id="ov-trend" class="ov-chart"></div>
+      </section>
+
+      <section class="ov-card">
+        <h2>Next up</h2>
+        <p class="ov-sub">The most urgent thing on each list, in the order
+          <b>▶ Focus</b> would hand them to you.</p>
+        <div id="ov-top" class="ov-rows"></div>
+      </section>
+
+      <section class="ov-card">
+        <h2>Coming up</h2>
+        <p class="ov-sub">What is due next, across every list.</p>
+        <div id="ov-upcoming" class="ov-rows"></div>
+      </section>
+
+      <section id="ov-projects-card" class="ov-card" hidden>
+        <h2>Work left by list</h2>
+        <p class="ov-sub">Buffered minutes still to do, per tab.</p>
+        <div id="ov-projects" class="ov-chart"></div>
+      </section>
+
+      <section id="ov-quadrants-card" class="ov-card" hidden>
+        <h2>Work left by category</h2>
+        <p class="ov-sub">Where it sits on the impact/effort matrix.</p>
+        <div id="ov-quadrants" class="ov-chart"></div>
+      </section>
+    </div>
+  </section>
+
   <!-- Calendar: the one view that ignores the open tab, because "what is due
        this week" is a question about everything, not about one list. -->
   <section id="calendar-view" class="calendar" hidden aria-label="Calendar">
@@ -632,10 +674,11 @@
 <div id="celebration" class="celebration" hidden></div>
 <div id="toast" class="toast" hidden></div>
 
-<!-- calendar.js first: app.js boots as it is parsed, and that boot may open
-     straight into the calendar. -->
+<!-- calendar.js and overview.js first: app.js boots as it is parsed, and that
+     boot may open straight into either of them. -->
 <script src="motion.js"></script>
 <script src="calendar.js"></script>
+<script src="overview.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

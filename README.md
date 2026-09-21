@@ -192,6 +192,21 @@ API keys are never logged.
   about where it sits among another tab's. The tab underneath stays the one
   adding and braindumping act on, and it is where you go back to to arrange
   anything.
+- **Overview** — the first tab in the strip, and the one that reads your
+  lists instead of being one. Tiles across the top: open tasks, what is
+  overdue, what is due in the next seven days, how much work is left,
+  how much of today is already booked against the day the app has learned
+  you actually have, how much you got through in the last month, and where
+  your level sits. Under them, a chart of finished work — one bar per day
+  for the last 30 days, minutes above and tasks below, with a line for the
+  day cap to read them against, and the quiet days drawn rather than skipped.
+  Then **Next up** and **Coming up**: the most urgent work and the nearest
+  deadlines across every list, each row saying which tab it came from, and
+  clicking one opens it right there without leaving the page. Last, where
+  the work left actually sits — per list, and per corner of the
+  impact/effort matrix. Everything on it is derived from the same numbers
+  the list and the calendar are derived from, so the hours it quotes are the
+  hours they draw. Unlike **All** it is there with a single project too.
 - **Calendar** — 📅 in the header swaps the list for a calendar with **Day**,
   **Week** and **Month** views. Unlike everything else in the app it spans
   *every* project at once, because "what is due this week" is a question about
@@ -602,7 +617,8 @@ app/
   static/       single-page front end (vanilla JS, no build step)
                   app.js is the task list, repeat controls, focus mode
                   and settings; calendar.js is the day/week/month views
-                  and nudging
+                  and nudging; overview.js is the Overview tab's tiles,
+                  shortlists and hand-rolled SVG charts
 tests/          pytest suite
 data/           SQLite database (created at runtime, gitignored)
 ```

@@ -305,9 +305,17 @@ main { max-width: 1046px; margin: 0 auto; padding: 20px 24px 80px; }
 .tab.drop-before { box-shadow: inset 3px 0 0 var(--good); }
 .tab.drop-after { box-shadow: inset -3px 0 0 var(--good); }
 .tab-strip.drop-end { box-shadow: inset -3px 0 0 var(--good); }
-/* A single project isn't a choice to make — keep the strip out of the way. */
-.project-tabs.solo .tab { border-color: transparent; background: none; }
-.project-tabs.solo .tab.active .tab-btn { color: var(--muted); font-weight: 400; }
+/* A single project isn't a choice to make — keep the strip out of the way.
+   The lens tabs are exempt: Overview is somewhere to go however many lists
+   there are, and a tab you can't see is a tab you never find. */
+.project-tabs.solo .tab:not(.lens-tab) { border-color: transparent; background: none; }
+.project-tabs.solo .tab.active:not(.lens-tab) .tab-btn {
+  color: var(--muted); font-weight: 400;
+}
+/* Overview leads the strip and reads as a reading of the tabs rather than one
+   of them, so it wears the same quiet mono face the All tab does. */
+.overview-tab .tab-name { font-family: var(--mono); font-size: 12.5px; letter-spacing: .04em; }
+.overview-tab { margin-right: 2px; }
 
 /* Every button in the app is a physical object: it takes load when you press
    it (squashes, sinks a pixel) and springs back past its resting size when you
@@ -790,7 +798,7 @@ body.calendar-mode main { max-width: 1180px; }
    whole width back from the rail. */
 body.calendar-mode #list-view { display: none; }
 #project-tabs[hidden] { display: none; }
-#list-view[hidden], #calendar-view[hidden] { display: none; }
+#list-view[hidden], #calendar-view[hidden], #overview-view[hidden] { display: none; }
 
 .cal-toolbar {
   display: flex; align-items: center; justify-content: space-between;
@@ -1036,6 +1044,117 @@ body.calendar-mode #list-view { display: none; }
 }
 .cal-more:hover { color: var(--accent); }
 
+/* ---- overview ----
+   What the lists add up to. Cards of the same make as the rail's, because
+   this is the same kind of thing: numbers you glance at, not work you move
+   through. Nothing here is loud — the charts carry the only saturated ink on
+   the page, and they are thin. */
+.overview { max-width: 1046px; margin: 0 auto; display: flex;
+  flex-direction: column; gap: 18px; }
+
+/* The tiles. A single current value is a number, never a one-bar chart. */
+.ov-stats {
+  display: grid; gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+}
+.ov-tile {
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--sunken); padding: 12px 14px 13px;
+  display: flex; flex-direction: column; gap: 5px; min-width: 0;
+}
+.ov-tile-label { font: 400 11px/1.2 var(--sans); color: var(--muted); }
+.ov-tile-value { font: 600 22px/1 var(--sans); color: var(--text-bright); }
+.ov-tile-note { font: 400 10.5px/1.3 var(--mono); color: var(--muted-3); }
+/* The one tile allowed to catch your eye, and only amber: by the time work is
+   late, volume has stopped being information. */
+.ov-tile.tone-warn .ov-tile-value { color: var(--warn); }
+.ov-meter { height: 4px; border-radius: 3px; background: var(--well); overflow: hidden; }
+.ov-meter-fill {
+  height: 100%; background: var(--bar); border-radius: 3px;
+  transition: width var(--t-base) var(--ease-out);
+}
+.ov-tile.tone-warn .ov-meter-fill { background: var(--warn); }
+
+/* Two columns, and cards that end where their content does: a third column
+   leaves one card stranded on a row of its own, and a stretched card is a
+   lot of empty panel under a four-row chart. */
+.ov-grid {
+  display: grid; gap: 16px; align-items: start;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
+}
+@media (min-width: 760px) {
+  .ov-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+.ov-card {
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--sunken); padding: 14px 16px 16px;
+  display: flex; flex-direction: column; gap: 8px; min-width: 0;
+}
+/* A laid-out box outranks the hidden attribute, and a breakdown with one bar
+   in it has to be able to go away entirely. */
+.ov-card[hidden] { display: none; }
+/* The trend is a time axis: it wants the width, and halving it would put a
+   month of days inside 300px. */
+.ov-span { grid-column: 1 / -1; }
+.ov-card h2 { margin: 0; font: 600 14px/1.2 var(--sans); color: var(--text-bright); }
+.ov-sub { margin: 0; font: 400 11.5px/1.45 var(--sans); color: var(--muted); }
+.ov-empty {
+  margin: 4px 0 0; font: 400 12px/1.5 var(--sans); color: var(--muted-3);
+}
+.ov-chart { display: flex; flex-direction: column; gap: 6px; }
+.ov-svg { width: 100%; height: auto; display: block; overflow: visible; }
+
+/* Chart marks. Thin, one hue, and the only saturated ink on the page. Text
+   never wears the data colour: the bar beside it carries that. */
+.ov-bar { fill: var(--accent); }
+.ov-bar-soft { fill: var(--accent-dim); }
+.ov-track { fill: var(--well); }
+.ov-axis { stroke: var(--border-soft); stroke-width: 1; }
+/* The day cap, to read the bars against. Hairline and solid: a dashed rule is
+   noise, and this one is context rather than data. */
+.ov-rule { stroke: var(--lav-line); stroke-width: 1; }
+.ov-rule-label { font: 400 9px/1 var(--mono); fill: var(--muted-3); }
+.ov-tick { font: 400 9.5px/1 var(--mono); fill: var(--muted-3); }
+.ov-value { font: 500 10px/1 var(--mono); fill: var(--muted); }
+.ov-row-label { font: 400 11.5px/1 var(--sans); fill: var(--text); }
+.ov-row-value { font: 400 10px/1 var(--mono); fill: var(--muted-3); }
+/* A key rather than a legend box: two single-series plots stacked, so this
+   says which is which without pretending they share a scale. */
+.ov-key { display: flex; gap: 14px; margin: 0; }
+.ov-key-item {
+  display: inline-flex; align-items: center; gap: 5px;
+  font: 400 10.5px/1 var(--mono); color: var(--muted-3);
+}
+.ov-key-item::before {
+  content: ""; width: 9px; height: 9px; border-radius: 2px; background: var(--accent);
+}
+.ov-key-soft::before { background: var(--accent-dim); }
+
+/* The two shortlists. Rows are buttons: the whole thing is the hit target,
+   because a link-sized one is exactly the friction this app exists to remove. */
+.ov-rows { display: flex; flex-direction: column; gap: 6px; }
+.ov-row {
+  display: flex; flex-direction: column; gap: 6px; align-items: stretch;
+  text-align: left; padding: 9px 11px; border-radius: 8px;
+  background: var(--row); border: 1px solid var(--border-soft);
+}
+.ov-row:hover { border-color: var(--border-strong); }
+.ov-row-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.ov-row-title {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; font: 500 13px/1.3 var(--sans); color: var(--text-bright);
+}
+/* Which list it came from — the one thing a compiled view loses. */
+.ov-row-project {
+  flex: none; font: 400 10px/1 var(--mono); color: var(--muted-3);
+  letter-spacing: .03em;
+}
+.ov-row-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ov-crumb {
+  font: 400 10px/1.3 var(--mono); color: var(--muted-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+}
+
 /* "Starts …" on a task: the same weight as the deadline badge it sits beside,
    in a calmer colour — it is information about later, not a thing on fire. */
 .badge.start-badge { border-color: var(--accent); color: var(--accent); }
@@ -1082,6 +1201,13 @@ body.calendar-mode #list-view { display: none; }
      header is not on offer at this width. */
   .xp-track { width: 74px; }
   .xp-count { display: none; }
+  /* Two tiles across rather than one: they are short, and a column of seven
+     is a scroll before the charts even start. */
+  .ov-stats { grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 8px; }
+  .ov-tile { padding: 10px 11px 11px; }
+  .ov-tile-value { font-size: 18px; }
+  .ov-grid { gap: 12px; }
+  .ov-card { padding: 12px 12px 14px; }
   .cal-nav h2 { font-size: 15px; margin-left: 4px; }
   .cal-chip-time { display: none; }
   .cal-month-grid .cal-chip-title { display: none; }
