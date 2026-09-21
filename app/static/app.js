@@ -8,7 +8,7 @@
 const $ = (id) => document.getElementById(id);
 
 let state = { tasks: [], next_task_id: null, projects: [], active_project_id: null,
-              all_tasks: false, alarm_tasks: [], xp: null };
+              all_tasks: false, overview: false, alarm_tasks: [], xp: null };
 let settings = null;
 let detailTaskId = null;
 let renamingProject = null;   // project whose tab is currently an input box
@@ -55,9 +55,14 @@ function applyState(newState) {
   maybeShowThankless();
   scheduleTransitionAlarms();
   syncFocusWithState();
+  // Which of the three panes is on screen can have just changed — switching
+  // to or away from the Overview arrives as a state read like everything else.
+  syncPanes();
   // Every mutation lands here, and every mutation can move something on the
-  // calendar — including tasks in tabs this state doesn't even carry.
+  // calendar — including tasks in tabs this state doesn't even carry. The
+  // Overview counts those same tabs, so it is refreshed on the same terms.
   refreshCalendar();
+  refreshOverview();
 }
 
 function flatten(tasks) {
@@ -76,11 +81,11 @@ function findTask(id, list = state.tasks) {
   return null;
 }
 
-/* The calendar spans every project, so a task opened from it is often not in
- * the list currently on screen. Its calendar event carries the same fields
- * the detail modal needs, so it stands in. */
+/* The calendar and the Overview both span every project, so a task opened
+ * from either is often not in the list currently on screen. Their rows carry
+ * the same fields the detail modal needs, so they stand in. */
 function findAnyTask(id) {
-  return findTask(id) || calendarTask(id);
+  return findTask(id) || calendarTask(id) || overviewTask(id);
 }
 
 /* A repeat belongs to the top of a tree, never to a step inside it — so
@@ -103,17 +108,21 @@ function rootAncestor(task) {
  * Everything else on the page (adding, braindumping, focusing, ordering)
  * acts on the open tab and nothing else.
  *
- * Except the All tab at the head of the strip, which is every project's tasks
- * read as one list. It is a lens over the tabs rather than a tab of its own:
- * it holds nothing, so there is nothing there to rename, delete, drag or add
- * to, and the project underneath stays the one a new task lands in. */
+ * Except the two lens tabs at the head of the strip. **All** is every
+ * project's tasks read as one list; **Overview** is what those lists add up
+ * to, in numbers and charts. Both are ways of reading the tabs rather than
+ * tabs of their own: they hold nothing, so there is nothing there to rename,
+ * delete, drag or add to, and the project underneath stays the one a new task
+ * lands in. */
 
 const ALL_TASKS_ID = "all";
+const OVERVIEW_ID = "overview";
 
 function renderTabs() {
   const strip = $("tab-strip");
   strip.replaceChildren();
   const projects = state.projects || [];
+  strip.appendChild(overviewTab());
   // A second list is what makes "all of them" a thing worth asking for.
   if (projects.length > 1) strip.appendChild(allTab(projects));
   for (const project of projects) {
@@ -146,14 +155,13 @@ function renderTabs() {
     ?.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
-/* The compiled tab. No id of its own in the strip's dataset, deliberately:
- * that is what marks a tab as somewhere another tab can be dropped, and
- * nothing can be dropped into a list that holds nothing. */
-function allTab(projects) {
-  const active = !!state.all_tasks;
-  const open = projects.reduce((n, p) => n + (p.open_tasks || 0), 0);
+/* A lens tab: the two at the head of the strip that read your lists instead
+ * of being one. No id of its own in the strip's dataset, deliberately: that
+ * is what marks a tab as somewhere another tab can be dropped, and nothing
+ * can be dropped into a tab that holds nothing. */
+function lensTab({ id, label, cls, title, active, count, countTitle }) {
   const tab = document.createElement("div");
-  tab.className = "tab all-tab" + (active ? " active" : "");
+  tab.className = `tab lens-tab ${cls}` + (active ? " active" : "");
   tab.setAttribute("role", "presentation");  // the button inside is the tab
 
   const btn = document.createElement("button");
@@ -161,37 +169,66 @@ function allTab(projects) {
   btn.className = "tab-btn";
   btn.setAttribute("role", "tab");
   btn.setAttribute("aria-selected", String(active));
-  btn.title = "Every project's tasks, compiled into one list";
+  btn.title = title;
   const name = document.createElement("span");
   name.className = "tab-name";
-  name.textContent = "All";
+  name.textContent = label;
   btn.appendChild(name);
-  if (open) {
-    const count = document.createElement("span");
-    count.className = "tab-count";
-    count.textContent = open;
-    count.title = `${open} unfinished task${open === 1 ? "" : "s"} in total`;
-    btn.appendChild(count);
+  if (count) {
+    const badge = document.createElement("span");
+    badge.className = "tab-count";
+    badge.textContent = count;
+    badge.title = countTitle;
+    btn.appendChild(badge);
   }
   btn.addEventListener("click", () => {
     if (tabClickSuppressed) return;
-    if (!active) switchProject(ALL_TASKS_ID);
+    if (!active) switchProject(id);
   });
-  // The strip's own ← / → walk, from the one tab that has no project to
-  // walk from. Shift+arrow is left out: there is no position to move.
+  // The strip's own ← / → walk, from the tabs that have no project to walk
+  // from. Shift+arrow is left out: there is no position to move.
   btn.addEventListener("keydown", (e) => {
-    if (e.key !== "ArrowRight" || e.shiftKey ||
-        e.altKey || e.ctrlKey || e.metaKey) return;
+    const dir = { ArrowLeft: -1, ArrowRight: 1 }[e.key];
+    if (!dir || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
     e.preventDefault();
-    focusTabAt(1);
+    const buttons = [...$("tab-strip").querySelectorAll(".tab-btn")];
+    focusTabAt(buttons.indexOf(btn) + dir);
   });
   tab.appendChild(btn);
   return tab;
 }
 
+/* The Overview. Always there, where the All tab needs a second list to be
+ * worth anything: "how much is left, and what next" is a fair question to ask
+ * of one list too. No count on it — the number of open tasks is the first
+ * thing it says once it is open, and a badge that repeats it is noise. */
+function overviewTab() {
+  return lensTab({
+    id: OVERVIEW_ID, label: "Overview", cls: "overview-tab",
+    title: "What every list adds up to — totals, what to do next, and what " +
+           "you have been getting through",
+    active: !!state.overview,
+  });
+}
+
+/* The compiled tab. Not the lit one while the Overview is up: the list
+ * underneath is still the compiled one, but it is not where you are. */
+function allTab(projects) {
+  const open = projects.reduce((n, p) => n + (p.open_tasks || 0), 0);
+  return lensTab({
+    id: ALL_TASKS_ID, label: "All", cls: "all-tab",
+    title: "Every project's tasks, compiled into one list",
+    active: !!state.all_tasks && !state.overview,
+    count: open,
+    countTitle: `${open} unfinished task${open === 1 ? "" : "s"} in total`,
+  });
+}
+
 function projectTab(project) {
-  // While the compiled list is up, no project tab is the one you are on.
-  const active = !state.all_tasks && project.id === state.active_project_id;
+  // While the compiled list or the Overview is up, no project tab is the one
+  // you are on — the list underneath is still remembered, but you are not on it.
+  const active = !state.all_tasks && !state.overview &&
+    project.id === state.active_project_id;
   // A lone tab has nothing to be reordered against, so it stays a plain tab.
   const reorderable = (state.projects || []).length > 1;
   const tab = document.createElement("div");
@@ -339,9 +376,10 @@ async function deleteProject(projectId) {
 
 function switchToProjectAt(index) {
   const project = (state.projects || [])[index];
-  // From the compiled list, Alt+N goes to that project even when it is the
-  // one remembered underneath: there is somewhere to go either way.
-  if (project && (state.all_tasks || project.id !== state.active_project_id))
+  // From a lens tab, Alt+N goes to that project even when it is the one
+  // remembered underneath: there is somewhere to go either way.
+  if (project && (state.all_tasks || state.overview ||
+                  project.id !== state.active_project_id))
     switchProject(project.id);
 }
 
@@ -375,9 +413,9 @@ function wireTabKeys(e, project) {
   const i = projects.findIndex((p) => p.id === project.id);
   if (i < 0) return;
   if (e.shiftKey) nudgeProject(project, dir);
-  // The All tab, when there is one, is the row's first button — so ← off the
-  // first project lands on it rather than going nowhere.
-  else focusTabAt(i + dir + ($("tab-strip").querySelector(".all-tab") ? 1 : 0));
+  // The lens tabs lead the row, so ← off the first project lands on them
+  // rather than going nowhere.
+  else focusTabAt(i + dir + $("tab-strip").querySelectorAll(".lens-tab").length);
 }
 
 function nudgeProject(project, dir) {
@@ -3348,6 +3386,8 @@ function wire() {
     Motion.setEnabled($("s-sound").checked);
     if ($("s-sound").checked) Motion.play("complete");
   });
+
+  wireOverview();
 
   // Ask for notification permission on first interaction (needed for alarms).
   document.body.addEventListener("click", () => {

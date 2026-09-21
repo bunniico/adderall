@@ -65,6 +65,11 @@ DEFAULT_SETTINGS = {
                                # list. A lens over the tabs rather than a tab —
                                # `active_project` stays the list adding,
                                # braindumping and focusing still act on
+    "overview_view": False,    # the Overview tab: what every list adds up to,
+                               # read as numbers rather than as tasks. Another
+                               # lens, and it does not disturb the one above
+                               # it: going back to the list comes back to
+                               # whichever of All or a project you left
     "daily_budget_usd": 0.0,   # approximate dollars of Claude API spend a day
                                # is allowed to cost before the app starts
                                # answering with cheaper models. 0 = no budget,
@@ -656,6 +661,35 @@ def completed_history(days: int = 45) -> list[dict]:
         ).fetchall()
     return [{"finished_at": r["updated_at"],
              "minutes": r["actual_time"] or r["estimated_time"]} for r in rows]
+
+
+def finished_log(days: int = 30) -> list[dict]:
+    """Every task ticked off in the window, timed or not.
+
+    `completed_history` above answers a narrower question — what the day cap
+    can learn from — so it drops anything that carried neither a timer nor an
+    estimate. Counting *how many things you finished* cannot drop those: a
+    task you ticked off without ever estimating it is still one you finished,
+    and leaving it out would draw a chart that disagrees with your own memory
+    of the week. Its minutes are 0, which is the honest number for work nobody
+    ever measured.
+
+    `updated_at` stands in for the moment it was finished — the same stand-in
+    `completed_history` makes, and with the same caveat: editing a done task
+    moves it to today.
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(
+        timespec="seconds")
+    with connect() as conn:
+        rows = conn.execute(
+            """SELECT updated_at, actual_time, estimated_time FROM tasks
+               WHERE status = 'done' AND updated_at >= ?
+               ORDER BY updated_at DESC LIMIT 2000""",
+            (cutoff,),
+        ).fetchall()
+    return [{"finished_at": r["updated_at"],
+             "minutes": r["actual_time"] or r["estimated_time"] or 0}
+            for r in rows]
 
 
 # ---------- series (work that comes back) ----------

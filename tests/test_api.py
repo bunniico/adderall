@@ -1078,6 +1078,152 @@ def test_all_tasks_is_read_by_urgency_not_by_hand(client):
     assert order[0]["id"] == urgent["id"]
 
 
+# ---------- the Overview tab ----------
+# What the lists add up to, rather than what is on one of them. Another lens,
+# and the one that layers: turning it on leaves the tab underneath alone.
+
+
+def overview(client):
+    res = client.get("/api/overview")
+    assert res.status_code == 200, res.text
+    return res.json()
+
+
+def test_overview_counts_every_project(client):
+    create(client, title="home task")
+    new_project(client, "work")
+    create(client, title="work task")
+
+    data = overview(client)
+    assert data["stats"]["open"] == 2
+    assert data["stats"]["projects"] == 2
+    assert {p["name"] for p in data["by_project"]} == {"Tasks", "work"}
+    # Every shortlist row says which list it came from, because on a view that
+    # spans the tabs that is the one thing a title alone does not tell you.
+    assert {t["title"] for t in data["top"]} == {"home task", "work task"}
+    assert {t["project_name"] for t in data["top"]} == {"Tasks", "work"}
+
+
+def test_overview_leaves_the_tab_underneath_it(client):
+    """The All tab is a lens on the list; the Overview is a lens over both of
+    them. Coming back out lands where you were, not somewhere else."""
+    new_project(client, "work")
+    all_tasks(client)
+
+    state = client.post("/api/projects/overview/activate").json()
+    assert state["overview"] is True
+    assert state["all_tasks"] is True
+
+    state = client.post("/api/projects/all/activate").json()
+    assert (state["overview"], state["all_tasks"]) == (False, True)
+
+
+def test_a_project_tab_turns_the_overview_off(client):
+    home = client.get("/api/state").json()["active_project_id"]
+    assert client.post("/api/projects/overview/activate").json()["overview"] is True
+
+    state = client.post(f"/api/projects/{home}/activate").json()
+    assert state["overview"] is False
+    assert state["active_project_id"] == home
+
+
+def test_a_new_project_takes_you_out_of_the_overview(client):
+    client.post("/api/projects/overview/activate")
+    state = new_project(client, "errands")
+    assert state["overview"] is False
+    assert state["tasks"] == []
+
+
+def test_overview_survives_a_restart(client):
+    client.post("/api/projects/overview/activate")
+    assert client.get("/api/state").json()["overview"] is True
+
+
+def test_overview_is_there_with_a_single_project(client):
+    """Where the All tab puts itself away — "all of them" is that one list —
+    the Overview does not: how much is left and what is next are fair
+    questions to ask of one list too."""
+    create(client, title="home task")
+    assert client.post("/api/projects/overview/activate").json()["overview"] is True
+    data = overview(client)
+    assert data["stats"]["open"] == 1
+    assert [t["title"] for t in data["top"]] == ["home task"]
+
+
+def test_overview_splits_overdue_from_due_soon(client):
+    now = datetime.now(timezone.utc)
+    create(client, title="late", deadline=(now - timedelta(days=1)).isoformat())
+    create(client, title="this week", deadline=(now + timedelta(days=2)).isoformat())
+    create(client, title="next month", deadline=(now + timedelta(days=40)).isoformat())
+
+    stats = overview(client)["stats"]
+    assert stats["overdue"] == 1
+    # A date that has gone by is counted once, as late — not again as soon.
+    assert stats["due_soon"] == 1
+
+
+def test_overview_upcoming_is_every_project_in_date_order(client):
+    now = datetime.now(timezone.utc)
+    create(client, title="third", deadline=(now + timedelta(days=3)).isoformat())
+    create(client, title="first", deadline=(now + timedelta(hours=2)).isoformat())
+    new_project(client, "work")
+    create(client, title="second", deadline=(now + timedelta(days=1)).isoformat())
+
+    data = overview(client)
+    assert [t["title"] for t in data["upcoming"]] == ["first", "second", "third"]
+
+
+def test_overview_counts_a_tree_once(client):
+    """A container is worth what it still holds, not its own estimate on top
+    of its steps' — the rule the rail counts by, so the two agree."""
+    parent = find(create(client, title="clean kitchen"), "clean kitchen")
+    client.post(f"/api/tasks/{parent['id']}/breakdown", json={})
+    root = find(client.get("/api/state").json(), "clean kitchen")
+
+    data = overview(client)
+    assert data["stats"]["minutes_left"] == root["rollup_remaining"]
+    # And the container is not a thing to do next: its steps are.
+    assert {t["title"] for t in data["top"]} == {"step 1", "step 2", "step 3"}
+
+
+def test_overview_ignores_finished_work(client):
+    create(client, title="still to do")
+    done = find(create(client, title="already done"), "already done")
+    client.post(f"/api/tasks/{done['id']}/complete", json={})
+
+    data = overview(client)
+    assert data["stats"]["open"] == 1
+    assert [t["title"] for t in data["top"]] == ["still to do"]
+
+
+def test_overview_trend_draws_the_quiet_days_too(client):
+    """A chart made only of the days you finished something on reads as a
+    streak. The gaps are the point, so every day in the window is a row."""
+    done = find(create(client, title="wash dishes"), "wash dishes")
+    client.post(f"/api/tasks/{done['id']}/complete", json={})
+
+    data = overview(client)
+    trend = data["trend"]
+    assert len(trend) == data["stats"]["trend_days"]
+    assert trend[-1]["finished"] == 1
+    assert trend[0]["finished"] == 0
+    assert data["stats"]["finished"] == 1
+
+
+def test_overview_sorts_open_work_into_categories(client):
+    """Impact 7 / effort 3 from the stubbed AI is a quick win, and 30 minutes
+    of it is 39 once the time tax is on."""
+    create(client, title="quick one")
+
+    data = overview(client)
+    quick = next(q for q in data["by_quadrant"] if q["quadrant"] == "quick_win")
+    assert (quick["tasks"], quick["minutes"]) == (1, 39)
+    # Always all five, always in this order: the bars stay in the same places
+    # from one day to the next, so the shape is the thing that changed.
+    assert [q["quadrant"] for q in data["by_quadrant"]] == \
+        ["quick_win", "major_project", "fill_in", "thankless", "none"]
+
+
 def test_pre_projects_database_is_migrated(tmp_path, monkeypatch):
     """An existing install upgrades in place: its tasks become the first tab."""
     import sqlite3
