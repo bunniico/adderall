@@ -671,6 +671,26 @@ def xp_estimate_pairs() -> list[dict]:
     return [{"xp": r["xp_awarded"], "estimated_time": r["estimated_time"]} for r in rows]
 
 
+def xp_since(days: int) -> int:
+    """XP paid out by tasks finished inside the window, for the
+    average-daily-XP stat.
+
+    `updated_at` stands in for the moment it was finished — the same stand-in
+    `finished_log` makes, and with the same caveat: editing a done task moves
+    it to today.
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(
+        timespec="seconds")
+    with connect() as conn:
+        row = conn.execute(
+            """SELECT COALESCE(SUM(xp_awarded), 0) AS xp FROM tasks
+               WHERE status = 'done' AND xp_awarded IS NOT NULL
+                 AND updated_at >= ?""",
+            (cutoff,),
+        ).fetchone()
+    return int(row["xp"]) if row else 0
+
+
 def completed_history(days: int = 45) -> list[dict]:
     """When recent work was finished and how long it took.
 

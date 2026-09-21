@@ -554,7 +554,9 @@ def _state(project_id: str | None = None, xp_gained: int = 0) -> dict:
         # silently jump.
         "xp": {**logic.level_progress(db.get_xp()), "gained": xp_gained,
                "hourly": logic.average_hourly_xp(
-                   db.xp_estimate_pairs(), logic.effective_buffer(settings, ratios))},
+                   db.xp_estimate_pairs(), logic.effective_buffer(settings, ratios)),
+               "daily": logic.average_daily_xp(db.xp_since(logic.XP_WINDOW_DAYS)),
+               "daily_days": logic.XP_WINDOW_DAYS},
         # Rides along for the same reason the XP bar does: the badge that says
         # the app has gone cheap for the day has to appear the moment it is
         # true, not the next time someone opens the settings dialog.
@@ -781,7 +783,9 @@ def _overview() -> dict:
         "capacity": _capacity(settings),
         "xp": {**logic.level_progress(db.get_xp()),
                "hourly": logic.average_hourly_xp(
-                   db.xp_estimate_pairs(), logic.effective_buffer(settings, ratios))},
+                   db.xp_estimate_pairs(), logic.effective_buffer(settings, ratios)),
+               "daily": logic.average_daily_xp(db.xp_since(logic.XP_WINDOW_DAYS)),
+               "daily_days": logic.XP_WINDOW_DAYS},
     }
 
 

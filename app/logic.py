@@ -1006,6 +1006,23 @@ def average_hourly_xp(pairs: list[dict], buf: float) -> float | None:
     return (total_xp / (total_minutes / 60)) if total_minutes else None
 
 
+# How far back "per day" looks. A window rather than all of it, because the
+# question is what you are earning *now*: a lifetime average answers it more
+# slowly the longer you use the app, and a month is long enough to survive a
+# bad week without being so long that a good one never shows up in it.
+XP_WINDOW_DAYS = 30
+
+
+def average_daily_xp(window_xp: int, days: int = XP_WINDOW_DAYS) -> float | None:
+    """XP earned per day across the window, quiet days included.
+
+    Dividing by the days you happened to earn something on would answer a
+    different question — what a working day pays — and would climb when you
+    stop using the app for a fortnight. The days off are part of the pace.
+    """
+    return (window_xp / days) if days > 0 else None
+
+
 def level_threshold(level: int) -> int:
     """Total XP needed to have reached `level`. Everyone starts at level 1."""
     level = max(1, int(level))
