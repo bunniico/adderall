@@ -1212,15 +1212,34 @@ def test_overview_trend_draws_the_quiet_days_too(client):
 
 def test_overview_carries_the_daily_xp_pace(client):
     """The Level tile says how far along you are; this says how fast it is
-    moving, which a bar four-fifths of the way along cannot."""
+    moving, which a bar four-fifths of the way along cannot.
+
+    With one payout inside the window and one that has aged out of it, so the
+    tile is pinned to the windowed sum rather than to the lifetime total —
+    which are the same number on a fresh database, and would let a pace that
+    counted all of history pass unnoticed.
+    """
+    old = find(create(client, title="last month's washing up", impact=9,
+                      effort=2), "last month's washing up")
+    lifetime = client.post(f"/api/tasks/{old['id']}/complete",
+                           json={}).json()["xp"]["total"]
+    long_ago = (datetime.now(timezone.utc)
+                - timedelta(days=logic.XP_WINDOW_DAYS + 1)).isoformat()
+    from app import db
+    with db.connect() as conn:
+        conn.execute("UPDATE tasks SET updated_at = ? WHERE id = ?",
+                     (long_ago, old["id"]))
+
     done = find(create(client, title="wash dishes", impact=9, effort=2),
                 "wash dishes")
-    earned = client.post(f"/api/tasks/{done['id']}/complete",
-                         json={}).json()["xp"]["total"]
+    state = client.post(f"/api/tasks/{done['id']}/complete", json={}).json()
+    this_month = state["xp"]["total"] - lifetime
+    assert this_month > 0
 
     xp = overview(client)["xp"]
     assert xp["daily_days"] == logic.XP_WINDOW_DAYS
-    assert xp["daily"] == earned / logic.XP_WINDOW_DAYS
+    assert xp["total"] == lifetime + this_month     # earned is still earned
+    assert xp["daily"] == this_month / logic.XP_WINDOW_DAYS
 
 
 def test_overview_sorts_open_work_into_categories(client):
