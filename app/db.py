@@ -65,6 +65,11 @@ DEFAULT_SETTINGS = {
                                # list. A lens over the tabs rather than a tab —
                                # `active_project` stays the list adding,
                                # braindumping and focusing still act on
+    "habits_view": False,      # the Habits tab: the routines you keep, and the
+                               # year of squares that says how it is going. Like
+                               # the two lenses below it, it sits over whichever
+                               # list you were on rather than replacing it —
+                               # routines are not tasks and live in no project
     "overview_view": False,    # the Overview tab: what every list adds up to,
                                # read as numbers rather than as tasks. Another
                                # lens, and it does not disturb the one above
@@ -199,6 +204,30 @@ CREATE TABLE IF NOT EXISTS progress (
     xp         INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL
 );
+-- Routines, and the days you actually did them. Deliberately nothing to do
+-- with tasks or series: a routine is never finished, has no estimate, no
+-- score and no place in the plan — the only thing it ever records is a tick
+-- against a date. See habits.py for what those ticks add up to.
+CREATE TABLE IF NOT EXISTS habits (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    category   TEXT NOT NULL DEFAULT 'life',
+    rule       TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+-- One row per day done. `day` is a local date, not an instant: "did you take
+-- them today" is a question about your day, and storing it as UTC would move
+-- the answer across midnight for half the world. `done_at` keeps the instant
+-- anyway, because when a tick happened is occasionally worth knowing and
+-- throwing it away cannot be undone.
+CREATE TABLE IF NOT EXISTS habit_checkins (
+    habit_id TEXT NOT NULL REFERENCES habits(id) ON DELETE CASCADE,
+    day      TEXT NOT NULL,
+    done_at  TEXT NOT NULL,
+    PRIMARY KEY (habit_id, day)
+);
+CREATE INDEX IF NOT EXISTS idx_checkins_day ON habit_checkins(day);
 """
 
 TASK_FIELDS = {
@@ -918,6 +947,105 @@ def award_xp(task_id: str, amount: int) -> int:
         )
         row = conn.execute("SELECT xp FROM progress WHERE id = 1").fetchone()
     return int(row["xp"]) if row else 0
+
+
+# ---------- habits (the things you do again) ----------
+# No plan rev is bumped by anything down here, and that is the point: a
+# routine is not scheduled, so ticking one off cannot move your week about.
+
+
+def _row_to_habit(row: sqlite3.Row) -> dict:
+    habit = dict(row)
+    habit["rule"] = json.loads(habit["rule"])
+    return habit
+
+
+def list_habits() -> list[dict]:
+    with connect() as conn:
+        rows = conn.execute("SELECT * FROM habits ORDER BY created_at").fetchall()
+    return [_row_to_habit(r) for r in rows]
+
+
+def get_habit(habit_id: str) -> dict | None:
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM habits WHERE id = ?", (habit_id,)).fetchone()
+    return _row_to_habit(row) if row else None
+
+
+def create_habit(name: str, category: str, rule: dict) -> dict:
+    habit_id = new_id()
+    ts = now_iso()
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO habits (id, name, category, rule, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (habit_id, name, category, json.dumps(rule), ts, ts),
+        )
+    return get_habit(habit_id)
+
+
+HABIT_FIELDS = {"name", "category", "rule"}
+
+
+def update_habit(habit_id: str, fields: dict) -> dict | None:
+    cols = {k: v for k, v in fields.items() if k in HABIT_FIELDS}
+    if not cols:
+        return get_habit(habit_id)
+    if "rule" in cols and not isinstance(cols["rule"], str):
+        cols["rule"] = json.dumps(cols["rule"])
+    cols["updated_at"] = now_iso()
+    sets = ", ".join(f"{k} = ?" for k in cols)
+    with connect() as conn:
+        cur = conn.execute(
+            f"UPDATE habits SET {sets} WHERE id = ?", [*cols.values(), habit_id]
+        )
+        if cur.rowcount == 0:
+            return None
+    return get_habit(habit_id)
+
+
+def delete_habit(habit_id: str) -> bool:
+    """Forget a routine, and by cascade every tick it ever collected."""
+    with connect() as conn:
+        cur = conn.execute("DELETE FROM habits WHERE id = ?", (habit_id,))
+        return cur.rowcount > 0
+
+
+def habit_checkins(since: str | None = None) -> dict[str, list[str]]:
+    """{habit_id: [local day, ...]}, oldest first.
+
+    Every tick, not a window of them: a streak that reset because it ran off
+    the end of the heatmap would be a lie told by an implementation detail.
+    """
+    sql = "SELECT habit_id, day FROM habit_checkins"
+    params: tuple = ()
+    if since:
+        sql += " WHERE day >= ?"
+        params = (since,)
+    sql += " ORDER BY day"
+    with connect() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    out: dict[str, list[str]] = {}
+    for row in rows:
+        out.setdefault(row["habit_id"], []).append(row["day"])
+    return out
+
+
+def set_checkin(habit_id: str, day: str, done: bool) -> None:
+    """Tick or untick one day. Idempotent either way — the page can send the
+    state it wants rather than having to know the state it is in."""
+    with connect() as conn:
+        if done:
+            conn.execute(
+                "INSERT INTO habit_checkins (habit_id, day, done_at) "
+                "VALUES (?, ?, ?) ON CONFLICT(habit_id, day) DO NOTHING",
+                (habit_id, day, now_iso()),
+            )
+        else:
+            conn.execute(
+                "DELETE FROM habit_checkins WHERE habit_id = ? AND day = ?",
+                (habit_id, day),
+            )
 
 
 # ---------- spend (what the AI has cost today) ----------

@@ -207,6 +207,31 @@ API keys are never logged.
   impact/effort matrix. Everything on it is derived from the same numbers
   the list and the calendar are derived from, so the hours it quotes are the
   hours they draw. Unlike **All** it is there with a single project too.
+- **Habits** — the second tab in the strip, for the work that never finishes.
+  A **routine** is not a task and not a repeating task: it has no estimate,
+  no priority, no deadline and no place in your day's budget, because none of
+  those are things it can be. It sits in one of four parts of a life —
+  🏠 **Life**, 💊 **Health**, 🏃 **Exercise**, 🧠 **Mentality** — and asks one
+  question, which is whether you did it today. Set how often it wants doing:
+  **every day**, **on certain days of the week**, or **a number of days a
+  week** ("run three times a week" is a real habit, and pinning it to named
+  days makes it a lie). Tick the big circle and that's the whole interaction.
+  Underneath each one is **a year of squares** in the manner of GitHub's
+  contribution graph — one per day, filled on the days you did it — because a
+  list says what you meant to do and a calendar of the days you did it says
+  how it is actually going. **Click any square** to fill it in or clear it: a
+  day you forgot to tick is still a day you did it, and a square you filled
+  in by mistake that you could not clear would turn the whole calendar into
+  something you stop trusting. The streak beside it counts only the days the
+  routine actually names, so a Sunday you never claimed cannot break one, and
+  today not being ticked *yet* never breaks one either — the day isn't over,
+  and a display that tells you you've failed every morning is a display you
+  stop opening. A weekly target's streak is counted in weeks, and this week
+  is allowed to be half-finished. Next to it, the honest number that keeps a
+  long streak in proportion: what percentage of its chances it actually took
+  in the last 30 days. Routines live in no project, so opening this tab
+  leaves whichever list you were on exactly where it was, and nothing here
+  ever reaches the task list, the calendar, ▶ Focus or the day cap.
 - **Calendar** — 📅 in the header swaps the list for a calendar with **Day**,
   **Week** and **Month** views. Unlike everything else in the app it spans
   *every* project at once, because "what is due this week" is a question about
@@ -604,8 +629,11 @@ same pass and hands back the page.
 app/
   main.py       FastAPI routes + static hosting
   db.py         SQLite persistence (schema + migrations, settings, lifetime
-                XP, AI spend, project, task and series CRUD)
+                XP, AI spend, project, task, series and habit CRUD)
   logic.py      deterministic scheduling core — no AI, no I/O
+  habits.py     routines: the three frequency shapes, what a tick means, and
+                the streaks and rates that come out of them. Pure — days in,
+                numbers out, and nothing to do with the scheduler
   recurring.py  what the app does with a recurrence rule: templates, one open
                 occurrence at a time, the sweep, and the forecast the calendar
                 and the day book plan against
@@ -618,7 +646,8 @@ app/
                   app.js is the task list, repeat controls, focus mode
                   and settings; calendar.js is the day/week/month views
                   and nudging; overview.js is the Overview tab's tiles,
-                  shortlists and hand-rolled SVG charts
+                  shortlists and hand-rolled SVG charts; habits.js is the
+                  Habits tab, its editor and the year-of-squares heatmap
 tests/          pytest suite
 data/           SQLite database (created at runtime, gitignored)
 ```

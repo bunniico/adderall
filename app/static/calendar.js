@@ -364,8 +364,9 @@ function setCalendarMode(on) {
     : "See everything with a date on it, across every project";
   saveCalendarPrefs();
   // Coming back out lands on whichever tab you left — which may be the
-  // Overview, whose numbers have gone stale while it was behind the calendar.
-  if (!on) { refreshOverview(false); return; }
+  // Overview, whose numbers have gone stale while it was behind the calendar,
+  // or Habits, which only has to draw itself.
+  if (!on) { refreshOverview(false); refreshHabits(false); return; }
   if (!cal.loaded || cal.stale) loadCalendar().then(renderCalendar);
   else renderCalendar();
 }

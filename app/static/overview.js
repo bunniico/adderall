@@ -24,15 +24,17 @@ function onOverview() {
   return !cal.mode && !!state.overview;
 }
 
-/* Three panes, one of them on screen. The calendar sits over the whole strip
+/* Four panes, one of them on screen. The calendar sits over the whole strip
  * — it has its own project filter, and two project pickers that disagree with
- * each other is worse than one — while the Overview is a tab like any other,
- * so the strip stays up and the list is one click away. */
+ * each other is worse than one — while the Overview and Habits are tabs like
+ * any other, so the strip stays up and the list is one click away. */
 function syncPanes() {
   const overview = onOverview();
+  const habits = onHabits();
   $("calendar-view").hidden = !cal.mode;
   $("overview-view").hidden = !overview;
-  $("list-view").hidden = cal.mode || overview;
+  $("habits-view").hidden = !habits;
+  $("list-view").hidden = cal.mode || overview || habits;
 }
 
 async function loadOverview() {

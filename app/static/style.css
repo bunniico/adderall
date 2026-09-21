@@ -314,8 +314,14 @@ main { max-width: 1046px; margin: 0 auto; padding: 20px 24px 80px; }
 }
 /* Overview leads the strip and reads as a reading of the tabs rather than one
    of them, so it wears the same quiet mono face the All tab does. */
-.overview-tab .tab-name { font-family: var(--mono); font-size: 12.5px; letter-spacing: .04em; }
+.overview-tab .tab-name, .habits-tab .tab-name {
+  font-family: var(--mono); font-size: 12.5px; letter-spacing: .04em;
+}
 .overview-tab { margin-right: 2px; }
+/* Habits sits with them, but it holds something of its own rather than
+   reading the lists, so the gap after it is the one that separates the head
+   of the strip from the lists proper. */
+.habits-tab { margin-right: 6px; }
 
 /* Every button in the app is a physical object: it takes load when you press
    it (squashes, sinks a pixel) and springs back past its resting size when you
@@ -798,7 +804,8 @@ body.calendar-mode main { max-width: 1180px; }
    whole width back from the rail. */
 body.calendar-mode #list-view { display: none; }
 #project-tabs[hidden] { display: none; }
-#list-view[hidden], #calendar-view[hidden], #overview-view[hidden] { display: none; }
+#list-view[hidden], #calendar-view[hidden], #overview-view[hidden],
+#habits-view[hidden] { display: none; }
 
 .cal-toolbar {
   display: flex; align-items: center; justify-content: space-between;
@@ -1154,6 +1161,149 @@ body.calendar-mode #list-view { display: none; }
   font: 400 10px/1.3 var(--mono); color: var(--muted-3);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
 }
+
+/* ---- habits ----
+   The work that never finishes. Cards of the same make as the Overview's,
+   because this is the same kind of thing to look at, with one difference that
+   matters: the only saturated ink on this pane belongs to days you actually
+   did something. A missed day is drawn quietly and a run is drawn brightly,
+   because a graph that scolds you is a graph you stop opening — which is the
+   whole failure mode this app exists to avoid. */
+.habits { max-width: 1046px; margin: 0 auto; display: flex;
+  flex-direction: column; gap: 18px; }
+
+.hab-bar {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap;
+}
+.hab-bar h2 { margin: 0 0 3px; font: 600 16px/1.2 var(--sans); color: var(--text-bright); }
+/* A day with everything ticked is the one line here allowed to be bright. */
+#hab-today.is-clear { color: var(--good); }
+
+.hab-body { display: flex; flex-direction: column; gap: 20px; }
+.hab-group { display: flex; flex-direction: column; gap: 10px; }
+.hab-group-head {
+  display: flex; align-items: baseline; gap: 8px; margin: 0;
+  padding-bottom: 6px; border-bottom: 1px solid var(--border-soft);
+  font: 600 13px/1.2 var(--sans); color: var(--text-bright);
+}
+.hab-group-emoji { font-size: 14px; }
+.hab-group-note {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; font: 400 11px/1.3 var(--sans); color: var(--muted-3);
+}
+
+/* Each part of a life gets one hue, and it is used in exactly two places: the
+   strip down the side of a card, and the squares that card fills in. Colour
+   is never the only thing telling two routines apart — the group they sit
+   under is named above them. */
+.cat-life { --cat: #67d8ea; }
+.cat-health { --cat: #7fe0b0; }
+.cat-exercise { --cat: #e8c46a; }
+.cat-mentality { --cat: #a58cf0; }
+
+.hab-card {
+  border: 1px solid var(--border); border-left: 3px solid var(--cat, var(--accent));
+  border-radius: 10px; background: var(--sunken); padding: 12px 14px 13px;
+  display: flex; flex-direction: column; gap: 10px; min-width: 0;
+}
+.hab-card.is-done { background: var(--panel); }
+.hab-head-row {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+}
+
+/* The one control this tab exists for, sized like it. A checkbox you have to
+   aim at is a routine you stop ticking. */
+.hab-tick {
+  flex: none; width: 34px; height: 34px; border-radius: 50%;
+  border: 2px solid var(--border-strong); background: var(--well);
+  color: var(--on-accent); font-size: 16px; line-height: 1; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; padding: 0;
+  transition: background var(--t-fast) var(--ease-out),
+              border-color var(--t-fast) var(--ease-out),
+              transform var(--t-fast) var(--pop);
+}
+.hab-tick:hover, .hab-tick:focus-visible {
+  border-color: var(--cat, var(--accent)); transform: scale(1.06);
+}
+.hab-tick[aria-pressed="true"] {
+  background: var(--cat, var(--accent)); border-color: var(--cat, var(--accent));
+  font-weight: 700;
+}
+/* A day this routine never asked for. Still tickable — you did it, and the
+   square should say so — but it does not ask to be. */
+.hab-tick.is-rest { border-style: dashed; }
+
+.hab-title {
+  flex: 1; min-width: 140px; display: flex; flex-direction: column; gap: 2px;
+  text-align: left; padding: 0; background: none; border: none; cursor: pointer;
+}
+.hab-name { font: 500 14px/1.3 var(--sans); color: var(--text-bright); }
+.hab-title:hover .hab-name { color: var(--accent); }
+.hab-rule { font: 400 11px/1.3 var(--mono); color: var(--muted-3); }
+
+.hab-stats { display: flex; gap: 14px; flex-wrap: wrap; }
+.hab-stat { display: flex; flex-direction: column; gap: 1px; min-width: 62px; }
+.hab-stat b { font: 600 13px/1.2 var(--sans); color: var(--text); }
+.hab-stat span { font: 400 10px/1.2 var(--mono); color: var(--muted-3); }
+.hab-stat.is-hot b { color: var(--cat, var(--accent)); }
+
+/* ---- the year of squares ----
+   Weeks as columns, days as rows — the shape everyone can already read. Every
+   square is a button, because a day you forgot to tick is one you can still
+   tick, and a square you filled in by mistake that you cannot clear turns the
+   whole calendar into something you stop trusting. */
+.hm-wrap { display: flex; flex-direction: column; gap: 6px; }
+/* A year does not fit on a phone and nothing good comes of squashing it, so
+   it scrolls — and lands on today, which is the end anyone wants first. */
+.hm-scroll { overflow-x: auto; overflow-y: hidden; padding-bottom: 2px; }
+.hm-months, .hm-grid {
+  display: grid; grid-auto-flow: column; grid-auto-columns: 11px; gap: 3px;
+  min-width: min-content;
+}
+.hm-months { margin-bottom: 3px; }
+.hm-month {
+  font: 400 9.5px/1 var(--mono); color: var(--muted-3);
+  grid-row: 1; white-space: nowrap;
+}
+.hm-grid { grid-template-rows: repeat(7, 11px); }
+.hm-cell {
+  width: 11px; height: 11px; border-radius: 2px; padding: 0;
+  border: 1px solid transparent; background: var(--well); cursor: pointer;
+}
+/* A day it never asked for, and a day it asked for and did not get. Both are
+   quiet; the second is only slightly less so, because a gap is information
+   and not an accusation. */
+.hm-off { background: rgba(120, 170, 220, .06); }
+.hm-missed { background: rgba(120, 170, 220, .14); }
+.hm-done { background: var(--cat, var(--accent)); }
+/* Days that have not happened yet hold their place so today doesn't jump up
+   the grid as the week fills in. */
+.hm-future { background: none; border-color: transparent; cursor: default; }
+.hm-today { box-shadow: 0 0 0 1px var(--text); }
+.hm-cell:hover:not(.hm-future) { border-color: var(--text-bright); }
+.hm-key { display: flex; align-items: center; gap: 3px; }
+.hm-key-label { font: 400 9.5px/1 var(--mono); color: var(--muted-3); margin: 0 4px; }
+.hm-key .hm-cell { cursor: default; }
+
+/* The category picker in the editor: the same four hues, named. */
+.cat-picker { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0 0; }
+.cat-chip {
+  display: flex; align-items: center; gap: 5px; padding: 6px 11px;
+  font-size: 13px; background: var(--panel-2); color: var(--muted);
+  border: 1px solid var(--border); border-radius: 999px; cursor: pointer;
+}
+.cat-chip:hover, .cat-chip:focus-visible {
+  color: var(--text); border-color: var(--cat, var(--accent));
+}
+.cat-chip.on {
+  background: var(--cat, var(--accent)); border-color: var(--cat, var(--accent));
+  color: var(--on-accent); font-weight: 600;
+}
+.cat-chip-emoji { font-size: 13px; }
+
+#hab-empty button { display: block; margin: 14px auto 0; }
+#hab-empty[hidden], #hab-legend[hidden] { display: none; }
 
 /* "Starts …" on a task: the same weight as the deadline badge it sits beside,
    in a calmer colour — it is information about later, not a thing on fire. */
