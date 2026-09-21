@@ -1266,6 +1266,47 @@ def _freeze_manual_order() -> None:
     db.update_settings({"manual_order": True, "sort_field": "manual"})
 
 
+def _sorted_child_position(task: dict, parent_id: str,
+                           project_id: str) -> int | None:
+    """Where the sort in force puts `task` among its new parent's subtasks.
+
+    Nesting one task inside another says where the work belongs, not what
+    order the list is read in, so — unlike every other move — it leaves the
+    sorter alone and asks it for the slot instead: the task lands ahead of the
+    first sibling the sort puts it in front of, and at the end if it outranks
+    none of them. Steps are drawn in the order they are stored, so this is one
+    placement rather than a standing rule, and only the ones on screen are
+    compared against: a finished step is not something a new one can be "above".
+
+    A hand-arranged list has no sort to ask, so there the drop appends as it
+    always did (None).
+    """
+    settings = db.get_settings()
+    if logic.sort_mode(settings)[0] == "manual":
+        return None
+    siblings = db.sibling_ids(parent_id, project_id, exclude=task["id"])
+    if not siblings:
+        return None
+
+    ratios = db.completion_ratios()
+    projects = db.list_projects()
+    by_project: dict[str, list[dict]] = {p["id"]: [] for p in projects}
+    for t in db.list_tasks():
+        by_project.setdefault(t["project_id"], []).append(t)
+    # Read the same way the page reads it — one shared day book over every
+    # project — so the slot matches the order that was on screen at the drop.
+    derived = _derive_all(projects, by_project, settings, ratios)[project_id]
+    status = {t["id"]: t["status"] for t in by_project.get(project_id, [])}
+
+    key = derived[task["id"]]["list_sort_key"]
+    for i, sibling_id in enumerate(siblings):
+        if status.get(sibling_id) not in logic.ACTIVE_STATUSES:
+            continue
+        if key < derived[sibling_id]["list_sort_key"]:
+            return i
+    return None
+
+
 def _normalize_sort(changes: dict) -> None:
     """Keep the sorter and the manual-order flag telling the same story.
 
@@ -1485,7 +1526,7 @@ def delete_task(task_id: str):
 
 @app.post("/api/tasks/{task_id}/move")
 def move_task(task_id: str, body: TaskMove):
-    """Reorder or renest one task. Turns manual ordering on the first time.
+    """Reorder or renest one task. Hand-placing one turns manual ordering on.
 
     A move stays inside one project — dragging is for arranging a list, not
     for crossing tabs; `POST /api/tasks/{id}/project` does that.
@@ -1514,15 +1555,22 @@ def move_task(task_id: str, body: TaskMove):
         if parent_id in db.descendant_ids(task_id):
             raise HTTPException(400, "A task cannot be moved inside its own subtasks")
 
-    _freeze_manual_order()
+    # Nesting is not arranging. Dropping one task inside another says the work
+    # belongs in there, which is true however the list is being read, so it
+    # leaves the sorter where it is and lets the sort choose the slot; putting
+    # a task between two others is a hand-placement, and that is what takes
+    # the list off whatever it was sorted by.
+    nesting = target is not None and body.mode == "into"
+    if not nesting:
+        _freeze_manual_order()
 
     position = body.position
-    if target is not None and body.mode != "into":
+    if target is not None and not nesting:
         siblings = db.sibling_ids(parent_id, project_id, exclude=task_id)
         idx = siblings.index(target["id"])
         position = idx if body.mode == "before" else idx + 1
-    elif target is not None:
-        position = None  # dropped onto a task: land at the end of its subtasks
+    elif nesting:
+        position = _sorted_child_position(task, parent_id, project_id)
 
     db.move_task(task_id, parent_id, project_id, position)
     _reveal(parent_id)

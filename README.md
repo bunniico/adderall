@@ -303,13 +303,17 @@ API keys are never logged.
   nest inside it, or onto empty list space to pull it back out to the top
   level. Works with a mouse, on a touchscreen, and from the keyboard (focus a
   handle and use ↑ ↓ to move, → to nest under the task above, ← to pop out).
-  The first move switches the list to **manual order**: it then stays exactly
-  as you arranged it — including which task is "next up" — instead of being
-  re-sorted. Whatever order you were looking at when you dragged is the order
-  it freezes, so a list sorted by deadline keeps its deadline order and only
-  the task you moved moves. Picking another **Sort** (or the switch in
-  ⚙ Settings, which is the same switch) turns it back off, and everything else
-  (estimates, deadlines, rollups, alarms) carries on as before either way.
+  The first move that places a task between others switches the list to
+  **manual order**: it then stays exactly as you arranged it — including which
+  task is "next up" — instead of being re-sorted. Whatever order you were
+  looking at when you dragged is the order it freezes, so a list sorted by
+  deadline keeps its deadline order and only the task you moved moves. Nesting
+  is the exception: which task something belongs inside is true however the
+  list is being read, so dropping one task into another leaves the sort alone
+  and uses it to place the newcomer among the steps already there. Picking
+  another **Sort** (or the switch in ⚙ Settings, which is the same switch)
+  turns manual order back off, and everything else (estimates, deadlines,
+  rollups, alarms) carries on as before either way.
 - **Estimator** — every task gets a time estimate (AI-seeded, always
   overridable), and every estimate gets an automatic **time tax**: a 25–50%
   buffer (default 30%), because the planning fallacy means raw estimates are
