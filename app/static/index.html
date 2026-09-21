@@ -185,6 +185,39 @@
     </div>
   </section>
 
+  <!-- Habits: the work that never finishes. Not a list of tasks and not a
+       lens over one — routines live in no project, which is why opening this
+       leaves whichever list you were on exactly where it was. Each routine
+       carries its own year of squares: a list says what you meant to do, a
+       calendar of the days you did it says how it is actually going. -->
+  <section id="habits-view" class="habits" hidden aria-label="Habits">
+    <div class="hab-bar">
+      <div>
+        <h2>Routines</h2>
+        <p id="hab-today" class="ov-sub"></p>
+      </div>
+      <button id="hab-add" class="accent">＋ New routine</button>
+    </div>
+
+    <div id="hab-body" class="hab-body"></div>
+
+    <p id="hab-empty" class="empty-hint" hidden>
+      Nothing you keep yet. A routine is something that comes back — meds,
+      a walk, ten minutes of journalling — and it is never “done”, so it
+      stays off your task list and out of your day's budget entirely.
+      <button id="hab-empty-add" class="accent">＋ Add your first routine</button>
+    </p>
+
+    <p id="hab-legend" class="cal-legend muted" hidden>
+      One square a day, a year at a time. Filled is a day you did it; a faint
+      square is a day it was owed and missed; an empty one is a day it never
+      asked for. Click any square to fill it in or clear it — a day you forgot
+      to tick is still a day you did it, and a square you filled in by mistake
+      should not be permanent. A streak counts the days the routine actually
+      names, so a Sunday you never claimed can't break one.
+    </p>
+  </section>
+
   <!-- Calendar: the one view that ignores the open tab, because "what is due
        this week" is a question about everything, not about one list. -->
   <section id="calendar-view" class="calendar" hidden aria-label="Calendar">
@@ -398,6 +431,53 @@
     </div>
     <div class="modal-actions">
       <button type="button" id="d-save" class="accent wide">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- New / edit routine. Three questions and no more: what it is, which part
+     of your life it belongs to, and how often. A routine has no estimate, no
+     priority and no deadline, because none of those are things it can be —
+     and every field this dialog doesn't have is a decision nobody has to
+     make at the moment they are trying to start a habit. -->
+<dialog id="modal-habit">
+  <form method="dialog" class="modal-body" id="habit-form">
+    <div class="modal-head"><h2 id="h-heading">New routine</h2>
+      <button type="button" class="ghost close" data-close>✕</button></div>
+
+    <label>What is it?
+      <input id="h-name" type="text" maxlength="120" required
+        placeholder="Take my meds">
+    </label>
+
+    <label>Which part of your life?
+      <span id="h-categories" class="cat-picker" role="group"
+        aria-label="Category"></span>
+    </label>
+
+    <fieldset class="s-group">
+      <legend>🔁 How often</legend>
+      <label>Frequency
+        <select id="h-freq">
+          <option value="daily">Every day</option>
+          <option value="weekdays">On certain days of the week</option>
+          <option value="weekly">A number of days a week</option>
+        </select>
+      </label>
+
+      <div id="h-weekdays" class="weekday-picker" hidden role="group"
+        aria-label="Which days of the week"></div>
+
+      <label id="h-times-row" hidden>How many days a week
+        <input id="h-times" type="number" min="1" max="6" value="3">
+      </label>
+
+      <p id="h-freq-note" class="muted"></p>
+    </fieldset>
+
+    <div class="modal-actions">
+      <button type="button" id="h-delete" class="bad" hidden>🗑 Delete</button>
+      <button type="button" id="h-save" class="accent wide">Save</button>
     </div>
   </form>
 </dialog>
@@ -674,11 +754,12 @@
 <div id="celebration" class="celebration" hidden></div>
 <div id="toast" class="toast" hidden></div>
 
-<!-- calendar.js and overview.js first: app.js boots as it is parsed, and that
-     boot may open straight into either of them. -->
+<!-- calendar.js, overview.js and habits.js first: app.js boots as it is
+     parsed, and that boot may open straight into any of them. -->
 <script src="motion.js"></script>
 <script src="calendar.js"></script>
 <script src="overview.js"></script>
+<script src="habits.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

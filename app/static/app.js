@@ -8,7 +8,8 @@
 const $ = (id) => document.getElementById(id);
 
 let state = { tasks: [], next_task_id: null, projects: [], active_project_id: null,
-              all_tasks: false, overview: false, alarm_tasks: [], xp: null };
+              all_tasks: false, overview: false, habits: false,
+              alarm_tasks: [], xp: null };
 let settings = null;
 let detailTaskId = null;
 let renamingProject = null;   // project whose tab is currently an input box
@@ -63,6 +64,9 @@ function applyState(newState) {
   // Overview counts those same tabs, so it is refreshed on the same terms.
   refreshCalendar();
   refreshOverview();
+  // Habits are the exception: nothing a task does can change a routine, so
+  // arriving on the tab is the only thing that has to fetch anything.
+  refreshHabits(false);
 }
 
 function flatten(tasks) {
@@ -108,21 +112,23 @@ function rootAncestor(task) {
  * Everything else on the page (adding, braindumping, focusing, ordering)
  * acts on the open tab and nothing else.
  *
- * Except the two lens tabs at the head of the strip. **All** is every
- * project's tasks read as one list; **Overview** is what those lists add up
- * to, in numbers and charts. Both are ways of reading the tabs rather than
- * tabs of their own: they hold nothing, so there is nothing there to rename,
- * delete, drag or add to, and the project underneath stays the one a new task
- * lands in. */
+ * Except the three tabs at the head of the strip. **All** is every project's
+ * tasks read as one list; **Overview** is what those lists add up to, in
+ * numbers and charts; **Habits** is the work that never finishes, which lives
+ * in no list at all. None of them is a project: there is nothing there to
+ * rename, delete, drag or add a task to, and the project underneath stays the
+ * one a new task lands in. */
 
 const ALL_TASKS_ID = "all";
 const OVERVIEW_ID = "overview";
+const HABITS_ID = "habits";
 
 function renderTabs() {
   const strip = $("tab-strip");
   strip.replaceChildren();
   const projects = state.projects || [];
   strip.appendChild(overviewTab());
+  strip.appendChild(habitsTab());
   // A second list is what makes "all of them" a thing worth asking for.
   if (projects.length > 1) strip.appendChild(allTab(projects));
   for (const project of projects) {
@@ -211,6 +217,20 @@ function overviewTab() {
   });
 }
 
+/* Habits. The one tab in the strip that holds something of its own rather
+ * than reading the lists — routines belong to no project — but it behaves
+ * like the lenses beside it for the same reason they do: there is nothing in
+ * it to rename, drag or add a task to, and the list you were on is still the
+ * list you come back to. */
+function habitsTab() {
+  return lensTab({
+    id: HABITS_ID, label: "Habits", cls: "habits-tab",
+    title: "The routines you keep — life, health, exercise and mentality — " +
+           "and a year of squares saying how it is going",
+    active: !!state.habits,
+  });
+}
+
 /* The compiled tab. Not the lit one while the Overview is up: the list
  * underneath is still the compiled one, but it is not where you are. */
 function allTab(projects) {
@@ -218,16 +238,17 @@ function allTab(projects) {
   return lensTab({
     id: ALL_TASKS_ID, label: "All", cls: "all-tab",
     title: "Every project's tasks, compiled into one list",
-    active: !!state.all_tasks && !state.overview,
+    active: !!state.all_tasks && !state.overview && !state.habits,
     count: open,
     countTitle: `${open} unfinished task${open === 1 ? "" : "s"} in total`,
   });
 }
 
 function projectTab(project) {
-  // While the compiled list or the Overview is up, no project tab is the one
-  // you are on — the list underneath is still remembered, but you are not on it.
-  const active = !state.all_tasks && !state.overview &&
+  // While the compiled list, the Overview or Habits is up, no project tab is
+  // the one you are on — the list underneath is still remembered, but you are
+  // not on it.
+  const active = !state.all_tasks && !state.overview && !state.habits &&
     project.id === state.active_project_id;
   // A lone tab has nothing to be reordered against, so it stays a plain tab.
   const reorderable = (state.projects || []).length > 1;
@@ -3388,6 +3409,7 @@ function wire() {
   });
 
   wireOverview();
+  wireHabits();
 
   // Ask for notification permission on first interaction (needed for alarms).
   document.body.addEventListener("click", () => {
