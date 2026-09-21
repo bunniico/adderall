@@ -283,6 +283,10 @@ main { max-width: 1046px; margin: 0 auto; padding: 20px 24px 80px; }
   background: var(--panel-2); color: var(--muted);
 }
 .tab.active .tab-count { background: var(--accent); color: var(--on-accent); font-weight: 600; }
+/* The All tab reads the other tabs rather than sitting beside them as an
+   equal, so it keeps a hairline of its own between itself and the strip. */
+.all-tab { margin-right: 6px; }
+.all-tab .tab-name { font-family: var(--mono); font-size: 12.5px; letter-spacing: .04em; }
 .tab-close {
   background: none; border: none; border-radius: 0;
   padding: 8px 8px 8px 0; color: var(--muted); font-size: 12px;
@@ -373,6 +377,8 @@ input[type="checkbox"], input[type="radio"] { width: auto; accent-color: var(--a
 textarea { resize: vertical; }
 
 #add-form { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; }
+/* A laid-out box outranks the hidden attribute, and the All tab needs it gone. */
+#add-form[hidden] { display: none; }
 #add-form input[type="text"] { flex: 1; min-width: 0; padding: 11px 13px; font-size: 13.5px; }
 #add-form button[type="submit"] { flex: none; padding: 11px 22px; font-size: 13.5px; }
 .granularity { display: flex; align-items: center; gap: 4px; width: 120px; flex: none; }
@@ -414,6 +420,14 @@ textarea { resize: vertical; }
   transition: color var(--t-fast) var(--ease-out);
 }
 .task .task .task-title { font-size: 13.5px; color: #e2eefb; }
+/* Which list a task came from, on the All tab only. Quiet on purpose: it is
+   there to be read off when you wonder, not to compete with the title. */
+.project-chip {
+  flex: none; max-width: 120px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 500 10.5px/1 var(--mono); padding: 4px 8px; border-radius: 11px;
+  background: var(--panel-2); color: var(--muted);
+}
 .task-title:hover { color: var(--accent); }
 .task.done-task .task-title { text-decoration: line-through; color: var(--muted-2); }
 .task-badges {
@@ -561,6 +575,8 @@ textarea { resize: vertical; }
 }
 .drag-handle:hover, .drag-handle:focus-visible { color: var(--accent); background: var(--panel-2); }
 .drag-handle:active { cursor: grabbing; }
+/* The same column, kept open on the All tab where there is nothing to grab. */
+.drag-spacer { flex: none; width: 17px; }
 .task.dragging { opacity: .45; }
 /* Where the drop lands: a line above/below for "next to this one", a full
  * outline for "inside this one". Green, not accent — the accent border
@@ -584,6 +600,10 @@ textarea { resize: vertical; }
 .subtask-composer input { font-size: 13.5px; }
 .subtask-composer input { flex: 1; padding: 6px 10px; }
 .list-hint { color: var(--muted); font-size: 12px; text-align: center; margin: 14px 0 0; }
+/* Where the add box would be on the All tab, so the gap explains itself. */
+.all-hint {
+  color: var(--muted); font-size: 12px; text-align: center; margin: 0 0 14px;
+}
 
 /* ---- subtree time progress (tasks that contain subtasks) ---- */
 .progress-wrap { padding: 0 10px 10px 42px; }

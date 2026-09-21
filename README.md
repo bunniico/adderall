@@ -180,6 +180,18 @@ API keys are never logged.
   one tab over is exactly what this app exists to prevent, so those fire
   wherever you are and say which project they came from. Existing installs
   upgrade with everything in a first tab called "Tasks".
+- **All** — the tab at the head of the strip once there is more than one
+  project: every list compiled into one, read by urgency, each task wearing
+  the name of the list it came from. Everything you do to a task works from
+  there — tick it off, open it, break it down, ▶ focus it, delete it — and
+  **next up** and ▶ Focus pick across every project while it is open, so the
+  task wearing the badge is the task Focus hands you. It holds nothing
+  itself, so the add box and dragging stand down (a compiled list has nowhere
+  to put a new task and no order of its own to drag one into) and the sorter
+  drops **Manual**, since where you dragged something in one tab says nothing
+  about where it sits among another tab's. The tab underneath stays the one
+  adding and braindumping act on, and it is where you go back to to arrange
+  anything.
 - **Calendar** — 📅 in the header swaps the list for a calendar with **Day**,
   **Week** and **Month** views. Unlike everything else in the app it spans
   *every* project at once, because "what is due this week" is a question about
