@@ -61,6 +61,10 @@ DEFAULT_SETTINGS = {
                                # deadline | subtasks | created
     "sort_dir": "desc",        # asc | desc, for the one-field sorts
     "active_project": "",      # id of the project tab currently open
+    "all_tasks_view": False,   # the All tab: every project's tasks read as one
+                               # list. A lens over the tabs rather than a tab —
+                               # `active_project` stays the list adding,
+                               # braindumping and focusing still act on
     "daily_budget_usd": 0.0,   # approximate dollars of Claude API spend a day
                                # is allowed to cost before the app starts
                                # answering with cheaper models. 0 = no budget,

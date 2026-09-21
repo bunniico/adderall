@@ -250,6 +250,37 @@ def _tree(tasks: list[dict], derived: dict[str, dict],
     return roots
 
 
+# The All tab: every project's tasks compiled into one list. It is a lens over
+# the tabs rather than a place a task can live, so it has no row in the
+# database — the page asks for it by this name, and the tab you were actually
+# working in stays remembered underneath it.
+ALL_TASKS_ID = "all"
+
+
+def _all_tasks_view(settings: dict, projects: list[dict]) -> bool:
+    """Is the All tab the one on screen?
+
+    Never with a single project: "all of them" is that list, and a tab showing
+    exactly what the tab beside it shows is noise. Which also means the lens
+    puts itself away when the second-to-last project is deleted, without
+    anything having to remember to turn it off.
+    """
+    return bool(settings.get("all_tasks_view")) and len(projects) > 1
+
+
+def _list_settings(settings: dict, all_view: bool) -> dict:
+    """The sorter as the list on screen reads it.
+
+    Hand-arranged order belongs to one list: where you dragged a task in one
+    tab says nothing about where it sits among another tab's. So the All tab
+    is read by urgency however the open tab was last arranged, and the page
+    hides the Manual option for as long as it is on.
+    """
+    if not all_view:
+        return settings
+    return {**settings, "sort_field": "smart", "manual_order": False}
+
+
 def _active_project_id_raw() -> str:
     """Whatever id is stored, without resolving it against existing projects."""
     return (db.get_settings().get("active_project") or "").strip()
@@ -385,29 +416,38 @@ def _write_plan(projects: list[dict], by_project: dict[str, list[dict]],
 
 
 def _state(project_id: str | None = None, xp_gained: int = 0) -> dict:
-    """Everything the page renders: the open tab's task tree, the tab strip,
-    the cross-project deadline list the alarms run off, and where the XP
-    total stands.
+    """Everything the page renders: the task tree the open tab is showing, the
+    tab strip, the cross-project deadline list the alarms run off, and where
+    the XP total stands.
 
     Only the active project's tasks are sent as a tree — a tab you are not
     looking at is not on screen — but deadlines are gathered from every
     project, because a transition alarm you miss because its task lives in
     another tab is exactly the failure this app exists to prevent.
+
+    Unless the All tab is the one open, in which case the tree *is* every
+    project's tasks, each root carrying the name of the list it came from. It
+    is still one payload and still one round trip: which tab is on screen
+    decides what the tree holds, not how many calls it takes to get it.
     """
     settings = db.get_settings()
     ratios = db.completion_ratios()
     projects = db.list_projects() or [db.ensure_project()]
     active_id = project_id or _active_project_id(projects)
+    all_view = _all_tasks_view(settings, projects)
 
     by_project: dict[str, list[dict]] = {p["id"]: [] for p in projects}
     for t in db.list_tasks():
         by_project.setdefault(t["project_id"], []).append(t)
 
     counts = db.open_task_counts()
-    all_derived = _derive_all(projects, by_project, settings, ratios)
+    all_derived = _derive_all(projects, by_project,
+                              _list_settings(settings, all_view), ratios)
     alarm_tasks: list[dict] = []
     tree: list[dict] = []
     next_task_id = None
+    compiled: list[dict] = []
+    compiled_derived: dict[str, dict] = {}
     for project in projects:
         tasks = by_project.get(project["id"], [])
         derived = all_derived[project["id"]]
@@ -418,16 +458,29 @@ def _state(project_id: str | None = None, xp_gained: int = 0) -> dict:
                     "id": t["id"], "title": t["title"], "deadline": d["deadline"],
                     "project_id": project["id"], "project_name": project["name"],
                 })
-        if project["id"] == active_id:
+        if all_view:
+            # Which list a task came from is the one thing a compiled list
+            # loses, so every task carries it home.
+            compiled.extend({**t, "project_name": project["name"]} for t in tasks)
+            compiled_derived.update(derived)
+        elif project["id"] == active_id:
             tree = _tree(tasks, derived, recurring.by_task(tasks, settings))
             nxt = logic.next_task(tasks, derived)
             next_task_id = nxt["id"] if nxt else None
+    if all_view:
+        tree = _tree(compiled, compiled_derived,
+                     recurring.by_task(compiled, settings))
+        nxt = logic.next_task(compiled, compiled_derived)
+        next_task_id = nxt["id"] if nxt else None
 
     return {
         "tasks": tree,
         "next_task_id": next_task_id,
         "projects": [{**p, "open_tasks": counts.get(p["id"], 0)} for p in projects],
         "active_project_id": active_id,
+        # Which tab is lit. The active project stays whatever it was, because
+        # the All tab is a way of reading the lists, not a list to add to.
+        "all_tasks": all_view,
         "alarm_tasks": alarm_tasks,
         # Levels ride along with every state read so a reload never shows a
         # stale bar. `gained` is only ever non-zero on the reply to the call
@@ -911,7 +964,7 @@ def create_project(body: ProjectCreate):
     """Add a tab and switch to it — a new project is always one you want to
     start filling in immediately."""
     project = db.create_project(body.name.strip() or "New project")
-    db.update_settings({"active_project": project["id"]})
+    db.update_settings({"active_project": project["id"], "all_tasks_view": False})
     return _state(project["id"])
 
 
@@ -963,8 +1016,14 @@ def move_project(project_id: str, body: ProjectMove):
 
 @app.post("/api/projects/{project_id}/activate")
 def activate_project(project_id: str):
+    """Switch tabs. `all` is the compiled list rather than a project, so it is
+    turned on here instead of remembered as the open one: the tab underneath
+    stays the list that adding, braindumping and a new task act on."""
+    if project_id == ALL_TASKS_ID:
+        db.update_settings({"all_tasks_view": True})
+        return _state()
     _require_project(project_id)
-    db.update_settings({"active_project": project_id})
+    db.update_settings({"active_project": project_id, "all_tasks_view": False})
     return _state(project_id)
 
 
@@ -1330,10 +1389,16 @@ def compile_braindump(body: CompileRequest):
 
 @app.get("/api/next")
 def get_next():
-    project_id = _active_project_id(db.list_projects() or [db.ensure_project()])
-    tasks = db.list_tasks(project_id)
+    """The one task to do next, picked from whatever list is on screen — the
+    open tab's, or every project's while the All tab is the one open, so the
+    task wearing the "next up" badge is the task this hands back."""
+    projects = db.list_projects() or [db.ensure_project()]
     settings = db.get_settings()
-    derived = logic.compute(tasks, settings, db.completion_ratios())
+    all_view = _all_tasks_view(settings, projects)
+    project_id = _active_project_id(projects)
+    tasks = db.list_tasks(None if all_view else project_id)
+    derived = logic.compute(tasks, _list_settings(settings, all_view),
+                            db.completion_ratios())
     nxt = logic.next_task(tasks, derived)
     if not nxt:
         return {"task": None}
@@ -1345,21 +1410,25 @@ def get_focus(root: str | None = None):
     """The ordered walk Taskmaster follows through a task tree.
 
     `root` scopes the session to one task's subtree; without it the most
-    urgent tree in the open tab is chosen. The queue is depth-first —
-    subtasks before the task that contains them — so a session drills down
-    to the smallest first step and works its way back up.
+    urgent tree in the open tab is chosen — or in any tab at all, when the
+    open tab is the compiled All list. The queue is depth-first — subtasks
+    before the task that contains them — so a session drills down to the
+    smallest first step and works its way back up.
 
     A named root keeps the session in *its* project, whichever tab is open:
     ducking out to another project to jot something down must not hijack a
     running timer onto a different task.
     """
-    if root:
-        project_id = _require_task(root)["project_id"]
-    else:
-        project_id = _active_project_id(db.list_projects() or [db.ensure_project()])
-    tasks = db.list_tasks(project_id)
+    projects = db.list_projects() or [db.ensure_project()]
     settings = db.get_settings()
-    derived = logic.compute(tasks, settings, db.completion_ratios())
+    # A named root brings its own project, so the lens only decides anything
+    # when the session is being chosen rather than resumed.
+    lens = _all_tasks_view(settings, projects) and not root
+    project_id = (_require_task(root)["project_id"] if root
+                  else _active_project_id(projects))
+    tasks = db.list_tasks(None if lens else project_id)
+    derived = logic.compute(tasks, _list_settings(settings, lens),
+                            db.completion_ratios())
     root_id = root or logic.focus_root_id(tasks, derived)
     if not root_id:
         return {"root_id": None, "root_title": None, "project_id": project_id,
@@ -1367,6 +1436,10 @@ def get_focus(root: str | None = None):
     by_id = {t["id"]: t for t in tasks}
     if root_id not in by_id:
         raise HTTPException(404, "Task not found")
+    if lens:
+        # The session belongs to the project the chosen tree lives in, not to
+        # whichever tab the All list was opened from.
+        project_id = by_id[root_id]["project_id"]
     queue = [
         {**t, **derived[t["id"]], "path": logic.ancestor_titles(tasks, t)}
         for t in logic.focus_queue(tasks, root_id)

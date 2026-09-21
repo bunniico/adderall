@@ -963,6 +963,121 @@ def test_next_task_ignores_other_projects(client):
     assert state["next_task_id"] == find(state, "work task")["id"]
 
 
+# ---------- the All tab ----------
+# One list with every project's tasks in it. A lens over the tabs, not a tab:
+# the project underneath stays the one a new task lands in.
+
+
+def all_tasks(client):
+    res = client.post("/api/projects/all/activate")
+    assert res.status_code == 200, res.text
+    return res.json()
+
+
+def test_all_tasks_compiles_every_project(client):
+    create(client, title="home task")
+    new_project(client, "work")
+    create(client, title="work task")
+
+    state = all_tasks(client)
+    assert state["all_tasks"] is True
+    assert {t["title"] for t in state["tasks"]} == {"home task", "work task"}
+    # Each task says which list it came from, which is the one thing a
+    # compiled list would otherwise lose.
+    assert {t["project_name"] for t in state["tasks"]} == {"Tasks", "work"}
+
+
+def test_all_tasks_keeps_subtasks_under_their_parent(client):
+    parent = find(create(client, title="clean kitchen"), "clean kitchen")
+    client.post(f"/api/tasks/{parent['id']}/breakdown", json={})
+    new_project(client, "work")
+    create(client, title="work task")
+
+    state = all_tasks(client)
+    assert {t["title"] for t in state["tasks"]} == {"clean kitchen", "work task"}
+    assert [s["title"] for s in find(state, "clean kitchen")["subtasks"]] == \
+        ["step 1", "step 2", "step 3"]
+
+
+def test_all_tasks_survives_a_restart_and_switches_back_off(client):
+    home = client.get("/api/state").json()["active_project_id"]
+    new_project(client, "work")
+    all_tasks(client)
+    assert client.get("/api/state").json()["all_tasks"] is True
+
+    state = client.post(f"/api/projects/{home}/activate").json()
+    assert state["all_tasks"] is False
+    assert state["active_project_id"] == home
+
+
+def test_all_tasks_leaves_the_open_tab_underneath_it(client):
+    new_project(client, "work")
+    work = client.get("/api/state").json()["active_project_id"]
+    all_tasks(client)
+
+    # Adding still goes to the tab you were actually working in — the
+    # compiled list is somewhere to read, not somewhere to put things.
+    state = create(client, title="work task")
+    assert state["active_project_id"] == work
+    assert find(state, "work task")["project_id"] == work
+
+
+def test_a_new_project_takes_you_out_of_the_all_tab(client):
+    new_project(client, "work")
+    all_tasks(client)
+    state = new_project(client, "errands")
+    assert state["all_tasks"] is False
+    assert state["tasks"] == []
+
+
+def test_all_tasks_is_off_with_a_single_project(client):
+    """"All of them" is that list, so the lens puts itself away rather than
+    leaving a tab that duplicates the one beside it."""
+    create(client, title="home task")
+    new_project(client, "work")
+    work = client.get("/api/state").json()["active_project_id"]
+    create(client, title="work task")
+    assert {t["title"] for t in all_tasks(client)["tasks"]} == \
+        {"home task", "work task"}
+
+    state = client.delete(f"/api/projects/{work}").json()
+    assert len(state["projects"]) == 1
+    assert state["all_tasks"] is False
+    assert [t["title"] for t in state["tasks"]] == ["home task"]
+
+
+def test_all_tasks_picks_next_up_from_every_project(client):
+    soon = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    home = find(create(client, title="home task", deadline=soon), "home task")
+    new_project(client, "work")
+    create(client, title="work task",
+           deadline=(datetime.now(timezone.utc) + timedelta(days=9)).isoformat())
+
+    state = all_tasks(client)
+    assert state["next_task_id"] == home["id"]
+    # ...and ▶ Focus hands back the task wearing the badge, rather than the
+    # most urgent one in whichever tab happens to be underneath.
+    assert client.get("/api/next").json()["task"]["id"] == home["id"]
+    focus = client.get("/api/focus").json()
+    assert focus["root_id"] == home["id"]
+    assert focus["project_id"] == home["project_id"]
+
+
+def test_all_tasks_is_read_by_urgency_not_by_hand(client):
+    """Manual order belongs to one list: where you dragged a task in one tab
+    says nothing about where it sits among another tab's."""
+    soon = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    create(client, title="later", deadline=(
+        datetime.now(timezone.utc) + timedelta(days=9)).isoformat())
+    urgent = find(create(client, title="urgent", deadline=soon), "urgent")
+    client.put("/api/settings", json={"sort_field": "manual"})
+    new_project(client, "work")
+
+    state = all_tasks(client)
+    order = sorted(state["tasks"], key=lambda t: t["list_sort_key"])
+    assert order[0]["id"] == urgent["id"]
+
+
 def test_pre_projects_database_is_migrated(tmp_path, monkeypatch):
     """An existing install upgrades in place: its tasks become the first tab."""
     import sqlite3

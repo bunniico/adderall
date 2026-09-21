@@ -8,7 +8,7 @@
 const $ = (id) => document.getElementById(id);
 
 let state = { tasks: [], next_task_id: null, projects: [], active_project_id: null,
-              alarm_tasks: [], xp: null };
+              all_tasks: false, alarm_tasks: [], xp: null };
 let settings = null;
 let detailTaskId = null;
 let renamingProject = null;   // project whose tab is currently an input box
@@ -101,12 +101,21 @@ function rootAncestor(task) {
  * remembers which tab you are on, so a reload — or the same app opened on
  * your phone — comes back to the project you were actually working in.
  * Everything else on the page (adding, braindumping, focusing, ordering)
- * acts on the open tab and nothing else. */
+ * acts on the open tab and nothing else.
+ *
+ * Except the All tab at the head of the strip, which is every project's tasks
+ * read as one list. It is a lens over the tabs rather than a tab of its own:
+ * it holds nothing, so there is nothing there to rename, delete, drag or add
+ * to, and the project underneath stays the one a new task lands in. */
+
+const ALL_TASKS_ID = "all";
 
 function renderTabs() {
   const strip = $("tab-strip");
   strip.replaceChildren();
   const projects = state.projects || [];
+  // A second list is what makes "all of them" a thing worth asking for.
+  if (projects.length > 1) strip.appendChild(allTab(projects));
   for (const project of projects) {
     strip.appendChild(
       renamingProject === project.id ? renameTab(project) : projectTab(project));
@@ -137,8 +146,52 @@ function renderTabs() {
     ?.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
+/* The compiled tab. No id of its own in the strip's dataset, deliberately:
+ * that is what marks a tab as somewhere another tab can be dropped, and
+ * nothing can be dropped into a list that holds nothing. */
+function allTab(projects) {
+  const active = !!state.all_tasks;
+  const open = projects.reduce((n, p) => n + (p.open_tasks || 0), 0);
+  const tab = document.createElement("div");
+  tab.className = "tab all-tab" + (active ? " active" : "");
+  tab.setAttribute("role", "presentation");  // the button inside is the tab
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "tab-btn";
+  btn.setAttribute("role", "tab");
+  btn.setAttribute("aria-selected", String(active));
+  btn.title = "Every project's tasks, compiled into one list";
+  const name = document.createElement("span");
+  name.className = "tab-name";
+  name.textContent = "All";
+  btn.appendChild(name);
+  if (open) {
+    const count = document.createElement("span");
+    count.className = "tab-count";
+    count.textContent = open;
+    count.title = `${open} unfinished task${open === 1 ? "" : "s"} in total`;
+    btn.appendChild(count);
+  }
+  btn.addEventListener("click", () => {
+    if (tabClickSuppressed) return;
+    if (!active) switchProject(ALL_TASKS_ID);
+  });
+  // The strip's own ← / → walk, from the one tab that has no project to
+  // walk from. Shift+arrow is left out: there is no position to move.
+  btn.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowRight" || e.shiftKey ||
+        e.altKey || e.ctrlKey || e.metaKey) return;
+    e.preventDefault();
+    focusTabAt(1);
+  });
+  tab.appendChild(btn);
+  return tab;
+}
+
 function projectTab(project) {
-  const active = project.id === state.active_project_id;
+  // While the compiled list is up, no project tab is the one you are on.
+  const active = !state.all_tasks && project.id === state.active_project_id;
   // A lone tab has nothing to be reordered against, so it stays a plain tab.
   const reorderable = (state.projects || []).length > 1;
   const tab = document.createElement("div");
@@ -286,7 +339,10 @@ async function deleteProject(projectId) {
 
 function switchToProjectAt(index) {
   const project = (state.projects || [])[index];
-  if (project && project.id !== state.active_project_id) switchProject(project.id);
+  // From the compiled list, Alt+N goes to that project even when it is the
+  // one remembered underneath: there is somewhere to go either way.
+  if (project && (state.all_tasks || project.id !== state.active_project_id))
+    switchProject(project.id);
 }
 
 /* ---------------- tab order ----------------
@@ -319,7 +375,9 @@ function wireTabKeys(e, project) {
   const i = projects.findIndex((p) => p.id === project.id);
   if (i < 0) return;
   if (e.shiftKey) nudgeProject(project, dir);
-  else focusTabAt(i + dir);
+  // The All tab, when there is one, is the row's first button — so ← off the
+  // first project lands on it rather than going nowhere.
+  else focusTabAt(i + dir + ($("tab-strip").querySelector(".all-tab") ? 1 : 0));
 }
 
 function nudgeProject(project, dir) {
@@ -569,6 +627,10 @@ function sortMode() {
   let field = settings?.sort_field || "smart";
   if (!SORT_FIELDS.includes(field)) field = "smart";
   if (field === "smart" && settings?.manual_order) field = "manual";
+  // Mirrors _list_settings on the server: where you dragged a task in one tab
+  // says nothing about where it sits among another tab's, so the compiled list
+  // is read by urgency however the open tab was last arranged.
+  if (field === "manual" && state.all_tasks) field = "smart";
   let dir = settings?.sort_dir;
   if (dir !== "asc" && dir !== "desc") dir = DEFAULT_SORT_DIR[field];
   return { field, dir };
@@ -577,6 +639,10 @@ function sortMode() {
 function renderSortBar() {
   if (!settings) return;
   const { field, dir } = sortMode();
+  // Nothing on the compiled list was arranged by hand, so the option that
+  // says it was steps aside rather than lying about what you are looking at.
+  const manual = $("sort-field").querySelector('option[value="manual"]');
+  manual.hidden = manual.disabled = !!state.all_tasks;
   $("sort-field").value = field;
   const btn = $("sort-dir");
   const labels = SORT_DIR_LABEL[field];
@@ -672,6 +738,15 @@ function twisty(task, count, collapsed) {
   return btn;
 }
 
+/* Stands in for the drag handle where there is nothing to drag, so a list you
+ * cannot rearrange sits in the same columns as one you can. */
+function handleSpacer() {
+  const span = document.createElement("span");
+  span.className = "drag-spacer";
+  span.setAttribute("aria-hidden", "true");
+  return span;
+}
+
 /* Keeps the checkboxes of leaves and containers in one column. */
 function spacer() {
   const span = document.createElement("span");
@@ -722,9 +797,14 @@ function taskNode(task, isSub) {
   const row = document.createElement("div");
   row.className = "task-row";
 
-  if (active) {
+  // Dragging is off on the compiled list: where a task sits is a fact about
+  // its own project's list, and there is no single list here to rearrange.
+  // The handle's column stays behind, so the rows still line up.
+  if (active && !state.all_tasks) {
     row.appendChild(dragHandle(task, el));
     wireDropTarget(el, task);
+  } else if (active) {
+    row.appendChild(handleSpacer());
   }
 
   // The fold sits in its own column so that parents and leaves line up: a
@@ -749,6 +829,17 @@ function taskNode(task, isSub) {
   title.textContent = task.title;
   title.addEventListener("click", () => openDetail(task.id));
   row.appendChild(title);
+
+  // Which list it came from — the one thing a compiled list would otherwise
+  // lose. Top-level tasks only: a step is in the same project its parent is,
+  // and repeating that on every row underneath would be noise.
+  if (state.all_tasks && !isSub && task.project_name) {
+    const chip = document.createElement("span");
+    chip.className = "project-chip";
+    chip.textContent = task.project_name;
+    chip.title = `In ${task.project_name}`;
+    row.appendChild(chip);
+  }
 
   if (active) {
     const addSub = document.createElement("button");
@@ -1013,8 +1104,14 @@ function render() {
   const active = state.tasks.filter(
     (t) => t.status === "todo" || t.status === "in_progress");
   for (const t of sortActive(active)) list.appendChild(taskNode(t, false));
-  $("empty-hint").hidden = active.length > 0;
-  $("list-hint").hidden = active.length === 0;
+  // The compiled list has nowhere to put a new task and no order of its own
+  // to drag one into, so the box and the hint about dragging both stand down
+  // and say why.
+  const all = !!state.all_tasks;
+  $("add-form").hidden = all;
+  $("all-hint").hidden = !all;
+  $("empty-hint").hidden = all || active.length > 0;
+  $("list-hint").hidden = all || active.length === 0;
   // Nothing to sort is nothing to decide about: the bar arrives with the list.
   $("list-toolbar").hidden = active.length === 0;
   renderSortBar();
