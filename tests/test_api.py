@@ -1270,6 +1270,38 @@ def test_overview_trend_draws_the_quiet_days_too(client):
     assert data["stats"]["finished"] == 1
 
 
+def test_overview_carries_the_daily_xp_pace(client):
+    """The Level tile says how far along you are; this says how fast it is
+    moving, which a bar four-fifths of the way along cannot.
+
+    With one payout inside the window and one that has aged out of it, so the
+    tile is pinned to the windowed sum rather than to the lifetime total —
+    which are the same number on a fresh database, and would let a pace that
+    counted all of history pass unnoticed.
+    """
+    old = find(create(client, title="last month's washing up", impact=9,
+                      effort=2), "last month's washing up")
+    lifetime = client.post(f"/api/tasks/{old['id']}/complete",
+                           json={}).json()["xp"]["total"]
+    long_ago = (datetime.now(timezone.utc)
+                - timedelta(days=logic.XP_WINDOW_DAYS + 1)).isoformat()
+    from app import db
+    with db.connect() as conn:
+        conn.execute("UPDATE tasks SET updated_at = ? WHERE id = ?",
+                     (long_ago, old["id"]))
+
+    done = find(create(client, title="wash dishes", impact=9, effort=2),
+                "wash dishes")
+    state = client.post(f"/api/tasks/{done['id']}/complete", json={}).json()
+    this_month = state["xp"]["total"] - lifetime
+    assert this_month > 0
+
+    xp = overview(client)["xp"]
+    assert xp["daily_days"] == logic.XP_WINDOW_DAYS
+    assert xp["total"] == lifetime + this_month     # earned is still earned
+    assert xp["daily"] == this_month / logic.XP_WINDOW_DAYS
+
+
 def test_overview_sorts_open_work_into_categories(client):
     """Impact 7 / effort 3 from the stubbed AI is a quick win, and 30 minutes
     of it is 39 once the time tax is on."""
@@ -2145,7 +2177,8 @@ def test_state_carries_the_level_and_xp(client):
     state = client.get("/api/state").json()
     assert state["xp"] == {"total": 0, "level": 1, "into_level": 0,
                            "level_span": 100, "to_next": 100, "progress": 0.0,
-                           "gained": 0, "hourly": None}
+                           "gained": 0, "hourly": None,
+                           "daily": 0.0, "daily_days": logic.XP_WINDOW_DAYS}
 
 
 def test_completing_a_task_pays_out_its_score(client):
@@ -2171,6 +2204,52 @@ def test_average_hourly_xp_reflects_completed_estimated_work(client):
     state = client.post(f"/api/tasks/{task['id']}/complete", json={}).json()
     xp = round(score)
     assert state["xp"]["hourly"] == xp / (buffered_minutes / 60)
+
+
+def test_average_daily_xp_spreads_what_was_earned_over_the_window(client):
+    """Finishing one thing today does not make today's haul your daily pace:
+    the other 29 days of the window are in the divisor, quiet or not."""
+    state = create(client, title="one good thing", impact=9, effort=2)
+    task = find(state, "one good thing")
+    state = client.post(f"/api/tasks/{task['id']}/complete", json={}).json()
+    earned = state["xp"]["total"]
+    assert earned > 0
+    assert state["xp"]["daily_days"] == logic.XP_WINDOW_DAYS
+    assert state["xp"]["daily"] == earned / logic.XP_WINDOW_DAYS
+
+
+def test_average_daily_xp_leaves_out_work_finished_before_the_window(client):
+    """The stat is what you are earning now, so an old task that has already
+    fallen out of the window keeps its XP on the running total and stops
+    counting towards the pace."""
+    state = create(client, title="ancient history", impact=9, effort=2)
+    tid = find(state, "ancient history")["id"]
+    client.post(f"/api/tasks/{tid}/complete", json={})
+    long_ago = (datetime.now(timezone.utc)
+                - timedelta(days=logic.XP_WINDOW_DAYS + 1)).isoformat()
+    from app import db
+    with db.connect() as conn:
+        conn.execute("UPDATE tasks SET updated_at = ? WHERE id = ?",
+                     (long_ago, tid))
+
+    xp = client.get("/api/state").json()["xp"]
+    assert xp["total"] > 0        # earned is earned
+    assert xp["daily"] == 0.0     # ...but it is not this month's pace
+
+
+def test_average_daily_xp_keeps_what_a_reopened_task_paid(client):
+    """Reopening a task you finished this week cannot un-earn the XP it paid,
+    and so cannot lower the pace either: the payout happened, whatever the
+    checkbox says now."""
+    state = create(client, title="thought I was done", impact=9, effort=2)
+    tid = find(state, "thought I was done")["id"]
+    state = client.post(f"/api/tasks/{tid}/complete", json={}).json()
+    pace = state["xp"]["daily"]
+    assert pace > 0
+
+    state = client.patch(f"/api/tasks/{tid}", json={"status": "todo"}).json()
+    assert state["xp"]["daily"] == pace
+    assert pace == state["xp"]["total"] / logic.XP_WINDOW_DAYS
 
 
 def test_a_task_never_pays_twice(client):

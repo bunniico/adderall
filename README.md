@@ -196,8 +196,9 @@ API keys are never logged.
   lists instead of being one. Tiles across the top: open tasks, what is
   overdue, what is due in the next seven days, how much work is left,
   how much of today is already booked against the day the app has learned
-  you actually have, how much you got through in the last month, and where
-  your level sits. Under them, a chart of finished work — one bar per day
+  you actually have, how much you got through in the last month, where
+  your level sits and what it has been earning a day. Under them, a chart of
+  finished work — one bar per day
   for the last 30 days, minutes above and tasks below, with a line for the
   day cap to read them against, and the quiet days drawn rather than skipped.
   Then **Next up** and **Coming up**: the most urgent work and the nearest
@@ -370,8 +371,12 @@ API keys are never logged.
   paid, and XP already earned stays earned — a task that has paid once never
   pays again, however often it is reopened, and deleting it later costs you
   nothing. Containers pay through their steps, never twice for the same
-  afternoon. The whole thing is one switch in ⚙ Settings, along with the
-  confetti.
+  afternoon. Two averages sit under the bar in the rail: XP an hour, across
+  every estimated task that ever paid out, and XP a day over the last 30 days
+  — that one counts the quiet days in the divisor, so it is the pace the month
+  ran at rather than what a good afternoon pays, and it is the one the
+  Overview repeats as a tile. The whole thing is one switch in ⚙ Settings,
+  along with the confetti.
 - **A parent is its parts** — a task with subtasks gets no score of its own.
   It inherits the combined score of the work still underneath it, each step
   weighing what it costs in minutes, all the way down the tree. Finished and

@@ -145,6 +145,17 @@ function renderStats() {
     tiles.push({ label: "Level", value: xp.level,
                  note: `${xp.into_level} / ${xp.level_span} XP`,
                  meter: xp.progress });
+    // The pace the level is moving at, which the level itself cannot say:
+    // a bar four-fifths of the way along looks the same whether it took a
+    // week or a year. Quiet days are in the divisor, so this is what the
+    // month paid out per day rather than what a good day pays.
+    // A zero is a real answer — a month with nothing in it earned nothing a
+    // day — so the em dash is kept for the other case, nothing to divide,
+    // exactly as the rail reads it. Rounding 0 to "0" and no-answer to "0"
+    // would collapse the two.
+    tiles.push({ label: "XP a day",
+                 value: xp.daily != null ? Math.round(xp.daily) : "—",
+                 note: `over the last ${xp.daily_days} days` });
   }
 
   for (const tile of tiles) {

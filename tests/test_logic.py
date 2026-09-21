@@ -1276,6 +1276,23 @@ def test_average_hourly_xp_is_none_with_nothing_to_divide_by():
     assert logic.average_hourly_xp([], buf=0.3) is None
 
 
+def test_average_daily_xp_spreads_the_window_over_every_day_in_it():
+    assert logic.average_daily_xp(300, days=30) == 10.0
+
+
+def test_average_daily_xp_divides_by_the_window_not_by_the_paydays():
+    """Half the window, twice the pace, for XP that may well have been earned
+    on the same three afternoons either way: the days off are in the divisor,
+    so stopping for a fortnight lowers this rather than leaving it alone."""
+    assert logic.average_daily_xp(300, days=15) == 20.0
+
+
+def test_average_daily_xp_is_zero_rather_than_nothing_when_nothing_was_earned():
+    """A month with no XP in it earned zero a day, which is a true answer;
+    `None` would read as "not enough to say" and draw an em dash instead."""
+    assert logic.average_daily_xp(0, days=30) == 0.0
+
+
 # ---- start times: when a task wants to begin ----
 # The scheduler's other question. A deadline says when work must be finished;
 # a start time says which hour of which day it belongs to, which for most of

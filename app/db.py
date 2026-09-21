@@ -243,6 +243,17 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def cutoff_iso(days: int) -> str:
+    """`days` ago, in the same shape `now_iso` writes timestamps in.
+
+    Every "in the last N days" query compares against this, and they can only
+    compare as strings — so the cutoff has to be spelled exactly the way the
+    stored timestamps are.
+    """
+    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(
+        timespec="seconds")
+
+
 def new_id() -> str:
     return secrets.token_urlsafe(6)
 
@@ -671,6 +682,29 @@ def xp_estimate_pairs() -> list[dict]:
     return [{"xp": r["xp_awarded"], "estimated_time": r["estimated_time"]} for r in rows]
 
 
+def xp_since(days: int) -> int:
+    """XP paid out by tasks finished inside the window, for the
+    average-daily-XP stat.
+
+    `xp_awarded` is the whole test, with no check on `status`: it is written
+    once, when the task pays, and never again. Asking for `status = 'done'` as
+    well would make earned XP fall back out of the pace the moment you
+    reopened the task or dropped it — and XP already earned stays earned, which
+    is the one promise the whole scheme rests on (see `award_xp`).
+
+    `updated_at` stands in for the moment it was finished — the same stand-in
+    `finished_log` makes, and with the same caveat: editing a done task moves
+    it to today.
+    """
+    with connect() as conn:
+        row = conn.execute(
+            """SELECT COALESCE(SUM(xp_awarded), 0) AS xp FROM tasks
+               WHERE xp_awarded IS NOT NULL AND updated_at >= ?""",
+            (cutoff_iso(days),),
+        ).fetchone()
+    return int(row["xp"])
+
+
 def completed_history(days: int = 45) -> list[dict]:
     """When recent work was finished and how long it took.
 
@@ -678,15 +712,13 @@ def completed_history(days: int = 45) -> list[dict]:
     `actual_time` when the task was timed, the estimate when it wasn't,
     because a task you ticked off without a timer still happened.
     """
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(
-        timespec="seconds")
     with connect() as conn:
         rows = conn.execute(
             """SELECT updated_at, actual_time, estimated_time FROM tasks
                WHERE status = 'done' AND updated_at >= ?
                  AND (actual_time IS NOT NULL OR estimated_time IS NOT NULL)
                ORDER BY updated_at DESC LIMIT 1000""",
-            (cutoff,),
+            (cutoff_iso(days),),
         ).fetchall()
     return [{"finished_at": r["updated_at"],
              "minutes": r["actual_time"] or r["estimated_time"]} for r in rows]
@@ -707,14 +739,12 @@ def finished_log(days: int = 30) -> list[dict]:
     `completed_history` makes, and with the same caveat: editing a done task
     moves it to today.
     """
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(
-        timespec="seconds")
     with connect() as conn:
         rows = conn.execute(
             """SELECT updated_at, actual_time, estimated_time FROM tasks
                WHERE status = 'done' AND updated_at >= ?
                ORDER BY updated_at DESC LIMIT 2000""",
-            (cutoff,),
+            (cutoff_iso(days),),
         ).fetchall()
     return [{"finished_at": r["updated_at"],
              "minutes": r["actual_time"] or r["estimated_time"] or 0}

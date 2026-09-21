@@ -1222,6 +1222,12 @@ function renderRail() {
   $("rail-goal-fill").style.width = (on ? xp.progress * 100 : 0) + "%";
   $("rail-xp").textContent = on ? `level ${xp.level} · ${xp.total} XP earned` : "";
   $("rail-hourly-xp").textContent = on && xp.hourly != null ? Math.round(xp.hourly) : "—";
+  // Pace rather than rate: what the last month has paid out per day, quiet
+  // days included. The window is only in the tooltip because the row is a
+  // label and a number wide, and an unlabelled 30 would read as the value.
+  $("rail-daily-xp").textContent = on && xp.daily != null ? Math.round(xp.daily) : "—";
+  $("rail-daily-xp-label").title =
+    on ? `XP a day over the last ${xp.daily_days} days, quiet days included` : "";
 
   // Open, top-level tasks only: what is actually still ahead of you in this
   // list, not what has already been finished or discarded.
