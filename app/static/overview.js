@@ -149,7 +149,12 @@ function renderStats() {
     // a bar four-fifths of the way along looks the same whether it took a
     // week or a year. Quiet days are in the divisor, so this is what the
     // month paid out per day rather than what a good day pays.
-    tiles.push({ label: "XP a day", value: Math.round(xp.daily ?? 0),
+    // A zero is a real answer — a month with nothing in it earned nothing a
+    // day — so the em dash is kept for the other case, nothing to divide,
+    // exactly as the rail reads it. Rounding 0 to "0" and no-answer to "0"
+    // would collapse the two.
+    tiles.push({ label: "XP a day",
+                 value: xp.daily != null ? Math.round(xp.daily) : "—",
                  note: `over the last ${xp.daily_days} days` });
   }
 

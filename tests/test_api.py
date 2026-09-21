@@ -2158,6 +2158,21 @@ def test_average_daily_xp_leaves_out_work_finished_before_the_window(client):
     assert xp["daily"] == 0.0     # ...but it is not this month's pace
 
 
+def test_average_daily_xp_keeps_what_a_reopened_task_paid(client):
+    """Reopening a task you finished this week cannot un-earn the XP it paid,
+    and so cannot lower the pace either: the payout happened, whatever the
+    checkbox says now."""
+    state = create(client, title="thought I was done", impact=9, effort=2)
+    tid = find(state, "thought I was done")["id"]
+    state = client.post(f"/api/tasks/{tid}/complete", json={}).json()
+    pace = state["xp"]["daily"]
+    assert pace > 0
+
+    state = client.patch(f"/api/tasks/{tid}", json={"status": "todo"}).json()
+    assert state["xp"]["daily"] == pace
+    assert pace == state["xp"]["total"] / logic.XP_WINDOW_DAYS
+
+
 def test_a_task_never_pays_twice(client):
     state = create(client, title="once", impact=5, effort=5)
     tid = find(state, "once")["id"]

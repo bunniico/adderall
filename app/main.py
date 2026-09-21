@@ -390,6 +390,25 @@ def _spend(settings: dict | None = None) -> dict:
     }
 
 
+def _xp_state(settings: dict, ratios: list[float], gained: int | None = None) -> dict:
+    """Where the level stands and the two averages under it.
+
+    One shape for both readers — the rail's `/api/state` and the Overview —
+    so a number that appears in both places cannot come to mean two different
+    things in them. `gained` is the only difference: it is the cue to animate
+    the bar, so it rides on the reply to the call that earned it and nowhere
+    else.
+    """
+    payload = {
+        **logic.level_progress(db.get_xp()),
+        "hourly": logic.average_hourly_xp(
+            db.xp_estimate_pairs(), logic.effective_buffer(settings, ratios)),
+        "daily": logic.average_daily_xp(db.xp_since(logic.XP_WINDOW_DAYS)),
+        "daily_days": logic.XP_WINDOW_DAYS,
+    }
+    return payload if gained is None else {**payload, "gained": gained}
+
+
 def _derive_all(projects: list[dict], by_project: dict[str, list[dict]],
                 settings: dict, ratios: list[float],
                 forecast: list[dict] | None = None,
@@ -552,11 +571,7 @@ def _state(project_id: str | None = None, xp_gained: int = 0) -> dict:
         # stale bar. `gained` is only ever non-zero on the reply to the call
         # that earned it, which is the page's cue to animate rather than
         # silently jump.
-        "xp": {**logic.level_progress(db.get_xp()), "gained": xp_gained,
-               "hourly": logic.average_hourly_xp(
-                   db.xp_estimate_pairs(), logic.effective_buffer(settings, ratios)),
-               "daily": logic.average_daily_xp(db.xp_since(logic.XP_WINDOW_DAYS)),
-               "daily_days": logic.XP_WINDOW_DAYS},
+        "xp": _xp_state(settings, ratios, gained=xp_gained),
         # Rides along for the same reason the XP bar does: the badge that says
         # the app has gone cheap for the day has to appear the moment it is
         # true, not the next time someone opens the settings dialog.
@@ -781,11 +796,7 @@ def _overview() -> dict:
                         ("quick_win", "major_project", "fill_in", "thankless",
                          "none")],
         "capacity": _capacity(settings),
-        "xp": {**logic.level_progress(db.get_xp()),
-               "hourly": logic.average_hourly_xp(
-                   db.xp_estimate_pairs(), logic.effective_buffer(settings, ratios)),
-               "daily": logic.average_daily_xp(db.xp_since(logic.XP_WINDOW_DAYS)),
-               "daily_days": logic.XP_WINDOW_DAYS},
+        "xp": _xp_state(settings, ratios),
     }
 
 

@@ -367,11 +367,12 @@ API keys are never logged.
   paid, and XP already earned stays earned — a task that has paid once never
   pays again, however often it is reopened, and deleting it later costs you
   nothing. Containers pay through their steps, never twice for the same
-  afternoon. Two averages sit under the bar and on the Overview: XP an hour,
-  across every estimated task that ever paid out, and XP a day over the last
-  30 days — that one counts the quiet days in the divisor, so it is the pace
-  the month actually ran at rather than what a good afternoon pays. The whole
-  thing is one switch in ⚙ Settings, along with the confetti.
+  afternoon. Two averages sit under the bar in the rail: XP an hour, across
+  every estimated task that ever paid out, and XP a day over the last 30 days
+  — that one counts the quiet days in the divisor, so it is the pace the month
+  ran at rather than what a good afternoon pays, and it is the one the
+  Overview repeats as a tile. The whole thing is one switch in ⚙ Settings,
+  along with the confetti.
 - **A parent is its parts** — a task with subtasks gets no score of its own.
   It inherits the combined score of the work still underneath it, each step
   weighing what it costs in minutes, all the way down the tree. Finished and
