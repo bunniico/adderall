@@ -306,6 +306,14 @@ class AIUnavailable(Exception):
     """Raised when no API key is configured or the API call fails."""
 
 
+class AINetworkError(AIUnavailable):
+    """The API itself could not be reached — this machine has no route to
+    the internet, or Anthropic is down. Distinct from every other
+    `AIUnavailable` (bad key, bad request, a refusal): those won't be fixed
+    by waiting, this one might, so callers can choose to queue and retry it
+    instead of failing the request outright. See queue.py."""
+
+
 def _client(settings: dict) -> anthropic.Anthropic:
     key = (settings.get("api_key") or "").strip() or os.environ.get("ANTHROPIC_API_KEY")
     # Identity-linked API keys must name the workspace each request acts in;
@@ -355,7 +363,7 @@ def _request(settings: dict, model: str, prompt: str, schema: dict,
             ) from exc
         raise AIUnavailable(f"Claude API error ({exc.status_code}): {exc.message}") from exc
     except anthropic.APIConnectionError as exc:
-        raise AIUnavailable("Could not reach the Claude API (network error).") from exc
+        raise AINetworkError("Could not reach the Claude API (network error).") from exc
 
 
 def _call(settings: dict, tier: str, prompt: str, schema: dict,

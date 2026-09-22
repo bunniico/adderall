@@ -25,10 +25,19 @@ let toggleFocusFor = null;    // collapse toggle to re-focus after a fold/unfold
 /* ---------------- API ---------------- */
 
 async function api(path, options = {}) {
-  const res = await fetch("/api" + path, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
+  let res;
+  try {
+    res = await fetch("/api" + path, {
+      headers: { "Content-Type": "application/json" },
+      ...options,
+    });
+  } catch {
+    // fetch() itself rejected: the browser never got a response at all,
+    // which means the connection to the server is down — as opposed to the
+    // server answering with an error, handled below. Every caller already
+    // catches and toasts e.message, so one clear message here is all it takes.
+    throw new Error("Lost connection to the server. Check that it's still running, then try again.");
+  }
   if (!res.ok) {
     let detail = res.statusText;
     try { detail = (await res.json()).detail || detail; } catch {}
@@ -38,6 +47,11 @@ async function api(path, options = {}) {
 }
 
 function applyState(newState) {
+  // The server itself had no route to the internet when this action was
+  // asked for, and queued it instead of failing outright — see queue.py.
+  // It applies on its own once the connection comes back; nothing here
+  // needs to retry it.
+  if (newState.queued) toast(newState.queued.message);
   const prevQuads = {};
   for (const t of flatten(state.tasks)) prevQuads[t.id] = t.quadrant;
   state = newState;
@@ -1357,6 +1371,24 @@ function toast(msg, isError = false, undo = null) {
   toastTimer = setTimeout(() => { el.hidden = true; }, undo ? 10000 : 4000);
 }
 
+/* Proactive half of connection-loss handling: the reactive half is api()
+ * throwing a clear error on a failed fetch, above. This catches the case
+ * where nothing is even in flight — the network itself drops while the tab
+ * sits idle, which the browser reports directly rather than the app having
+ * to notice a request failing. */
+function wireConnectionBanner() {
+  const banner = $("connection-banner");
+  const show = () => { banner.hidden = false; };
+  const hide = () => {
+    if (banner.hidden) return;
+    banner.hidden = true;
+    toast("Back online.");
+  };
+  window.addEventListener("offline", show);
+  window.addEventListener("online", hide);
+  if (!navigator.onLine) show();
+}
+
 function celebrate() {
   if (!settings?.gamification) return;
   const box = $("celebration");
@@ -2410,10 +2442,11 @@ async function compileBraindump() {
   btn.disabled = true;
   $("b-status").textContent = "Compiling… (the deep model is thinking, this can take a moment)";
   try {
-    applyState(await api("/compile", { method: "POST", body: JSON.stringify({ text }) }));
+    const res = await api("/compile", { method: "POST", body: JSON.stringify({ text }) });
+    applyState(res);
     $("b-text").value = "";
     $("modal-braindump").close();
-    toast("Braindump compiled into tasks ✓");
+    if (!res.queued) toast("Braindump compiled into tasks ✓");
   } catch (e) {
     $("b-status").textContent = "";
     toast(e.message, true);
@@ -2616,9 +2649,11 @@ async function syncClickUp() {
     $("s-clickup-last-sync").textContent = settings.clickup_last_sync_at
       ? `Last synced ${new Date(settings.clickup_last_sync_at).toLocaleString()}`
       : "Never synced yet.";
-    const { created, updated, fetched } = res.clickup || {};
-    toast(`ClickUp: ${fetched ?? 0} assigned, ${created?.length ?? 0} new, ` +
-          `${updated?.length ?? 0} updated ✓`);
+    if (!res.queued) {
+      const { created, updated, fetched } = res.clickup || {};
+      toast(`ClickUp: ${fetched ?? 0} assigned, ${created?.length ?? 0} new, ` +
+            `${updated?.length ?? 0} updated ✓`);
+    }
   } catch (e) { toast(e.message, true); }
   finally { btn.disabled = false; }
 }
@@ -3432,6 +3467,7 @@ function wire() {
 }
 
 async function boot() {
+  wireConnectionBanner();
   loadSoundPrefs();
   Motion.wireClicks();
   Motion.wireHover();

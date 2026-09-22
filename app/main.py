@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import ai, clickup, db, habits, logic, recurring, scheduler, title_parse
+from . import ai, clickup, db, habits, logic, queue, recurring, scheduler, title_parse
 
 def _configure_logging() -> None:
     """Send the app's own logs to stdout, where `docker logs` reads them.
@@ -42,6 +42,8 @@ def _configure_logging() -> None:
 
 _configure_logging()
 
+log = logging.getLogger(__name__)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Run the recurring-task sweep for as long as the app is up.
@@ -53,11 +55,13 @@ async def lifespan(app: FastAPI):
     """
     scheduler.start(app)
     clickup.start(app)
+    queue.start(app)
     try:
         yield
     finally:
         await scheduler.stop(app)
         await clickup.stop(app)
+        await queue.stop(app)
 
 
 app = FastAPI(title="Adderall", docs_url="/api/docs", openapi_url="/api/openapi.json",
@@ -1094,11 +1098,26 @@ def _annotate_tasks(task_ids: list[str], want_scores: bool,
         return
     ask_start = want_start and any(t["parent_id"] is None for t in targets)
     try:
-        results = ai.annotate(settings, targets, want_scores=want_scores,
-                              want_start=ask_start,
-                              now_local=_now_local(settings) if ask_start else "")
-    except (ai.AIUnavailable, Exception):
-        return
+        _apply_annotations(settings, targets, want_scores, ask_start)
+    except ai.AINetworkError:
+        # The server itself has no route to the internet right now — queue it
+        # rather than silently giving up; queue.py retries once it does.
+        queue.enqueue("annotate_batch", {
+            "task_ids": [t["id"] for t in targets],
+            "want_scores": want_scores, "want_start": ask_start,
+        })
+    except ai.AIUnavailable as exc:
+        log.warning("best-effort annotate skipped: %s", exc)
+
+
+def _apply_annotations(settings: dict, targets: list[dict], want_scores: bool,
+                       ask_start: bool) -> None:
+    """The actual annotate call and applying its results — shared by the
+    best-effort path above and the queued retry in `_process_annotate_batch`.
+    """
+    results = ai.annotate(settings, targets, want_scores=want_scores,
+                          want_start=ask_start,
+                          now_local=_now_local(settings) if ask_start else "")
     now = datetime.now(timezone.utc)
     for t in targets:
         row = results.get(t["id"])
@@ -1119,6 +1138,26 @@ def _annotate_tasks(task_ids: list[str], want_scores: bool,
             db.update_task(t["id"], fields)
 
 
+def _process_annotate_batch(payload: dict) -> None:
+    """Queue handler for `annotate_batch`: re-reads the tasks fresh, since a
+    field one of them was missing when queued may have been filled in by hand
+    since — `_apply_annotations` only ever writes a field that is still
+    None, so that is safe to check again here rather than trust the payload.
+    """
+    targets = [t for t in (db.get_task(tid) for tid in payload["task_ids"]) if t]
+    if not targets:
+        return
+    settings = db.get_settings()
+    try:
+        _apply_annotations(settings, targets, payload["want_scores"],
+                           payload["want_start"])
+    except ai.AINetworkError as exc:
+        raise queue.NetworkRetry(str(exc)) from exc
+
+
+queue.register("annotate_batch", _process_annotate_batch)
+
+
 def _parse_title_triggers(settings: dict, title: str) -> dict:
     """A new task's title, read for a deadline and/or a repeat rule.
 
@@ -1133,9 +1172,14 @@ def _parse_title_triggers(settings: dict, title: str) -> dict:
         return parsed
     try:
         data = ai.extract_schedule(settings, title, _now_local(settings))
-    except (ai.AIUnavailable, Exception):
+    except ai.AIUnavailable as exc:
         # Best effort, like every other AI call task creation makes — a
         # missing key or a network hiccup must not stop the task being made.
+        # Not queued for retry: title parsing decides the *title itself*
+        # (trigger words stripped out), and by the time a retry ran the user
+        # may have already edited it — there is nothing safe to replay this
+        # against later.
+        log.warning("title-parsing AI fallback skipped: %s", exc)
         return parsed
     if not data["has_deadline"] and not data["has_repeat"]:
         return parsed
@@ -1702,16 +1746,46 @@ def run_recurring():
 # timer, exposed because a sync you cannot trigger on demand is a sync you
 # cannot test right after pasting in a token.
 
+def _queued_state(kind: str, message: str) -> dict:
+    """The normal state payload, plus a note that this action didn't run yet
+    because the server itself has no route to the internet — it's queued and
+    will apply on its own once queue.py gets it through. See queue.py."""
+    state = _state()
+    state["queued"] = {"kind": kind, "message": message}
+    return state
+
+
 @app.post("/api/clickup/sync")
 def sync_clickup():
     settings = db.get_settings()
     try:
         result = clickup.sync(settings)
+    except clickup.ClickUpNetworkError:
+        queue.enqueue("clickup_sync", {})
+        return _queued_state(
+            "clickup_sync",
+            "No internet connection on the server — sync is queued and will "
+            "run automatically once it's back.",
+        )
     except clickup.ClickUpUnavailable as exc:
         raise HTTPException(502, str(exc))
     state = _state()
     state["clickup"] = result
     return state
+
+
+def _process_clickup_sync(payload: dict) -> None:
+    settings = db.get_settings()
+    try:
+        clickup.sync(settings)
+    except clickup.ClickUpNetworkError as exc:
+        raise queue.NetworkRetry(str(exc)) from exc
+    except clickup.ClickUpUnavailable:
+        # The token was removed or is now invalid — nothing a retry can fix.
+        pass
+
+
+queue.register("clickup_sync", _process_clickup_sync)
 
 
 @app.post("/api/tasks/{task_id}/breakdown")
@@ -1729,6 +1803,13 @@ def breakdown_task(task_id: str, body: BreakdownRequest):
     try:
         steps = ai.breakdown(settings, task["title"], task["description"],
                              granularity, parents)
+    except ai.AINetworkError:
+        queue.enqueue("breakdown", {"task_id": task_id, "granularity": granularity})
+        return _queued_state(
+            "breakdown",
+            "No internet connection on the server — this breakdown is "
+            "queued and will run automatically once it's back.",
+        )
     except ai.AIUnavailable as exc:
         raise HTTPException(502, str(exc))
     new_ids = []
@@ -1740,6 +1821,38 @@ def breakdown_task(task_id: str, body: BreakdownRequest):
         _reveal(task_id)
     _annotate_tasks(new_ids, want_scores=settings["ai_scoring"])
     return _state()
+
+
+def _process_breakdown(payload: dict) -> None:
+    task_id = payload["task_id"]
+    task = db.get_task(task_id)
+    if task is None:
+        return  # deleted before the queue got to it
+    settings = db.get_settings()
+    granularity = payload.get("granularity") or settings["granularity"]
+    parents = []
+    cursor = task
+    while cursor.get("parent_id"):
+        cursor = db.get_task(cursor["parent_id"])
+        if not cursor:
+            break
+        parents.insert(0, cursor["title"])
+    try:
+        steps = ai.breakdown(settings, task["title"], task["description"],
+                             granularity, parents)
+    except ai.AINetworkError as exc:
+        raise queue.NetworkRetry(str(exc)) from exc
+    new_ids = []
+    for step in steps:
+        sub = db.create_task({"title": step, "parent_id": task_id,
+                              "project_id": task["project_id"]})
+        new_ids.append(sub["id"])
+    if new_ids:
+        _reveal(task_id)
+    _annotate_tasks(new_ids, want_scores=settings["ai_scoring"])
+
+
+queue.register("breakdown", _process_breakdown)
 
 
 @app.post("/api/tasks/{task_id}/annotate")
@@ -1755,6 +1868,13 @@ def annotate_task(task_id: str):
         results = ai.annotate(settings, [task], want_scores=settings["ai_scoring"],
                               want_start=want_start,
                               now_local=_now_local(settings) if want_start else "")
+    except ai.AINetworkError:
+        queue.enqueue("reannotate", {"task_id": task_id, "want_start": want_start})
+        return _queued_state(
+            "reannotate",
+            "No internet connection on the server — this re-estimate is "
+            "queued and will run automatically once it's back.",
+        )
     except ai.AIUnavailable as exc:
         raise HTTPException(502, str(exc))
     row = results.get(task_id)
@@ -1771,6 +1891,37 @@ def annotate_task(task_id: str):
             fields["start_at"] = when.isoformat(timespec="seconds")
         db.update_task(task_id, fields)
     return _state()
+
+
+def _process_reannotate(payload: dict) -> None:
+    task_id = payload["task_id"]
+    task = db.get_task(task_id)
+    if task is None:
+        return  # deleted before the queue got to it
+    settings = db.get_settings()
+    want_start = payload.get("want_start", False)
+    try:
+        results = ai.annotate(settings, [task], want_scores=settings["ai_scoring"],
+                              want_start=want_start,
+                              now_local=_now_local(settings) if want_start else "")
+    except ai.AINetworkError as exc:
+        raise queue.NetworkRetry(str(exc)) from exc
+    row = results.get(task_id)
+    if row:
+        fields = {"estimated_time": int(row["minutes"])}
+        if settings["ai_scoring"]:
+            if row.get("impact") is not None:
+                fields["impact"] = int(row["impact"])
+            if row.get("effort") is not None:
+                fields["effort"] = int(row["effort"])
+        if want_start and row.get("start_in_minutes") is not None:
+            when = (datetime.now(timezone.utc)
+                    + timedelta(minutes=int(row["start_in_minutes"])))
+            fields["start_at"] = when.isoformat(timespec="seconds")
+        db.update_task(task_id, fields)
+
+
+queue.register("reannotate", _process_reannotate)
 
 
 @app.post("/api/tasks/{task_id}/start")
@@ -1794,18 +1945,12 @@ def complete_task(task_id: str, body: CompleteRequest):
     return _state(xp_gained=_finish(task_id, fields))
 
 
-@app.post("/api/compile")
-def compile_braindump(body: CompileRequest):
-    settings = db.get_settings()
-    try:
-        items = ai.compile_braindump(settings, body.text)
-    except ai.AIUnavailable as exc:
-        raise HTTPException(502, str(exc))
-    project_id = _active_project_id(db.list_projects() or [db.ensure_project()])
-    new_ids = []
+def _plant_compiled(items: list[dict], project_id: str) -> list[str]:
+    """Store a compiled braindump tree as real parent/child tasks, depth
+    first. Shared by the route and its queued retry."""
+    new_ids: list[str] = []
 
     def plant(nodes: list[dict], parent_id: str | None) -> None:
-        """Store the compiled tree as real parent/child tasks."""
         for item in nodes:
             task = db.create_task({
                 "title": item["title"].strip(),
@@ -1817,9 +1962,45 @@ def compile_braindump(body: CompileRequest):
             plant(item.get("subtasks") or [], task["id"])
 
     plant(items, None)
+    return new_ids
+
+
+@app.post("/api/compile")
+def compile_braindump(body: CompileRequest):
+    settings = db.get_settings()
+    project_id = _active_project_id(db.list_projects() or [db.ensure_project()])
+    try:
+        items = ai.compile_braindump(settings, body.text)
+    except ai.AINetworkError:
+        queue.enqueue("compile", {"text": body.text, "project_id": project_id})
+        return _queued_state(
+            "compile",
+            "No internet connection on the server — this braindump is "
+            "queued and will compile automatically once it's back.",
+        )
+    except ai.AIUnavailable as exc:
+        raise HTTPException(502, str(exc))
+    new_ids = _plant_compiled(items, project_id)
     _annotate_tasks(new_ids, want_scores=settings["ai_scoring"],
                     want_start=settings["ai_start_times"])
     return _state()
+
+
+def _process_compile(payload: dict) -> None:
+    project = db.get_project(payload["project_id"])
+    if project is None:
+        return  # the project was deleted before the queue got to it
+    settings = db.get_settings()
+    try:
+        items = ai.compile_braindump(settings, payload["text"])
+    except ai.AINetworkError as exc:
+        raise queue.NetworkRetry(str(exc)) from exc
+    new_ids = _plant_compiled(items, payload["project_id"])
+    _annotate_tasks(new_ids, want_scores=settings["ai_scoring"],
+                    want_start=settings["ai_start_times"])
+
+
+queue.register("compile", _process_compile)
 
 
 @app.get("/api/next")

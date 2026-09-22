@@ -163,6 +163,30 @@ Two environment variables tune it, both already wired into
 
 API keys are never logged.
 
+### When the connection drops
+
+There are two different connections, and they fail differently.
+
+**Your browser to this app.** If a request to the server never gets a
+response — the container is down, the machine is asleep, the network
+between you and it drops — the page shows a banner and a clear "Lost
+connection to the server" message instead of a silent failure or a cryptic
+browser error. Nothing here retries on its own; once the server is back,
+the next thing you do just works.
+
+**This app to the outside internet.** Breakdown, re-estimate, the braindump
+compiler, and ClickUp sync all call out to an external API. If that call
+fails because *this machine* has no route to the internet, the request is
+queued instead of failing: you get a toast saying so, and it runs on its own
+— retried every `ADDERALL_QUEUE_INTERVAL` seconds (60 by default; `0` turns
+retrying off) — once the connection is back, no need to redo anything. A
+queued item survives a restart, since it's kept in the same SQLite file as
+everything else. This is only for the connection itself: a missing or
+invalid API key, or the AI declining a request, still fails immediately —
+retrying a request that was never going to work just delays the same
+failure. Either way, every attempt is logged, so `docker logs` always shows
+what actually happened.
+
 ## What it does
 
 - **Projects in tabs** — a row of tabs across the top, one list of tasks

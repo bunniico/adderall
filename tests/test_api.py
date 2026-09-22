@@ -739,6 +739,111 @@ def test_breakdown_ai_failure_returns_502(client, monkeypatch):
     assert "no key" in res.json()["detail"]
 
 
+# ---------------- queued retries: the server itself has no internet ----------------
+# A missing/invalid key or a genuine API error is a 502, same as above — no
+# amount of retrying fixes those. Only a network error (ai.AINetworkError /
+# clickup.ClickUpNetworkError) gets queued instead, because that one might
+# clear up on its own. See app/queue.py.
+
+def test_breakdown_network_failure_is_queued_then_runs_on_retry(client, monkeypatch):
+    from app import main
+
+    calls = {"n": 0}
+
+    def flaky(settings, title, desc, granularity, parents=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise main.ai.AINetworkError("no route to the internet")
+        return ["step a", "step b"]
+
+    monkeypatch.setattr(main.ai, "breakdown", flaky)
+    state = create(client, title="x")
+    tid = find(state, "x")["id"]
+
+    res = client.post(f"/api/tasks/{tid}/breakdown", json={})
+    assert res.status_code == 200
+    assert res.json()["queued"]["kind"] == "breakdown"
+    assert find(res.json(), "step a") is None  # nothing created yet
+
+    assert main.queue.run_once() == 1  # the internet is back; the sweep applies it
+    state = client.get("/api/state").json()
+    task = next(t for t in state["tasks"] if t["id"] == tid)
+    assert {s["title"] for s in task["subtasks"]} == {"step a", "step b"}
+
+
+def test_reannotate_network_failure_is_queued_then_runs_on_retry(client, monkeypatch):
+    from app import main
+
+    calls = {"n": 0}
+
+    def flaky(settings, tasks, want_scores=True, want_start=False, now_local=""):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise main.ai.AINetworkError("no route to the internet")
+        return {t["id"]: {"id": t["id"], "minutes": 45, "impact": 5, "effort": 4}
+                for t in tasks}
+
+    monkeypatch.setattr(main.ai, "annotate", flaky)
+    state = create(client, title="x", annotate=False)
+    tid = find(state, "x")["id"]
+
+    res = client.post(f"/api/tasks/{tid}/annotate")
+    assert res.status_code == 200
+    assert res.json()["queued"]["kind"] == "reannotate"
+
+    assert main.queue.run_once() == 1
+    task = find(client.get("/api/state").json(), "x")
+    assert task["estimated_time"] == 45
+
+
+def test_compile_network_failure_is_queued_then_runs_on_retry(client, monkeypatch):
+    from app import main
+
+    calls = {"n": 0}
+
+    def flaky(settings, text):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise main.ai.AINetworkError("no route to the internet")
+        return [{"title": "call dentist", "description": ""}]
+
+    monkeypatch.setattr(main.ai, "compile_braindump", flaky)
+    res = client.post("/api/compile", json={"text": "dentist"})
+    assert res.status_code == 200
+    assert res.json()["queued"]["kind"] == "compile"
+    assert find(res.json(), "call dentist") is None
+
+    assert main.queue.run_once() == 1
+    assert find(client.get("/api/state").json(), "call dentist") is not None
+
+
+def test_clickup_sync_network_failure_is_queued_then_runs_on_retry(client, monkeypatch):
+    from app import main
+
+    calls = {"n": 0}
+
+    def flaky(settings):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise main.clickup.ClickUpNetworkError("no route to the internet")
+        project = main.db.create_project("ClickUp")
+        task = main.db.create_task({
+            "title": "Ship the thing", "project_id": project["id"],
+            "clickup_id": "c1",
+        })
+        return {"project_id": project["id"], "fetched": 1,
+                "created": [task["id"]], "updated": []}
+
+    monkeypatch.setattr(main.clickup, "sync", flaky)
+    res = client.post("/api/clickup/sync")
+    assert res.status_code == 200
+    assert res.json()["queued"]["kind"] == "clickup_sync"
+
+    assert main.queue.run_once() == 1
+    state = client.get("/api/state").json()
+    assert any(p["name"] == "ClickUp" for p in state["projects"])
+
+
 def test_index_served(client):
     res = client.get("/")
     assert res.status_code == 200

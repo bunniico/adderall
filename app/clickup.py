@@ -50,6 +50,15 @@ class ClickUpUnavailable(Exception):
     """Raised when no API token is configured or the API call fails."""
 
 
+class ClickUpNetworkError(ClickUpUnavailable):
+    """The ClickUp API itself could not be reached — this machine has no
+    route to the internet, or ClickUp is down. Distinct from every other
+    `ClickUpUnavailable` (missing/invalid token, a real API error): those
+    won't be fixed by waiting, this one might, so callers can choose to
+    queue and retry it instead of failing the request outright. See
+    queue.py."""
+
+
 def _token(settings: dict) -> str:
     token = (settings.get("clickup_api_token") or "").strip() \
         or os.environ.get("CLICKUP_API_TOKEN", "").strip()
@@ -70,7 +79,7 @@ def _get(client: httpx.Client, path: str, **params) -> dict:
     try:
         resp = client.get(path, params=params)
     except httpx.RequestError as exc:
-        raise ClickUpUnavailable(
+        raise ClickUpNetworkError(
             "Could not reach the ClickUp API (network error)."
         ) from exc
     if resp.status_code == 401:
