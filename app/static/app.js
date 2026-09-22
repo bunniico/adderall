@@ -1361,7 +1361,6 @@ function celebrate() {
   if (!settings?.gamification) return;
   const box = $("celebration");
   box.hidden = false;
-  box.replaceChildren();
   // The theme's own colours, so the celebration belongs to the app rather
   // than arriving from a party-supplies shop.
   const colors = ["#67d8ea", "#8f7ce6", "#e8c46a", "#7fe0b0", "#eaf4ff"];
@@ -1376,9 +1375,14 @@ function celebrate() {
     // paper thrown in the air, which is the whole idea.
     c.style.setProperty("--drift", (Math.random() * 240 - 120).toFixed(0) + "px");
     c.style.setProperty("--spin", (360 + Math.random() * 720).toFixed(0) + "deg");
+    // Each piece cleans up after its own fall, so a burst from finishing one
+    // task never wipes out a still-falling burst from another.
+    c.addEventListener("animationend", () => {
+      c.remove();
+      if (!box.childElementCount) box.hidden = true;
+    });
     box.appendChild(c);
   }
-  setTimeout(() => { box.hidden = true; box.replaceChildren(); }, 2200);
 }
 
 /* ---------------- daily budget ----------------
