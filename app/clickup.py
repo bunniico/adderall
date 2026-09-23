@@ -14,6 +14,11 @@ imported is ever deleted or auto-completed here — a task that stops showing
 up as "assigned and open" in ClickUp just stops being touched by future
 syncs.
 
+A task a sync sees for the first time is a new assignment, and is announced
+to every URL in the `clickup_webhooks` setting as a Discord-style message
+(`{"content": ...}`), so it can be forwarded to a chat. The very first sync
+announces nothing: everything it finds was assigned before you connected.
+
 The background loop follows the same shape as `scheduler.py`: a sweep on a
 timer rather than anything pinned to a clock, because this runs on a machine
 that sleeps. It differs in one way — a fresh install has no ClickUp token
@@ -30,7 +35,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from . import db
+from . import db, events, logic
 
 log = logging.getLogger(__name__)
 
@@ -113,6 +118,7 @@ def _normalize(task: dict) -> dict:
         "title": (task.get("name") or "Untitled ClickUp task").strip()[:500],
         "description": description,
         "deadline": deadline,
+        "url": url,
     }
 
 
@@ -155,6 +161,7 @@ def _ensure_project() -> dict:
 def sync(settings: dict | None = None) -> dict:
     """Pull assigned ClickUp tasks in. Creates or updates by `clickup_id`."""
     settings = settings or db.get_settings()
+    first_sync = not settings.get("clickup_last_sync_at")
     token = _token(settings)
     remote = fetch_assigned_tasks(token)
     project = _ensure_project()
@@ -170,6 +177,8 @@ def sync(settings: dict | None = None) -> dict:
                 "project_id": project["id"],
             })
             created.append(task["id"])
+            if not first_sync:
+                _announce(rt, settings)
         else:
             # Project membership is left alone on update: once imported, a
             # task is yours to move — sync must not drag it back to the
@@ -190,6 +199,28 @@ def sync(settings: dict | None = None) -> dict:
     db.update_settings({"clickup_last_sync_at": db.now_iso()})
     return {"project_id": project["id"], "fetched": len(remote),
             "created": created, "updated": updated}
+
+
+def _announce(task: dict, settings: dict) -> None:
+    """Post one new assignment to every ClickUp webhook. A webhook that
+    fails is logged and skipped; it never fails the sync."""
+    urls = [u.strip() for u in settings.get("clickup_webhooks") or [] if u.strip()]
+    if not urls:
+        return
+    lines = [f"📌 Assigned to you in ClickUp: “{task['title']}”"]
+    if task["deadline"]:
+        due = logic.parse_dt(task["deadline"]).astimezone(
+            logic.resolve_tz(settings.get("timezone")))
+        lines.append(f"Due {due:%a} {due.day} {due:%b, %H:%M}")
+    if task["url"]:
+        lines.append(task["url"])
+    body = {"content": "\n".join(lines)}
+    with httpx.Client(timeout=events.WEBHOOK_TIMEOUT_SEC) as client:
+        for url in urls:
+            try:
+                client.post(url, json=body).raise_for_status()
+            except Exception as e:
+                log.warning("clickup: webhook %s failed: %s", events._redact(url), e)
 
 
 def run_once() -> dict | None:

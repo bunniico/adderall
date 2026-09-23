@@ -2566,6 +2566,7 @@ function openSettings() {
   $("s-ready-lead").value = settings.alarms.ready_lead;
   $("s-go-lead").value = settings.alarms.go_lead;
   $("s-webhooks").value = (settings.webhooks || []).join("\n");
+  $("s-clickup-webhooks").value = (settings.clickup_webhooks || []).join("\n");
   $("s-timer-style").value = settings.timer_style;
   $("s-week-start").value = String(settings.week_start ?? 0);
   $("s-granularity").value = settings.granularity;
@@ -2616,6 +2617,7 @@ async function saveSettings() {
       go_lead: Number($("s-go-lead").value),
     },
     webhooks: $("s-webhooks").value.split("\n").map((u) => u.trim()).filter(Boolean),
+    clickup_webhooks: $("s-clickup-webhooks").value.split("\n").map((u) => u.trim()).filter(Boolean),
     timer_style: $("s-timer-style").value,
     week_start: Number($("s-week-start").value),
     granularity: Number($("s-granularity").value),

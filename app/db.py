@@ -86,6 +86,8 @@ DEFAULT_SETTINGS = {
                                # to ANTHROPIC_WORKSPACE_ID env
     "clickup_api_token": "",   # optional; falls back to CLICKUP_API_TOKEN env
     "clickup_last_sync_at": "", # ISO instant of the last successful sync
+    "clickup_webhooks": [],    # URLs a new ClickUp assignment is POSTed to,
+                               # Discord-style: {"content": "..."}
     "models": {
         "fast": "claude-haiku-4-5",    # estimates, impact/effort scoring
         "balanced": "claude-sonnet-5", # interactive task breakdown
