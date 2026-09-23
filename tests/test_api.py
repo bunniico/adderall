@@ -870,6 +870,15 @@ def test_default_project_exists_and_owns_new_tasks(client):
     assert task["project_id"] == project["id"]
 
 
+def test_state_reads_another_project_without_switching_to_it(client):
+    home = find(create(client, title="home task"), "home task")["project_id"]
+    work = new_project(client, "work")["active_project_id"]
+    state = client.get("/api/state", params={"project_id": home}).json()
+    assert [t["title"] for t in state["tasks"]] == ["home task"]
+    assert client.get("/api/state").json()["active_project_id"] == work
+    assert client.get("/api/state", params={"project_id": "nope"}).status_code == 404
+
+
 def test_creating_a_project_switches_to_it_and_scopes_tasks(client):
     home = find(create(client, title="home task"), "home task")
     state = new_project(client, "work")
