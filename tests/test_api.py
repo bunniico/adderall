@@ -2587,3 +2587,29 @@ def db_settings_keys():
     from app import db
     with db.connect() as conn:
         return {r["k"] for r in conn.execute("SELECT k FROM settings").fetchall()}
+
+
+def test_help_serves_every_article_in_filename_order(client):
+    """One Markdown file per feature under app/help/: the filename orders
+    them, and the first line is the title rather than part of the body."""
+    import os
+    from app import main
+    names = sorted(n for n in os.listdir(main.HELP_DIR) if n.endswith(".md"))
+    articles = client.get("/api/help").json()
+    assert [a["slug"] + ".md" for a in articles] == names
+    assert articles[0] == {**articles[0], "slug": "01-welcome", "title": "Welcome"}
+    for a in articles:
+        assert a["title"] and not a["title"].startswith("#")
+        assert a["body"] and not a["body"].startswith("# ")
+
+
+def test_help_links_between_articles_all_resolve(client):
+    """A link to another article is a relative `.md` link. Renaming an
+    article without fixing what points at it would leave a link that goes
+    nowhere, in the app and on GitHub alike."""
+    import re
+    articles = client.get("/api/help").json()
+    slugs = {a["slug"] for a in articles}
+    for a in articles:
+        for target in re.findall(r"\]\(([^)\s]+)\.md\)", a["body"]):
+            assert target in slugs, f"{a['slug']} links to missing {target}.md"

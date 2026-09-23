@@ -49,6 +49,7 @@
     <button id="btn-view" class="ghost" title="Switch between the task list and the calendar">📅 Calendar</button>
     <button id="btn-braindump" class="ghost" title="Dump everything in your head; the Compiler turns it into tasks">🧠 Braindump</button>
     <button id="btn-focus" class="accent" title="One task at a time with a visual timer">▶ Focus</button>
+    <button id="btn-help" class="ghost" title="Help: how each feature works, and why">❓</button>
     <button id="btn-settings" class="ghost" title="Settings">⚙</button>
   </div>
 </header>
@@ -275,6 +276,14 @@
       on your list, but the days they will take are counted here and kept clear
       when the app schedules anything new.
     </p>
+  </section>
+
+  <!-- Help: one article per feature, from the Markdown files in app/help/.
+       It sits over whichever pane was showing rather than replacing it, so
+       closing it lands you exactly where you were. -->
+  <section id="help-view" class="help" hidden aria-label="Help">
+    <nav id="help-nav" class="help-nav" aria-label="Help articles"></nav>
+    <article id="help-article" class="help-article"></article>
   </section>
 </main>
 
@@ -781,6 +790,7 @@
 <script src="calendar.js"></script>
 <script src="overview.js"></script>
 <script src="habits.js"></script>
+<script src="help.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
