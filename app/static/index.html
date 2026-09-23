@@ -689,6 +689,10 @@
         task's title, description and due date from ClickUp; everything else
         (estimate, priority, status, which tab it's in) is yours to manage
         here and is never touched. Nothing is pushed back to ClickUp.</p>
+      <label>New assignment webhooks <span class="muted">— one URL per line.
+        Each task newly assigned to you is POSTed to every one as a
+        Discord-style message (<code>{"content": "…"}</code>).</span>
+        <textarea id="s-clickup-webhooks" rows="2" placeholder="https://…"></textarea></label>
       <p id="s-clickup-last-sync" class="muted"></p>
       <div class="modal-actions">
         <button type="button" id="s-clickup-sync" class="ghost wide">Sync now</button>

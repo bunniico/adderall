@@ -136,6 +136,16 @@ startup, then every `ADDERALL_CLICKUP_INTERVAL` seconds (1800 by default; `0`
 turns it off) — plus **Sync now** in Settings for an on-demand pass. No
 token configured yet is not an error; the sweep just has nothing to do.
 
+**New assignment notifications.** Add URLs under ⚙ Settings → ClickUp sync →
+*New assignment webhooks* and each task newly assigned to you is POSTed to
+every one as a Discord-style message (`{"content": "..."}`) with its title,
+due date and link, ready to forward to Discord, Harmony, or any chat that
+takes that shape. A new assignment is one a sync hasn't seen before, so it is
+announced on the sync after it's assigned (within
+`ADDERALL_CLICKUP_INTERVAL`, or right away with **Sync now**). The first sync
+after connecting announces nothing, since everything it finds was already
+assigned. Mentions aren't announced: ClickUp's API has no way to list them.
+
 ### Seeing what the AI is doing
 
 Every Claude call writes what it sent and what came back to the container's

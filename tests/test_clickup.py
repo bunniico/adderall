@@ -156,7 +156,8 @@ def test_fetch_maps_network_error_to_clickup_unavailable(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def _remote(id="c1", title="Do the thing", description="", deadline=None):
-    return {"id": id, "title": title, "description": description, "deadline": deadline}
+    return {"id": id, "title": title, "description": description, "deadline": deadline,
+            "url": ""}
 
 
 def test_sync_creates_a_clickup_project_and_its_tasks(monkeypatch, temp_db):
@@ -312,3 +313,59 @@ def test_run_once_syncs_when_a_token_is_configured(monkeypatch, temp_db):
     monkeypatch.setattr(clickup, "fetch_assigned_tasks", lambda token: [_remote()])
     result = clickup.run_once()
     assert result["fetched"] == 1
+
+
+# ---------------------------------------------------------------------------
+# announcing new assignments
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def posts(monkeypatch):
+    sent = []
+
+    def fake_post(self, url, json):
+        if "down" in url:
+            raise httpx.ConnectError("refused")
+        sent.append((url, json))
+        return httpx.Response(204, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(httpx.Client, "post", fake_post)
+    return sent
+
+
+def _two_syncs(monkeypatch, db, first, second, webhooks):
+    db.update_settings({"clickup_api_token": "pk_test", "clickup_webhooks": webhooks,
+                        "timezone": "America/New_York"})
+    monkeypatch.setattr(clickup, "fetch_assigned_tasks", lambda token: first)
+    clickup.sync()
+    monkeypatch.setattr(clickup, "fetch_assigned_tasks", lambda token: second)
+    return clickup.sync()
+
+
+def test_first_sync_announces_nothing(monkeypatch, temp_db, posts):
+    temp_db.update_settings({"clickup_api_token": "pk_test",
+                             "clickup_webhooks": ["http://harmony/hook"]})
+    monkeypatch.setattr(clickup, "fetch_assigned_tasks", lambda token: [_remote("c1")])
+    clickup.sync()
+    assert posts == []
+
+
+def test_a_newly_assigned_task_is_announced_once(monkeypatch, temp_db, posts):
+    new = {**_remote("c2", "Review the spec"), "deadline": "2026-10-01T17:00:00+00:00",
+           "url": "https://app.clickup.com/t/c2"}
+    _two_syncs(monkeypatch, temp_db, [_remote("c1")], [_remote("c1"), new],
+               ["http://harmony/hook"])
+    assert posts == [("http://harmony/hook", {"content":
+        "📌 Assigned to you in ClickUp: “Review the spec”\n"
+        "Due Thu 1 Oct, 13:00\nhttps://app.clickup.com/t/c2"})]
+    clickup.sync()  # seen now: not announced again
+    assert len(posts) == 1
+
+
+def test_a_failing_webhook_neither_fails_the_sync_nor_stops_the_others(
+        monkeypatch, temp_db, posts):
+    result = _two_syncs(monkeypatch, temp_db, [_remote("c1")],
+                        [_remote("c1"), _remote("c2", "New")],
+                        ["http://down/hook", "http://harmony/hook"])
+    assert len(result["created"]) == 1
+    assert [url for url, _ in posts] == ["http://harmony/hook"]
