@@ -17,6 +17,16 @@ two minutes ago, and a cue further in the past than that is dropped silently,
 so starting the app never replays a morning's worth of alarms. A cue is
 remembered by task, stage and deadline, so moving a deadline arms its cues
 again.
+
+A task's planned slot (the first block the scheduler booked for it) gets the
+same three cues, measured from when the slot starts rather than the deadline,
+with `"kind": "start"` on the event (deadline cues carry `"kind": "deadline"`).
+One wrinkle: once a slot's start goes by with the task still not started, the
+planner re-books it from the next minute, over and over. Cues are therefore
+timed off the start as it was planned while it was still ahead, so a slot
+sliding forward is still one slot (its cues fire once), while moving it to a
+genuinely later time arms them again. A task already in progress gets no start
+cues: it has started.
 """
 
 from __future__ import annotations
@@ -43,9 +53,19 @@ STAGES = (
     ("go", "go_lead", "🚀 Time for “{title}” — go now"),
 )
 
+START_STAGES = (
+    ("stop", "stop_lead", "⏸ Stop what you're doing — “{title}” starts soon"),
+    ("ready", "ready_lead", "🧦 Get ready: “{title}” is about to start"),
+    ("go", "go_lead", "🚀 Time to start “{title}”"),
+)
+# The planner never books a slot sooner than this far ahead, so a first block
+# starting any nearer than this is one that has slid, not a new plan.
+SLIDE = timedelta(minutes=2)
+
 subscribers: set[asyncio.Queue] = set()
 recent: deque[dict] = deque(maxlen=50)
 _fired: dict[str, datetime] = {}  # cue key -> when it was due
+_planned_start: dict[str, datetime] = {}  # task id -> its slot's start, as planned
 
 
 def interval_seconds() -> int:
@@ -66,26 +86,50 @@ def due_alarms(alarm_tasks: list[dict], settings: dict, now: datetime) -> list[d
     for key in [k for k, at in _fired.items() if now - at >= WINDOW]:
         del _fired[key]  # past the window; it can never fire again anyway
     out = []
+    _track_planned_starts(alarm_tasks, now)
     for task in alarm_tasks:
+        start = _planned_start.get(task["id"])
+        if start is not None and task.get("status") != "in_progress":
+            out += _cues(task, "start", start, START_STAGES, alarms, now)
         deadline = logic.parse_dt(task.get("deadline"))
-        if deadline is None:
+        if deadline is not None:
+            out += _cues(task, "deadline", deadline, STAGES, alarms, now)
+    return out
+
+
+def _track_planned_starts(alarm_tasks: list[dict], now: datetime) -> None:
+    """Record each task's next slot start while it is still ahead of the
+    planner's floor; a start inside it is a slot sliding, so keep the old one."""
+    live = {t["id"] for t in alarm_tasks}
+    for task_id in [k for k in _planned_start if k not in live]:
+        del _planned_start[task_id]
+    for task in alarm_tasks:
+        blocks = task.get("blocks") or []
+        start = logic.parse_dt(blocks[0][0]) if blocks else None
+        if start is not None and start > now + SLIDE:
+            _planned_start[task["id"]] = start
+
+
+def _cues(task: dict, kind: str, at: datetime, stages, alarms: dict, now: datetime) -> list[dict]:
+    out = []
+    for stage, lead_key, text in stages:
+        fire_at = at - timedelta(minutes=alarms.get(lead_key) or 0)
+        if not (fire_at <= now < fire_at + WINDOW):
             continue
-        for stage, lead_key, text in STAGES:
-            fire_at = deadline - timedelta(minutes=alarms.get(lead_key) or 0)
-            if not (fire_at <= now < fire_at + WINDOW):
-                continue
-            key = f"{task['id']}:{stage}:{task['deadline']}"
-            if key in _fired:
-                continue
-            _fired[key] = fire_at
-            out.append({
-                "type": "alarm",
-                "stage": stage,
-                "text": text.format(title=task["title"]),
-                "task": {k: task.get(k) for k in
-                         ("id", "title", "deadline", "project_id", "project_name")},
-                "at": now.isoformat(timespec="seconds"),
-            })
+        key = f"{task['id']}:{kind}:{stage}:{at.isoformat()}"
+        if key in _fired:
+            continue
+        _fired[key] = fire_at
+        out.append({
+            "type": "alarm",
+            "kind": kind,
+            "stage": stage,
+            "text": text.format(title=task["title"]),
+            "task": {**{k: task.get(k) for k in
+                        ("id", "title", "deadline", "project_id", "project_name")},
+                     "start": at.isoformat(timespec="seconds") if kind == "start" else None},
+            "at": now.isoformat(timespec="seconds"),
+        })
     return out
 
 

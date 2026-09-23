@@ -545,6 +545,8 @@ def _state(project_id: str | None = None, xp_gained: int = 0) -> dict:
                 alarm_tasks.append({
                     "id": t["id"], "title": t["title"], "deadline": d["deadline"],
                     "project_id": project["id"], "project_name": project["name"],
+                    # Its planned slot, for the start cues (see events.py).
+                    "status": t["status"], "blocks": d.get("blocks") or [],
                 })
         if all_view:
             # Which list a task came from is the one thing a compiled list
