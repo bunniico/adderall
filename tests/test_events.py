@@ -16,6 +16,7 @@ SETTINGS = {"alarms": {"enabled": True, "stop_lead": 30, "ready_lead": 10, "go_l
 def events():
     from app import events
     events._fired.clear()
+    events._planned_start.clear()
     events.recent.clear()
     events.subscribers.clear()
     return events
@@ -55,6 +56,62 @@ def test_moving_a_deadline_arms_its_cues_again(events):
     assert events.due_alarms([task(NOW)], SETTINGS, NOW)
     moved = task(NOW + timedelta(seconds=30))
     assert [e["stage"] for e in events.due_alarms([moved], SETTINGS, NOW + timedelta(seconds=30))] == ["go"]
+
+
+def slot(start, id="t2", title="laundry", status="todo", minutes=30):
+    """A task with no deadline cues in play, only a planned slot."""
+    return {"id": id, "title": title, "deadline": None, "status": status,
+            "project_id": "p1", "project_name": "Tasks",
+            "blocks": [[start.isoformat(), (start + timedelta(minutes=minutes)).isoformat()]]}
+
+
+def test_a_planned_slot_gets_start_cues(events):
+    start = NOW + timedelta(minutes=45)
+    t = slot(start)
+    assert events.due_alarms([t], SETTINGS, NOW) == []  # seen while still ahead
+    fired = events.due_alarms([t], SETTINGS, start - timedelta(minutes=30))
+    assert [(e["kind"], e["stage"]) for e in fired] == [("start", "stop")]
+    assert fired[0]["text"] == "⏸ Stop what you're doing — “laundry” starts soon"
+    assert fired[0]["task"]["start"] == start.isoformat()
+    fired = events.due_alarms([t], SETTINGS, start - timedelta(minutes=10))
+    assert [e["stage"] for e in fired] == ["ready"]
+    fired = events.due_alarms([t], SETTINGS, start)
+    assert [e["stage"] for e in fired] == ["go"] and fired[0]["text"] == "🚀 Time to start “laundry”"
+
+
+def test_a_slot_sliding_forward_fires_once(events):
+    """Once its start passes unstarted, the planner re-books the slot from the
+    next minute, every minute. That is the same slot, not a new one each time."""
+    start = NOW + timedelta(minutes=5)
+    events.due_alarms([slot(start)], SETTINGS, NOW)
+    assert [e["stage"] for e in events.due_alarms([slot(start)], SETTINGS, start)] == ["go"]
+    for minute in range(1, 10):
+        now = start + timedelta(minutes=minute)
+        assert events.due_alarms([slot(now + timedelta(minutes=1))], SETTINGS, now) == []
+
+
+def test_rescheduling_a_slot_later_arms_it_again(events):
+    first = NOW + timedelta(minutes=5)
+    events.due_alarms([slot(first)], SETTINGS, NOW)
+    events.due_alarms([slot(first)], SETTINGS, first)
+    later = first + timedelta(hours=3)
+    events.due_alarms([slot(later)], SETTINGS, first + timedelta(minutes=1))
+    assert [e["stage"] for e in events.due_alarms([slot(later)], SETTINGS, later)] == ["go"]
+
+
+def test_no_start_cues_once_started_or_for_a_slot_never_seen_ahead(events):
+    start = NOW + timedelta(minutes=5)
+    events.due_alarms([slot(start, status="in_progress")], SETTINGS, NOW)
+    assert events.due_alarms([slot(start, status="in_progress")], SETTINGS, start) == []
+    # First seen already inside the planner's floor, as at startup: nothing replayed.
+    events._planned_start.clear()
+    assert events.due_alarms([slot(start)], SETTINGS, start - timedelta(minutes=1)) == []
+    assert events.due_alarms([slot(start)], SETTINGS, start) == []
+
+
+def test_deadline_cues_say_so(events):
+    fired = events.due_alarms([task(NOW)], SETTINGS, NOW)
+    assert [(e["kind"], e["stage"]) for e in fired] == [("deadline", "go")]
 
 
 def test_publish_reaches_subscribers_history_and_webhooks(events, monkeypatch):
