@@ -3,6 +3,10 @@ services:
     build: .
     ports:
       - "8000:8000"
+    # Lets a webhook URL name this machine as host.docker.internal, for
+    # something running beside adderall such as Harmony on port 8081.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./data:/app/data   # the SQLite file lives here; nothing is ever lost
     environment:
