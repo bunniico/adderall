@@ -52,6 +52,8 @@ DEFAULT_SETTINGS = {
         "ready_lead": 10,      # minutes before deadline: "get ready"
         "go_lead": 0,          # minutes before deadline: "time to start/leave"
     },
+    "webhooks": [],            # URLs each transition alarm is POSTed to
+                               # (a Discord webhook gets a Discord message)
     "timer_style": "both",     # analog | block | both
     "week_start": 0,           # calendar week starts on 0=Sunday, 1=Monday
     "granularity": 3,          # default breakdown spiciness 1-5

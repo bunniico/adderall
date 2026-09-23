@@ -608,6 +608,9 @@
       <label>Ready <input id="s-ready-lead" type="number" min="0" max="240"> <span class="muted">min before</span></label>
       <label>Go <input id="s-go-lead" type="number" min="0" max="60"> <span class="muted">min before</span></label>
     </div>
+    <label>Alarm webhooks <span class="muted">— one URL per line; each alarm is
+      POSTed to every one. A Discord webhook URL gets a Discord message.</span>
+      <textarea id="s-webhooks" rows="2" placeholder="https://discord.com/api/webhooks/…"></textarea></label>
 
     <label>Week starts on
       <select id="s-week-start">

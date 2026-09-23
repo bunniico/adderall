@@ -6,6 +6,8 @@ All state lives in a local SQLite file; every mutation persists immediately.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import os
 import sys
@@ -15,8 +17,10 @@ from datetime import date, datetime, timedelta, timezone
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from sse_starlette import EventSourceResponse
 
-from . import ai, clickup, db, habits, logic, queue, recurring, scheduler, title_parse
+from . import (ai, clickup, db, events, habits, logic, mcp_server, queue, recurring,
+               scheduler, title_parse)
 
 def _configure_logging() -> None:
     """Send the app's own logs to stdout, where `docker logs` reads them.
@@ -56,12 +60,15 @@ async def lifespan(app: FastAPI):
     scheduler.start(app)
     clickup.start(app)
     queue.start(app)
+    events.start(app, lambda: _state()["alarm_tasks"])
     try:
-        yield
+        async with mcp.session_manager.run():
+            yield
     finally:
         await scheduler.stop(app)
         await clickup.stop(app)
         await queue.stop(app)
+        await events.stop(app)
 
 
 app = FastAPI(title="Adderall", docs_url="/api/docs", openapi_url="/api/openapi.json",
@@ -1401,6 +1408,25 @@ def get_state():
     return _state()
 
 
+@app.get("/api/events")
+async def stream_events():
+    """Transition alarms as they fire, as server-sent events (`event: alarm`,
+    the event as JSON in `data`). The page listens here for its banner; so can
+    anything else. See `events.py`."""
+    inbox: asyncio.Queue = asyncio.Queue()
+    events.subscribers.add(inbox)
+
+    async def stream():
+        try:
+            while True:
+                event = await inbox.get()
+                yield {"event": event["type"], "data": json.dumps(event)}
+        finally:
+            events.subscribers.discard(inbox)
+
+    return EventSourceResponse(stream(), ping=15)
+
+
 # ---------- projects ----------
 # Tabs across the top: one list of tasks each, one open at a time. Every
 # project route answers with the full page state, so switching tabs, renaming
@@ -2358,6 +2384,12 @@ def put_settings(body: SettingsUpdate):
     db.update_settings(changes)
     return get_settings()
 
+
+# AI agents: the MCP server at /mcp. Added before the static mount, which
+# would otherwise answer for every path. See `mcp_server.py`.
+mcp = mcp_server.build()
+app.router.routes.extend(
+    mcp.streamable_http_app(stateless_http=True, json_response=True).routes)
 
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")

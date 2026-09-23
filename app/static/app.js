@@ -68,7 +68,6 @@ function applyState(newState) {
   renderXp();
   renderThrottle();
   maybeShowThankless();
-  scheduleTransitionAlarms();
   syncFocusWithState();
   // Which of the three panes is on screen can have just changed — switching
   // to or away from the Overview arrives as a state read like everything else.
@@ -2566,6 +2565,7 @@ function openSettings() {
   $("s-stop-lead").value = settings.alarms.stop_lead;
   $("s-ready-lead").value = settings.alarms.ready_lead;
   $("s-go-lead").value = settings.alarms.go_lead;
+  $("s-webhooks").value = (settings.webhooks || []).join("\n");
   $("s-timer-style").value = settings.timer_style;
   $("s-week-start").value = String(settings.week_start ?? 0);
   $("s-granularity").value = settings.granularity;
@@ -2615,6 +2615,7 @@ async function saveSettings() {
       ready_lead: Number($("s-ready-lead").value),
       go_lead: Number($("s-go-lead").value),
     },
+    webhooks: $("s-webhooks").value.split("\n").map((u) => u.trim()).filter(Boolean),
     timer_style: $("s-timer-style").value,
     week_start: Number($("s-week-start").value),
     granularity: Number($("s-granularity").value),
@@ -2807,45 +2808,22 @@ const SOUNDS = {
 
 /* ---------------- deadline transition alarms ----------------
  * Staged cues for tasks with deadlines: stop current activity → get ready →
- * go. Checked every 30s while the page is open; each cue fires once. */
+ * go. The server decides when each one fires (see app/events.py) so that
+ * webhooks and other listeners hear the same cue; the page just listens.
+ * EventSource reconnects on its own after the server restarts. */
 
-const firedAlarms = new Set();
-
-function scheduleTransitionAlarms() { /* recomputed on every check tick */ }
-
-function checkTransitionAlarms() {
-  if (!settings?.alarms?.enabled) return;
-  const now = Date.now();
-  const stages = [
-    { key: "stop", lead: settings.alarms.stop_lead, text: (t) => `⏸ Stop what you're doing — “${t.title}” is coming up` },
-    { key: "ready", lead: settings.alarms.ready_lead, text: (t) => `🧦 Get ready: “${t.title}”` },
-    { key: "go", lead: settings.alarms.go_lead, text: (t) => `🚀 Time for “${t.title}” — go now` },
-  ];
+function onAlarm(e) {
+  const alarm = JSON.parse(e.data);
   // Deadlines come from every project, not just the open tab: a cue you
   // miss because its task is one tab over is the whole failure mode this
   // app is built to avoid. The banner says which project when it isn't
   // the one on screen.
-  for (const t of state.alarm_tasks || []) {
-    if (!t.deadline) continue;
-    const due = new Date(t.deadline).getTime();
-    for (const stage of stages) {
-      const fireAt = due - stage.lead * 60000;
-      const id = `${t.id}:${stage.key}`;
-      if (firedAlarms.has(id)) continue;
-      // Fire if we're within the window (up to 2 min late) — not for
-      // deadlines that were already long past when the page opened.
-      if (now >= fireAt && now - fireAt < 2 * 60000) {
-        firedAlarms.add(id);
-        const where = t.project_id && t.project_id !== state.active_project_id
-          ? ` · in ${t.project_name}` : "";
-        SOUNDS[stage.key]();
-        showAlarmBanner(stage.text(t) + where);
-        notify(stage.text(t) + where);
-      } else if (now - fireAt >= 2 * 60000) {
-        firedAlarms.add(id); // silently expire stale cues
-      }
-    }
-  }
+  const t = alarm.task;
+  const where = t.project_id && t.project_id !== state.active_project_id
+    ? ` · in ${t.project_name}` : "";
+  SOUNDS[alarm.stage]();
+  showAlarmBanner(alarm.text + where);
+  notify(alarm.text + where);
 }
 
 function showAlarmBanner(text) {
@@ -2865,7 +2843,7 @@ function notify(text) {
   if (Notification.permission === "granted") new Notification("adderall", { body: text });
 }
 
-setInterval(checkTransitionAlarms, 30000);
+new EventSource("/api/events").addEventListener("alarm", onAlarm);
 
 /* ---------------- Taskmaster focus mode ----------------
  * A focus session outlives the overlay. Closing the overlay only minimizes
