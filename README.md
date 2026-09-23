@@ -187,6 +187,36 @@ retrying a request that was never going to work just delays the same
 failure. Either way, every attempt is logged, so `docker logs` always shows
 what actually happened.
 
+### Using it from other apps and AI agents
+
+Everything the page does goes through a JSON API; its reference is at
+<http://localhost:8000/api/docs>. On top of that, two ways in:
+
+**Transition alarms as events.** The stop / get ready / go alarms are raised
+by the server (checked every `ADDERALL_ALARM_INTERVAL` seconds, 30 by
+default), so they fire whether or not a tab is open, and go to three places:
+
+- the page's banner, as before;
+- `GET /api/events`, a server-sent event stream (`event: alarm`, the alarm as
+  JSON in `data`) that any local program can listen to:
+  `curl -N localhost:8000/api/events`;
+- every URL under ⚙ Settings → *Alarm webhooks*. A Discord webhook URL
+  (Server Settings → Integrations → Webhooks → Copy URL) gets the alarm as a
+  Discord message; any other URL gets the alarm's JSON POSTed to it.
+
+**An MCP server for AI agents** at `http://localhost:8000/mcp` (streamable
+HTTP). Its tools list, add, edit, start, complete and delete tasks, pick the
+next one, compile a braindump, check off habits, and read the latest alarms.
+To connect Claude Code:
+
+```bash
+claude mcp add --transport http adderall http://localhost:8000/mcp
+```
+
+Nothing here asks who is calling, the same as the rest of the API. The MCP
+server only answers requests addressed to `localhost`, but the event stream
+and the API answer anyone who can reach the port.
+
 ## What it does
 
 - **Projects in tabs** — a row of tabs across the top, one list of tasks
@@ -671,6 +701,9 @@ app/
                 occurrence at a time, the sweep, and the forecast the calendar
                 and the day book plan against
   scheduler.py  the background timer that runs that sweep
+  events.py     transition alarms: the timer that raises them, the event
+                stream the page listens to, and the webhooks
+  mcp_server.py the MCP server AI agents connect to at /mcp
   ai.py         Claude API broker (breakdown / annotate / compile), model
                 prices, and the budget throttle applied at the call site
   clickup.py    ClickUp sync: the API client, the one-way import into a
