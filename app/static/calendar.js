@@ -1407,6 +1407,7 @@ function wireCalendar() {
   });
   $("n-drop").addEventListener("click", dropPile);
   $("cal-replan").addEventListener("click", replanNow);
+  $("cal-settings").addEventListener("click", () => $("modal-cal-settings").showModal());
 
   // Calendar keys, borrowed from Google Calendar's: arrows page, T is today,
   // D/W/M switch view. Only while the calendar is the thing on screen, and
