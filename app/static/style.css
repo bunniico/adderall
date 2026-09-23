@@ -764,7 +764,13 @@ output { color: var(--text); font-weight: 600; }
 .focus-actions { justify-content: center; }
 .focus-actions button { flex: none; }
 
-/* ---- alarm banner / toast / celebration ---- */
+/* ---- connection banner / alarm banner / toast / celebration ---- */
+.connection-banner[hidden] { display: none; }
+.connection-banner {
+  background: var(--bad); color: var(--on-accent); font-weight: 600;
+  padding: 10px 14px; border-radius: var(--radius); margin-bottom: 12px;
+  text-align: center;
+}
 .alarm-banner[hidden] { display: none; }
 .alarm-banner {
   background: var(--warn); color: var(--on-accent); font-weight: 600;

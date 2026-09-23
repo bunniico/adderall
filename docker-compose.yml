@@ -27,6 +27,10 @@ services:
       # 0 to turn the background job off and drive `POST /api/clickup/sync`
       # from a real cron instead.
       - ADDERALL_CLICKUP_INTERVAL=${ADDERALL_CLICKUP_INTERVAL:-1800}
+      # How often a queued AI/ClickUp call is retried when this machine itself
+      # had no route to the internet, in seconds (60 by default). Set to 0 to
+      # leave queued items sitting until this is turned back on.
+      - ADDERALL_QUEUE_INTERVAL=${ADDERALL_QUEUE_INTERVAL:-60}
     # Adderall is a small FastAPI app over SQLite; it never needs more than
     # one core or half a gig, so cap it and leave the rest of the box alone.
     deploy:

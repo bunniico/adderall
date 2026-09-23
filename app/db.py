@@ -228,6 +228,19 @@ CREATE TABLE IF NOT EXISTS habit_checkins (
     PRIMARY KEY (habit_id, day)
 );
 CREATE INDEX IF NOT EXISTS idx_checkins_day ON habit_checkins(day);
+-- Outbound calls (to Claude, to ClickUp) that failed because this machine
+-- itself had no route to the internet, not because the request was bad. Kept
+-- so a queued item survives a restart; queue.py retries each on a timer
+-- until it goes through or fails for a reason retrying can't fix.
+CREATE TABLE IF NOT EXISTS queue (
+    id         TEXT PRIMARY KEY,
+    kind       TEXT NOT NULL,
+    payload    TEXT NOT NULL,
+    attempts   INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 TASK_FIELDS = {
@@ -1100,6 +1113,48 @@ def spend_since(cutoff_iso: str) -> float:
             "SELECT COALESCE(SUM(usd), 0) FROM spend WHERE at >= ?", (cutoff_iso,)
         ).fetchone()
     return float(row[0])
+
+
+# ---------- queue (outbound calls retried once this machine has internet
+# again) ----------
+
+def queue_add(kind: str, payload: dict) -> dict:
+    ts = now_iso()
+    qid = new_id()
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO queue (id, kind, payload, attempts, created_at, updated_at) "
+            "VALUES (?, ?, ?, 0, ?, ?)",
+            (qid, kind, json.dumps(payload), ts, ts),
+        )
+    return {"id": qid, "kind": kind, "payload": payload, "attempts": 0,
+            "last_error": None, "created_at": ts, "updated_at": ts}
+
+
+def queue_pending() -> list[dict]:
+    with connect() as conn:
+        rows = conn.execute("SELECT * FROM queue ORDER BY created_at").fetchall()
+    out = []
+    for r in rows:
+        row = dict(r)
+        row["payload"] = json.loads(row["payload"])
+        out.append(row)
+    return out
+
+
+def queue_retry(qid: str, error: str) -> None:
+    """Still no route to the internet — leave the item queued, note why."""
+    with connect() as conn:
+        conn.execute(
+            "UPDATE queue SET attempts = attempts + 1, updated_at = ?, last_error = ? "
+            "WHERE id = ?",
+            (now_iso(), error, qid),
+        )
+
+
+def queue_remove(qid: str) -> None:
+    with connect() as conn:
+        conn.execute("DELETE FROM queue WHERE id = ?", (qid,))
 
 
 # Settings the plan is made of: changing one of these means the plan was made
