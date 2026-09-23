@@ -2391,6 +2391,28 @@ def put_settings(body: SettingsUpdate):
     return get_settings()
 
 
+HELP_DIR = os.path.join(os.path.dirname(__file__), "help")
+
+
+@app.get("/api/help")
+def get_help():
+    """Every help article, in order. One Markdown file per feature under
+    `app/help/`, so the articles ship and change with the code they describe;
+    the filename orders them and its first `# ` line is the title. All of
+    them at once, because together they are smaller than one calendar read
+    and the page can then move between them without asking again."""
+    articles = []
+    for name in sorted(os.listdir(HELP_DIR)):
+        if not name.endswith(".md"):
+            continue
+        with open(os.path.join(HELP_DIR, name), encoding="utf-8") as f:
+            text = f.read()
+        head, _, body = text.partition("\n")
+        articles.append({"slug": name[:-3], "title": head.removeprefix("# ").strip(),
+                         "body": body.strip()})
+    return articles
+
+
 # AI agents: the MCP server at /mcp. Added before the static mount, which
 # would otherwise answer for every path. See `mcp_server.py`.
 mcp = mcp_server.build()

@@ -229,351 +229,42 @@ and the API answer anyone who can reach the port.
 
 ## What it does
 
-- **Projects in tabs** — a row of tabs across the top, one list of tasks
-  each: work, house, that side thing. Click a tab to switch (or **Alt+1…9**),
-  **＋** to start a new one, click the open tab to rename it, **✕** to delete
-  it and everything in it. Drag a tab along the strip to put it where you
-  want it — hold and slide on a touchscreen, or focus a tab and use
-  **Shift+←** / **Shift+→** — and that order sticks, on every device;
-  reordering never switches tabs, and **←** / **→** on their own just walk
-  along the strip. Adding, braindumping, breaking down, ordering and
-  focusing all act on the tab you're on and leave the others alone, and the
-  app reopens on the tab you were last in. Send a task to another tab from
-  its detail modal — its subtasks go with it. Deadline alarms are the one
-  thing that deliberately ignores tabs: a cue you'd miss because its task is
-  one tab over is exactly what this app exists to prevent, so those fire
-  wherever you are and say which project they came from. Existing installs
-  upgrade with everything in a first tab called "Tasks".
-- **All** — the tab at the head of the strip once there is more than one
-  project: every list compiled into one, read by urgency, each task wearing
-  the name of the list it came from. Everything you do to a task works from
-  there — tick it off, open it, break it down, ▶ focus it, delete it — and
-  **next up** and ▶ Focus pick across every project while it is open, so the
-  task wearing the badge is the task Focus hands you. It holds nothing
-  itself, so the add box and dragging stand down (a compiled list has nowhere
-  to put a new task and no order of its own to drag one into) and the sorter
-  drops **Manual**, since where you dragged something in one tab says nothing
-  about where it sits among another tab's. The tab underneath stays the one
-  adding and braindumping act on, and it is where you go back to to arrange
-  anything.
-- **Overview** — the first tab in the strip, and the one that reads your
-  lists instead of being one. Tiles across the top: open tasks, what is
-  overdue, what is due in the next seven days, how much work is left,
-  how much of today is already booked against the day the app has learned
-  you actually have, how much you got through in the last month, where
-  your level sits and what it has been earning a day. Under them, a chart of
-  finished work — one bar per day
-  for the last 30 days, minutes above and tasks below, with a line for the
-  day cap to read them against, and the quiet days drawn rather than skipped.
-  Then **Next up** and **Coming up**: the most urgent work and the nearest
-  deadlines across every list, each row saying which tab it came from, and
-  clicking one opens it right there without leaving the page. Last, where
-  the work left actually sits — per list, and per corner of the
-  impact/effort matrix. Everything on it is derived from the same numbers
-  the list and the calendar are derived from, so the hours it quotes are the
-  hours they draw. Unlike **All** it is there with a single project too.
-- **Habits** — the second tab in the strip, for the work that never finishes.
-  A **routine** is not a task and not a repeating task: it has no estimate,
-  no priority, no deadline and no place in your day's budget, because none of
-  those are things it can be. It sits in one of four parts of a life —
-  🏠 **Life**, 💊 **Health**, 🏃 **Exercise**, 🧠 **Mentality** — and asks one
-  question, which is whether you did it today. Set how often it wants doing:
-  **every day**, **on certain days of the week**, or **a number of days a
-  week** ("run three times a week" is a real habit, and pinning it to named
-  days makes it a lie). Tick the big circle and that's the whole interaction.
-  Underneath each one is **a year of squares** in the manner of GitHub's
-  contribution graph — one per day, filled on the days you did it — because a
-  list says what you meant to do and a calendar of the days you did it says
-  how it is actually going. **Click any square** to fill it in or clear it: a
-  day you forgot to tick is still a day you did it, and a square you filled
-  in by mistake that you could not clear would turn the whole calendar into
-  something you stop trusting. The streak beside it counts only the days the
-  routine actually names, so a Sunday you never claimed cannot break one, and
-  today not being ticked *yet* never breaks one either — the day isn't over,
-  and a display that tells you you've failed every morning is a display you
-  stop opening. A weekly target's streak is counted in weeks, and this week
-  is allowed to be half-finished. Next to it, the honest number that keeps a
-  long streak in proportion: what percentage of its chances it actually took
-  in the last 30 days. Routines live in no project, so opening this tab
-  leaves whichever list you were on exactly where it was, and nothing here
-  ever reaches the task list, the calendar, ▶ Focus or the day cap.
-- **Calendar** — 📅 in the header swaps the list for a calendar with **Day**,
-  **Week** and **Month** views. Unlike everything else in the app it spans
-  *every* project at once, because "what is due this week" is a question about
-  your whole life and not about whichever tab is open; a filter row narrows it
-  to one project, to one corner of the impact/effort matrix, hides the
-  deadlines the app assigned itself, or hides the copies your repeating tasks
-  have not made yet (see **Repeats ahead** below — they are on by default,
-  because a week of standing commitments is most of what a week is). **Day** is a real time grid: each task is
-  a block ending at its deadline and starting one buffered estimate earlier,
-  with its **time tax drawn as a striped tail** so you can see that a "45m"
-  job really occupies an hour, the free stretches between blocks labelled with
-  how long they are, and a line across the current time, above a running
-  count of how much of the day is booked against how much it holds. **Week**
-  and **Month**
-  are day-by-day lists ranked by **score** — deadline pressure, impact, effort
-  and how long it takes, folded into one 0–100 number — so the top of each day
-  is what that day is actually about. Arrow keys page through, `T` goes to today,
-  `D`/`W`/`M` switch view, and clicking any task opens it wherever it lives.
-- **Nudge past-due work** — a deadline that has already gone by is the most
-  demoralizing thing a list like this can show you, and re-typing a date for
-  every item is exactly the friction that leaves it showing. So the overdue
-  badge **is a button**: click the red `overdue · … ⏩` on any task, in the
-  list or on the calendar, and pick "in 1 hour", "tonight", "tomorrow, same
-  time", "in 3 days", "next week" or a moment of your own. The task moves
-  **keeping its length** — the estimate never changes, so it takes up exactly
-  as much of the new day as it did of the old one — and for anything with
-  subtasks the whole plan slides by the same amount, so three days of steps
-  stay three days of steps instead of collapsing onto the new date. The
-  calendar additionally gathers everything overdue into one rail with a
-  *Nudge all* on it, for when the pile is the problem rather than any one
-  task in it.
-- **Magic ToDo** — type a task, hit ⚡, get concrete subtasks. A 🌶
-  granularity slider controls how fine the breakdown is; any subtask can be
-  broken down further, recursively. The **+** on every task adds a subtask by
-  hand when you already know the step, at any depth, and the box stays open so
-  you can reel off several in a row.
-- **Delete, with the cascade spelled out** — every task carries a **✕** at
-  the end of its row, finished ones included, and it deletes: not "discard",
-  which keeps the task and marks it dropped, but gone from the database.
-  Because the schema cascades, deleting a task deletes everything nested under
-  it — and that is exactly the thing you can't see at the moment you click,
-  since a container is one line by design and may well be folded shut. So a
-  task with subtasks doesn't get a bare "are you sure": it is counted ("has 7
-  subtasks nested under it, and they all go too"), the first few are named,
-  and the total you are about to lose is on the button. A task with nothing
-  under it just asks once and gets out of the way.
-- **Fold anything away** — a task with subtasks gets a **▾** next to it;
-  click it and the whole list underneath collapses into the one line that
-  contains it, which still carries its rolled-up time, its deadline, its
-  progress bar, and a note when the "next up" task is one of the ones now
-  hidden. Folds are stored per task, so the shape you left the list in is the
-  shape it comes back in, on every device. Anything that puts a task inside a
-  folded one — the **+** box, a ⚡ breakdown, a drag — opens it back up, so
-  nothing ever lands somewhere you can't see.
-- **Sort it however you need to read it** — a **Sort** control above the list
-  reorders it by **score** (the app's one-number answer to "what deserves the
-  next hour"), **deadline**, **number of subtasks** (open steps, counted all
-  the way down — which of these is still a whole project?), or **created
-  time**, each way round: soonest or furthest off, most steps or fewest,
-  newest or oldest. It is a lens, not a change of plan — the steps nested
-  inside a task keep the order the breakdown gave them, and ▶ Focus still
-  hands you the most urgent thing, so reading your list by deadline for a
-  minute never quietly changes what you are about to work on. Tasks the field
-  says nothing about (no deadline, say) sink to the bottom whichever way the
-  sort is pointing. **Smart** is the default — urgency first, quick wins
-  ahead of slogs — and **Manual** is the list exactly as you dragged it.
-- **Your own order** — drag any task by its ⠿ handle: onto the top or bottom
-  edge of another task to sit above or below it, into the middle of one to
-  nest inside it, or onto empty list space to pull it back out to the top
-  level. Works with a mouse, on a touchscreen, and from the keyboard (focus a
-  handle and use ↑ ↓ to move, → to nest under the task above, ← to pop out).
-  The first move that places a task between others switches the list to
-  **manual order**: it then stays exactly as you arranged it — including which
-  task is "next up" — instead of being re-sorted. Whatever order you were
-  looking at when you dragged is the order it freezes, so a list sorted by
-  deadline keeps its deadline order and only the task you moved moves. Nesting
-  is the exception: which task something belongs inside is true however the
-  list is being read, so dropping one task into another leaves the sort alone
-  and uses it to place the newcomer among the steps already there. Picking
-  another **Sort** (or the switch in ⚙ Settings, which is the same switch)
-  turns manual order back off, and everything else (estimates, deadlines,
-  rollups, alarms) carries on as before either way.
-- **Estimator** — every task gets a time estimate (AI-seeded, always
-  overridable), and every estimate gets an automatic **time tax**: a 25–50%
-  buffer (default 30%), because the planning fallacy means raw estimates are
-  systematically wrong. Optionally the buffer adapts to your own recorded
-  actual-vs-estimated history (it only ever raises, never lowers).
-- **Rolled-up totals** — a task that contains subtasks is worth what it
-  holds: its badge shows the summed buffered estimate of the whole subtree
-  (a "~20m" parent with 46m of steps under it reads ~46m) and the furthest
-  deadline anywhere inside it. Under it sits a **progress bar in time** —
-  how many minutes of the subtree are done and how many are still ahead,
-  not how many checkboxes are ticked.
-- **Compiler** — 🧠 Braindump: dump everything in your head into one box;
-  a single deep-model call with extended thinking turns it into discrete
-  tasks — **nested**, so the steps that add up to one outcome land as
-  subtasks under it (up to three levels deep) instead of a flat wall of
-  items. Unrelated one-off things stay where they belong, at the top level.
-- **Taskmaster** — ▶ Focus mode shows *one task at a time* with a
-  Time-Timer-style depleting dial (with a real analog clock in the middle),
-  a shrinking color block, elapsed **and** remaining time, and staged
-  transition cues (wrap up → find a stopping point → time) with distinct
-  sounds. It **walks the task tree depth-first**: the subtasks of a task
-  come before the task itself, so a session drills down to the smallest
-  first step and surfaces back up, showing you where you are in the tree.
-  Closing the overlay only **minimizes** the session — the timer keeps
-  running in the background (duck out, add the task you just remembered,
-  tap the ▶ pill in the header to come back to the same countdown), and it
-  survives reloads. ↺ resets the timer when you'd rather start the block
-  over; ⏹ ends the session for good.
-- **Prioritization** — every task carries impact/effort scores (0–10) placed
-  on an action-priority matrix: ⚡ quick wins, 🏔 major projects, fill-ins,
-  and 😮‍💨 **thankless tasks** — which trigger a gentle "this is high effort,
-  low impact; consider dropping it" suggestion.
-- **One score, four signals** — **urgency** (40%), **impact** (30%), **effort**
-  (15%) and **time cost** (15%) fold into a single 0–100 number. Effort and
-  time are counted separately because they are different costs: a form you
-  dread for ten minutes is cheap on the clock and dear in effort, three hours
-  of mindless data entry is the other way round. Time cost decays rather than
-  scaling flat — ten minutes scores 8.6, an hour 5, a whole day about 1 —
-  because shaving twenty minutes off a half-hour job changes whether you do it
-  now, and shaving twenty off a six-hour one changes nothing. A task nobody has
-  estimated or rated sits at neutral, never at zero.
-- **The score is on the task** — that number used to exist only inside the
-  app's own head and on the calendar chips. Every active task now wears it as
-  a `★ 62` badge, and the detail modal spells out what it is made of, so the
-  order the list is in is an order you can check rather than one you have to
-  take on trust.
-- **XP and levels** — finishing a task pays out its score as XP: worth 62,
-  earns 62. One number, not two — there is nothing extra to learn and nothing
-  to farm, and the way to earn more is to do the work that was worth more. A
-  level and a bar sit in the top-right corner, the bar slides as the XP lands
-  and `+62 XP` floats up under it, and passing a level runs the bar out to
-  full before starting the new one. Levels sit steadily further apart (100 XP
-  to level 2, another 200 to level 3), the Done list keeps what each task
-  paid, and XP already earned stays earned — a task that has paid once never
-  pays again, however often it is reopened, and deleting it later costs you
-  nothing. Containers pay through their steps, never twice for the same
-  afternoon. Two averages sit under the bar in the rail: XP an hour, across
-  every estimated task that ever paid out, and XP a day over the last 30 days
-  — that one counts the quiet days in the divisor, so it is the pace the month
-  ran at rather than what a good afternoon pays, and it is the one the
-  Overview repeats as a tile. The whole thing is one switch in ⚙ Settings,
-  along with the confetti.
-- **A parent is its parts** — a task with subtasks gets no score of its own.
-  It inherits the combined score of the work still underneath it, each step
-  weighing what it costs in minutes, all the way down the tree. Finished and
-  discarded steps stop counting, so a project is worth what is left of it —
-  and re-rating a container changes nothing, because the work is in the steps.
-- **Deadlines & urgency** — set deadlines yourself or let the app auto-assign
-  them (toggleable). Subtasks are backward-scheduled from their parent's
-  deadline using buffered estimates. Urgency rises as remaining time shrinks
-  relative to the (buffered) work left, and drives the "what next" ordering.
-- **Start times — when a thing wants to *begin*** — a deadline says when work
-  has to be finished, which for most of what people actually write down is the
-  harder question and the less useful answer. *Eat dinner* is a six o'clock
-  thing; it has no deadline in any meaningful sense, and a list that can only
-  say "due Thursday" has nothing to do with it. So every task can also carry a
-  **start time**, and that is what the scheduler places it from: the task lands
-  in the first slot that fits from that hour, on that day — after office hours
-  if that is when it happens, because the working window is where the app puts
-  work it chose the hour for *itself*, not a rule about when you are allowed to
-  eat. Set it in the task's dialog, where **Now · In an hour · This evening ·
-  Tomorrow morning · Next week · Some day** are one click each, because a
-  datetime picker is exactly the friction this app exists to remove.
-  It cuts both ways, and the second way is the point. A start time a few hours
-  out makes a task urgent on its own account — it climbs the list as its hour
-  approaches, whatever its deadline says — while **Some day** parks something
-  a month out where it stops competing for this afternoon. *Finish that game*
-  sinks to a score of 20 and stays there until it is nearly time; the evening
-  it was quietly taking is handed back to the work that needed it.
-  That handing-back is literal: when two tasks want the same day and the day
-  cannot hold both, the one that is worth more takes it and the other moves to
-  the next day with room. Placement used to follow whatever order the list
-  happened to be in, so the first thing you ever typed got first pick of every
-  afternoon; now the day is handed out by score — deadline *and* start
-  pressure, impact, effort, length — and a task with nothing to say about when
-  it should start sits at neutral, so a list that never touches the feature
-  schedules exactly as it did before. Nudging a task carries its start time
-  along with its deadline, so a plan pushed to next week keeps its shape at
-  both ends instead of claiming it should have begun last Tuesday.
-- **And the AI fills it in for you** — the field is only worth having if you
-  never have to touch it, so each new task gets a suggested start time from the
-  same fast batched call that estimates it: the model is told the local date
-  and hour and answers with an offset, which is what keeps every timezone and
-  date-format trap out of the loop. *Eat dinner* comes back as this evening,
-  *renew the passport* as a weekday soon, *finish that game* as weeks out —
-  and it is asked to say so with a big number rather than a small one, because
-  putting the things that do not matter near the front is how a list stops
-  being usable. Steps inside a task never get one: a step is scheduled inside
-  the slot its parent was given, which is what keeps a plan one readable block
-  rather than a scatter. Override any of it by hand, or turn the whole thing
-  off in ⚙ Settings.
-- **Deadlines that land on a day that can hold them** — an auto-assigned
-  deadline used to be a horizon and nothing else, so fifteen things
-  braindumped in one minute came back as fifteen blocks stacked on the same
-  afternoon, at the same instant, on a day that could never have held them —
-  a plan you bounce off rather than start. Now the app keeps a book of what
-  each day already holds — deadlines you set, work it has already placed,
-  across *every* tab — and gives each new task the first slot that actually
-  fits, laid out through your working day and rolling onto the next one when
-  a day is full. It only ever looks forward from the day the horizon asked
-  for, so nothing is quietly pulled earlier, and nothing already overdue is
-  quietly rescheduled out of the red. A whole task tree is placed as one
-  span, so a project's steps still tile the block its parent occupies. A task
-  with a **start time** skips the horizon entirely — it already knows which
-  day and which hour it wants — and the cap does not get a veto over it, the
-  same way it does not over a deadline you set yourself: you still have to eat
-  dinner on a day that is already full, and the calendar saying the day is
-  overbooked is the honest answer rather than moving the meal.
-  The book holds **work that comes back** as well as work that exists: a
-  weekday that will be eight hours of the standing job is a full weekday, and
-  the app plans around it rather than finding out on the day. When genuinely
-  nothing has room — every day between here and the horizon already full —
-  the overflow goes to the emptiest day there is, after what is already booked
-  on it, rather than piling onto one afternoon at one instant.
-  Everything about it is a preference: the length of a day, the hour it
-  starts, and whether to spread work at all, all in ⚙ Settings.
-- **A day cap that learns** — the calendar warns when a day is booked past
-  what a day holds, and auto-deadlines pack up to that and no further. Eight
-  hours is the default, but it is also the number most likely to be wrong for
-  any particular person, so **Learn my real day** watches how often you
-  actually reach it. Clear it every single day and it rises; never once reach
-  it and it falls halfway toward the day you really have — counting only the
-  days you finished something on, so a weekend off is not evidence. A goal
-  you have never hit isn't a plan, it's a daily notification that you failed,
-  which is the exact failure mode this app exists to avoid. The warning always
-  says which number it is using and why.
-- **Work that comes back** — some things are not tasks, they are rhythms: bins
-  on Tuesday, rent on the first, the standup every weekday morning. Any
-  top-level task can repeat **daily**, **weekly**, **monthly** or **yearly**,
-  and **Custom…** is those same four with their knobs turned up — every 3 days,
-  every other week on Mon & Thu, the last Friday of every second month, the
-  31st (clamped, so a bill at the end of the month is at the end of February
-  too). Give it a time of day or leave it to land at the end of your working
-  day; end it after a number of times, on a date, or never; and tick **count
-  from when I finish it** when "every 3 days" means three days after you
-  actually do it rather than three days after it was due. The dialog shows the
-  next four real dates as you type, because *27 Feb · 24 Apr · 26 Jun* says
-  what "the last Friday of every second month" means far better than the rule
-  does.
-- **One copy at a time** — the single decision the whole feature is built
-  around. A daily chore you ignored for a fortnight comes back as **one** row,
-  not fourteen: that pile is the thing this app exists to prevent, and it is
-  also a lie — you are one bin-day behind, not fourteen. So a rhythm whose date
-  came round again while the last copy was still sitting there quietly steps to
-  the next one instead of stacking. Finish a copy and the next is timed from
-  there; clearing a month-old backlog hands you the next one, never last
-  month's. Editing this week's copy — a better title, a truer estimate, one more
-  step — is how you edit the series, subtasks and all, and a step you dropped
-  stays dropped. Discarding or deleting one copy skips that one; **Repeat →
-  Doesn't repeat** is how you end the job itself, and the delete confirmation
-  says so rather than letting you find out next week. Finish a copy and the
-  next one appears as soon as its day is close enough to be worth seeing — a
-  day of lead means a day, so ticking off this morning's chore puts tomorrow's
-  on the list before you close the laptop, whatever hour tomorrow's is due at.
-  When the next one is further off than that, the app says when it lands
-  rather than leaving you looking at an empty list wondering if the repeat
-  broke.
-- **Repeats ahead, on the calendar** — one copy at a time is the right answer
-  for a list and the wrong one for a calendar: a fortnight in which you will
-  work eight hours a day looked like a fortnight of free afternoons, because
-  thirteen of those days had no task on them yet. So the calendar draws the
-  copies each rhythm still owes — three months of them — as outlined blocks:
-  real dates, real lengths, nothing to tick off, and a click opens the copy
-  that *is* on your list. They count toward how full a day is, so the day cap
-  warns against the day you are actually going to have, and **the scheduler
-  books around them**: a new task is given a day that is not already eight
-  hours of the same job. Turn them off with **Repeats ahead** in the calendar
-  filters if you would rather see only what exists.
-- **Transition alarms** — three staged cues before any deadline (stop what
-  you're doing → get ready → go), with different sounds and configurable
-  lead times.
-- **ClickUp sync** — a **ClickUp** tab that mirrors every open task assigned
-  to you, pulled in on a background timer or on demand with **Sync now** in
-  ⚙ Settings. One-way: ClickUp owns an imported task's title, description
-  and due date, everything else is yours. See **ClickUp sync** above.
+Each feature has its own article, explaining how it works and why it was
+built that way. They live in [`app/help/`](app/help/) as Markdown and are
+also in the app itself under **❓** in the header, so they ship and update
+with the code.
+
+- [Welcome](app/help/01-welcome.md)
+- [Projects and tabs](app/help/02-projects-and-tabs.md)
+- [The All tab](app/help/03-the-all-tab.md)
+- [Overview](app/help/04-overview.md)
+- [Habits](app/help/05-habits.md)
+- [Calendar](app/help/06-calendar.md)
+- [Adding tasks](app/help/07-adding-tasks.md)
+- [Magic ToDo: breaking tasks down](app/help/08-magic-todo.md)
+- [Braindump](app/help/09-braindump.md)
+- [Sorting and ordering](app/help/10-sorting-and-ordering.md)
+- [Folding and deleting](app/help/11-folding-and-deleting.md)
+- [Estimates and the time tax](app/help/12-estimates-and-time-tax.md)
+- [Impact and effort](app/help/13-impact-and-effort.md)
+- [The score](app/help/14-the-score.md)
+- [XP and levels](app/help/15-xp-and-levels.md)
+- [Deadlines and start times](app/help/16-deadlines-and-start-times.md)
+- [How the app plans your days](app/help/17-planning-your-days.md)
+- [Nudging overdue work](app/help/18-nudging-overdue-work.md)
+- [Repeating tasks](app/help/19-repeating-tasks.md)
+- [Focus mode](app/help/20-focus-mode.md)
+- [Transition alarms](app/help/21-transition-alarms.md)
+- [Sounds](app/help/22-sounds.md)
+- [AI and your budget](app/help/23-ai-and-your-budget.md)
+- [ClickUp sync](app/help/24-clickup-sync.md)
+- [When the connection drops](app/help/25-when-the-connection-drops.md)
+- [Other apps and AI agents](app/help/26-other-apps-and-agents.md)
+
+To add or change one, edit the Markdown file. The number at the front of
+the filename sets its place in the list, the first `# ` line is its title,
+and links to other articles are plain relative links such as
+`[Calendar](06-calendar.md)`.
 
 ## Design principles
 
@@ -723,7 +414,10 @@ app/
                   and settings; calendar.js is the day/week/month views
                   and nudging; overview.js is the Overview tab's tiles,
                   shortlists and hand-rolled SVG charts; habits.js is the
-                  Habits tab, its editor and the year-of-squares heatmap
+                  Habits tab, its editor and the year-of-squares heatmap;
+                  help.js is the Help view and its small Markdown renderer
+  help/         the in-app help: one Markdown article per feature, served
+                by /api/help
 tests/          pytest suite
 data/           SQLite database (created at runtime, gitignored)
 ```

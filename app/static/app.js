@@ -3442,6 +3442,7 @@ function wire() {
 
   wireOverview();
   wireHabits();
+  wireHelp();
 
   // Ask for notification permission on first interaction (needed for alarms).
   document.body.addEventListener("click", () => {
