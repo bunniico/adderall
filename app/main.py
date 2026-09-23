@@ -1404,8 +1404,12 @@ def health():
 
 
 @app.get("/api/state")
-def get_state():
-    return _state()
+def get_state(project_id: str | None = None):
+    """The page state; `project_id` reads that project's tasks without
+    switching the open tab, the way the MCP server's `list_tasks` does."""
+    if project_id:
+        _require_project(project_id)
+    return _state(project_id)
 
 
 @app.get("/api/events")
