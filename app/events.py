@@ -39,7 +39,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
-from . import db, logic
+from . import db, logic, modules
 
 log = logging.getLogger(__name__)
 
@@ -80,9 +80,9 @@ def interval_seconds() -> int:
 
 def due_alarms(alarm_tasks: list[dict], settings: dict, now: datetime) -> list[dict]:
     """The cues that should fire now, each returned once over repeated calls."""
-    alarms = settings.get("alarms") or {}
-    if not alarms.get("enabled"):
+    if not modules.enabled("alarms", settings):
         return []
+    alarms = settings.get("alarms") or {}
     for key in [k for k, at in _fired.items() if now - at >= WINDOW]:
         del _fired[key]  # past the window; it can never fire again anyway
     out = []

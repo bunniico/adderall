@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, time, timedelta, timezone
 
-from . import db, logic
+from . import db, logic, modules
 
 log = logging.getLogger(__name__)
 
@@ -330,11 +330,16 @@ def close_occurrence(task: dict, closed_at: datetime | None = None,
     Otherwise `materialize` sees the very row being deleted still sitting open
     on the list, holds the rhythm where it is, makes nothing — and then the
     row goes, leaving an active series with no copy anywhere (#78).
+
+    While the repeating-tasks module is off a copy closes like any other
+    task, and the rhythm waits where it is.
     """
+    settings = settings or db.get_settings()
+    if not modules.enabled("recurring", settings):
+        return None
     series = db.get_series(task.get("series_id"))
     if not series or not series["active"]:
         return None
-    settings = settings or db.get_settings()
     tz = _tz(settings)
     closed_at = closed_at or datetime.now(timezone.utc)
     rule = logic.normalize_rule(series["rule"])
@@ -522,6 +527,8 @@ def sweep(now: datetime | None = None) -> dict:
     """
     now = now or datetime.now(timezone.utc)
     settings = db.get_settings()
+    if not modules.enabled("recurring", settings):
+        return {"ran_at": _iso(now), "created": [], "missed": []}
     # First, because a copy that is still sitting there blocks every beat
     # behind it: closing the missed one is what lets today's be made.
     missed = close_missed(now, settings)
@@ -588,6 +595,8 @@ def forecast(now: datetime | None = None, settings: dict | None = None,
     """
     now = now or datetime.now(timezone.utc)
     settings = settings or db.get_settings()
+    if not modules.enabled("recurring", settings):
+        return []  # nothing is coming round while the module is off
     tz = _tz(settings)
     buf = logic.effective_buffer(settings, ratios or [])
     horizon = now + timedelta(days=max(0, days))
@@ -709,8 +718,11 @@ def repeat_days(tasks: list[dict]) -> dict[str, frozenset[int]]:
 
 
 def by_task(tasks: list[dict], settings: dict | None = None) -> dict[str, dict]:
-    """{task_id: describe(series)} for whichever of `tasks` repeat."""
+    """{task_id: describe(series)} for whichever of `tasks` repeat. Empty
+    while the module is off, so no copy wears a repeat badge."""
     settings = settings or db.get_settings()
+    if not modules.enabled("recurring", settings):
+        return {}
     cache: dict[str, dict | None] = {}
     out: dict[str, dict] = {}
     for task in tasks:

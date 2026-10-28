@@ -2,25 +2,31 @@
 
 One FastAPI process serves both the JSON API and the static front end.
 All state lives in a local SQLite file; every mutation persists immediately.
+
+The core routes (projects, tasks, planning, settings) are here. Each module's
+routes are in `routes/`, one file per module, and can be switched off (see
+`modules.py`); what both share is in `core.py`.
 """
 
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
 import os
 import sys
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from sse_starlette import EventSourceResponse
+from starlette.routing import Route
 
-from . import (ai, clickup, db, events, habits, logic, mcp_server, queue, recurring,
-               scheduler, title_parse)
+from . import (ai, clickup, core, db, events, logic, mcp_server, modules, queue,
+               recurring, scheduler, title_parse)
+from .routes import (alarms, braindump, calendar, estimates, focus, habits, help,
+                     magic_todo, overview)
+from .routes import clickup as clickup_routes
+from .routes import recurring as recurring_routes
 
 def _configure_logging() -> None:
     """Send the app's own logs to stdout, where `docker logs` reads them.
@@ -60,7 +66,7 @@ async def lifespan(app: FastAPI):
     scheduler.start(app)
     clickup.start(app)
     queue.start(app)
-    events.start(app, lambda: _state()["alarm_tasks"])
+    events.start(app, lambda: core.state()["alarm_tasks"])
     try:
         async with mcp.session_manager.run():
             yield
@@ -85,7 +91,7 @@ class TaskCreate(BaseModel):
     parent_id: str | None = None
     deadline: str | None = None
     # When you would like to *begin*, as opposed to be finished by. Left
-    # unset, the AI is asked for one (see `_annotate_tasks`).
+    # unset, the AI is asked for one (see `estimates.annotate_tasks`).
     start_at: str | None = None
     estimated_time: int | None = Field(default=None, ge=1)
     impact: int | None = Field(default=None, ge=0, le=10)
@@ -135,39 +141,6 @@ class TaskMove(BaseModel):
     mode: str | None = Field(default=None, pattern="^(before|after|into)$")
 
 
-class RepeatRule(BaseModel):
-    """How often a task comes back.
-
-    Four shapes, not five: daily, weekly, monthly and yearly, each with an
-    interval and — where it means something — a set of weekdays or a day of
-    the month. "Custom" on the page is these same fields with their knobs
-    turned up (every 3 weeks on Mon & Thu, the last Friday of every second
-    month), which keeps one rule format to store, validate and test.
-
-    Every field is re-clamped by `logic.normalize_rule` after this: pydantic
-    guards the types, that guards the meaning.
-    """
-    freq: str = Field(pattern="^(daily|weekly|monthly|yearly)$")
-    interval: int = Field(default=1, ge=1, le=logic.RECUR_MAX_INTERVAL)
-    # 0=Sunday..6=Saturday — the same numbering as the calendar and JS.
-    weekdays: list[int] = Field(default_factory=list, max_length=7)
-    monthly_mode: str = Field(default="day_of_month",
-                              pattern="^(day_of_month|nth_weekday)$")
-    month_day: int | None = Field(default=None, ge=-1, le=31)
-    nth: int | None = Field(default=None, ge=-1, le=5)
-    weekday: int | None = Field(default=None, ge=0, le=6)
-    time: str | None = Field(default=None, max_length=5)
-    count: int | None = Field(default=None, ge=1, le=logic.RECUR_MAX_COUNT)
-    until: str | None = Field(default=None, max_length=32)
-    from_completion: bool = False
-    lead_days: int = Field(default=logic.RECUR_DEFAULT_LEAD_DAYS, ge=0,
-                           le=logic.RECUR_MAX_LEAD_DAYS)
-
-
-class RepeatPreview(RepeatRule):
-    """A rule the page is still typing, plus the task it would be set on."""
-    task_id: str | None = None
-
 
 class ProjectCreate(BaseModel):
     name: str = Field(default="New project", min_length=1, max_length=80)
@@ -194,16 +167,8 @@ class TaskProjectMove(BaseModel):
     project_id: str
 
 
-class BreakdownRequest(BaseModel):
-    granularity: int | None = Field(default=None, ge=1, le=5)
-
-
 class CompleteRequest(BaseModel):
     actual_time: int | None = Field(default=None, ge=0)
-
-
-class CompileRequest(BaseModel):
-    text: str = Field(min_length=1, max_length=20000)
 
 
 class Nudge(BaseModel):
@@ -232,939 +197,8 @@ class DropRequest(BaseModel):
     task_ids: list[str] = Field(min_length=1, max_length=500)
 
 
-class HabitRule(BaseModel):
-    """A routine's frequency, as loosely as the page cares to phrase it.
-
-    Validated rather than typed: the three shapes share one field set and
-    `habits.normalize_rule` is the one place that decides what a rule means,
-    so a rule cannot be legal here and illegal there.
-    """
-    type: str = "daily"
-    days: list[int] | None = None
-    times: int | None = None
-
-
-class HabitCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=120)
-    category: str = habits.DEFAULT_CATEGORY
-    rule: HabitRule = Field(default_factory=HabitRule)
-
-
-class HabitUpdate(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=120)
-    category: str | None = None
-    rule: HabitRule | None = None
-
-
-class HabitCheck(BaseModel):
-    """One day's tick. The day is local and the page knows which one that is —
-    the server has no timezone of its own, the same arrangement every other
-    date on the wire already runs on."""
-    day: str | None = None
-    done: bool = True
-
-
 class SettingsUpdate(BaseModel):
     model_config = {"extra": "allow"}
-
-
-# ---------- helpers ----------
-
-def _tree(tasks: list[dict], derived: dict[str, dict],
-          series: dict[str, dict] | None = None) -> list[dict]:
-    """Nest a flat task list into roots + subtasks, derived fields merged in.
-
-    `series` is {task_id: the rhythm it belongs to}, already put into words by
-    `recurring.describe`, so the badge on the task says the same thing the
-    repeat dialog does without the page having to work it out twice.
-    """
-    series = series or {}
-    by_id: dict[str, dict] = {}
-    for t in tasks:
-        by_id[t["id"]] = {**t, **derived[t["id"]],
-                          "recurrence": series.get(t["id"]), "subtasks": []}
-    roots = []
-    for t in tasks:
-        node = by_id[t["id"]]
-        if t["parent_id"] and t["parent_id"] in by_id:
-            by_id[t["parent_id"]]["subtasks"].append(node)
-        else:
-            roots.append(node)
-    return roots
-
-
-# The All tab: every project's tasks compiled into one list. It is a lens over
-# the tabs rather than a place a task can live, so it has no row in the
-# database — the page asks for it by this name, and the tab you were actually
-# working in stays remembered underneath it.
-ALL_TASKS_ID = "all"
-
-
-# The Overview tab, likewise asked for by name. Not a list either: it is what
-# the lists add up to.
-OVERVIEW_ID = "overview"
-
-
-def _overview_view(settings: dict) -> bool:
-    """Is the Overview tab the one on screen?
-
-    Unconditional, where the All tab needs a second project to be worth
-    anything: "how much is left, and what next" is a fair question to ask of
-    one list, and the answer is drawn from the same numbers either way.
-    """
-    return bool(settings.get("overview_view"))
-
-
-# The Habits tab. Asked for by name like the two above, and like them it is
-# not a project — routines live in no list, so there is nothing underneath it
-# to switch away from.
-HABITS_ID = "habits"
-
-
-def _habits_view(settings: dict) -> bool:
-    """Is the Habits tab the one on screen?"""
-    return bool(settings.get("habits_view"))
-
-
-def _all_tasks_view(settings: dict, projects: list[dict]) -> bool:
-    """Is the All tab the one on screen?
-
-    Never with a single project: "all of them" is that list, and a tab showing
-    exactly what the tab beside it shows is noise. Which also means the lens
-    puts itself away when the second-to-last project is deleted, without
-    anything having to remember to turn it off.
-    """
-    return bool(settings.get("all_tasks_view")) and len(projects) > 1
-
-
-def _list_settings(settings: dict, all_view: bool) -> dict:
-    """The sorter as the list on screen reads it.
-
-    Hand-arranged order belongs to one list: where you dragged a task in one
-    tab says nothing about where it sits among another tab's. So the All tab
-    is read by urgency however the open tab was last arranged, and the page
-    hides the Manual option for as long as it is on.
-    """
-    if not all_view:
-        return settings
-    return {**settings, "sort_field": "smart", "manual_order": False}
-
-
-def _active_project_id_raw() -> str:
-    """Whatever id is stored, without resolving it against existing projects."""
-    return (db.get_settings().get("active_project") or "").strip()
-
-
-def _active_project_id(projects: list[dict]) -> str:
-    """The project tab the page is on, remembered across reloads.
-
-    Falls back to the first tab whenever the stored one is gone (deleted on
-    another device, or a fresh database), and writes the fallback back so the
-    answer stays stable.
-    """
-    stored = _active_project_id_raw()
-    if any(p["id"] == stored for p in projects):
-        return stored
-    db.update_settings({"active_project": projects[0]["id"]})
-    return projects[0]["id"]
-
-
-def _capacity(settings: dict | None = None) -> dict:
-    """How much work one day is allowed to hold, and how that was arrived at.
-
-    The 8-hour cap is a setting; this is what it has learned to be. The number
-    and its workings travel together so the calendar can say which one it is
-    warning against and why — see `logic.capacity_plan`.
-    """
-    return logic.capacity_plan(settings or db.get_settings(), db.completed_history())
-
-
-def _spend(settings: dict | None = None) -> dict:
-    """What the AI has cost today, against the budget, and what that is doing.
-
-    Every field here is derived — today's rows summed, the ladder in
-    `logic` read — so the page never has to work out where a number sits
-    between three thresholds, and the badge it draws says the same thing the
-    log line at the call site says.
-    """
-    settings = settings or db.get_settings()
-    budget = logic.daily_budget(settings)
-    today = db.spend_since(logic.spend_window_start(settings))
-    stage = logic.throttle_stage(today, budget)
-    return {
-        "today": round(today, 4),
-        "budget": budget,
-        "stage": stage,
-        "note": logic.THROTTLE_NOTES[stage],
-        "tiers": {tier: logic.throttled_tier(tier, stage)
-                  for tier in ("fast", "balanced", "deep")},
-    }
-
-
-def _xp_state(settings: dict, ratios: list[float], gained: int | None = None) -> dict:
-    """Where the level stands and the two averages under it.
-
-    One shape for both readers — the rail's `/api/state` and the Overview —
-    so a number that appears in both places cannot come to mean two different
-    things in them. `gained` is the only difference: it is the cue to animate
-    the bar, so it rides on the reply to the call that earned it and nowhere
-    else.
-    """
-    payload = {
-        **logic.level_progress(db.get_xp()),
-        "hourly": logic.average_hourly_xp(
-            db.xp_estimate_pairs(), logic.effective_buffer(settings, ratios)),
-        "daily": logic.average_daily_xp(db.xp_since(logic.XP_WINDOW_DAYS)),
-        "daily_days": logic.XP_WINDOW_DAYS,
-    }
-    return payload if gained is None else {**payload, "gained": gained}
-
-
-def _derive_all(projects: list[dict], by_project: dict[str, list[dict]],
-                settings: dict, ratios: list[float],
-                forecast: list[dict] | None = None,
-                book: dict | None = None) -> dict[str, dict]:
-    """Derived fields for every project, planned against one shared day book.
-
-    Two passes, deliberately. Everything already pinned to a time is booked
-    first, across every project, and only then does the app place the work it
-    schedules itself. A task in one tab must never be dropped on top of a
-    commitment in another: the calendar spans every project, and so does the
-    day it is spending.
-
-    Work that comes back is booked in that first pass too. Only one copy of a
-    repeating job is ever on the list, so a week of eight-hour weekdays looks
-    like an empty week to a planner that can only see tasks — and it would
-    hand you Tuesday afternoon for something new every time. The rhythms'
-    future is a commitment you have already made; it goes in the book with the
-    rest of them (see `recurring.forecast`).
-    """
-    now = datetime.now(timezone.utc)
-    # Deciding or reading? The plan on the tasks is current while nothing has
-    # changed since it was made, and a read then simply reads it — which is
-    # what makes two reads agree. See `scheduler.py` for the whole rule.
-    state = db.plan_state()
-    replan = state["rev"] != state["planned_rev"]
-
-    planner = logic.day_planner(settings, _capacity(settings)["minutes"], now=now)
-    # Which days each repeating task's own rule names. Looked up once, across
-    # every project, because the planner cannot ask: a copy on the list looks
-    # like any other task to it (`recurring.repeat_days`).
-    repeat_days = recurring.repeat_days(
-        [t for tasks in by_project.values() for t in tasks])
-    for project in projects:
-        logic.reserve_fixed(planner, by_project.get(project["id"], []),
-                            settings, ratios, repeat_days=repeat_days)
-    if forecast is None:
-        forecast = recurring.forecast(settings=settings, ratios=ratios)
-    recurring.reserve_forecast(planner, forecast)
-    # The caller can ask for the book itself: the forecast's blocks live in it
-    # and nowhere else, since an occurrence is not a task to derive anything
-    # from. `book["planner"] = ...` rather than a second return value, so the
-    # three callers that do not care are left alone.
-    if book is not None:
-        book["planner"] = planner
-    derived = {p["id"]: logic.compute(by_project.get(p["id"], []), settings,
-                                      ratios, now=now, planner=planner,
-                                      replan=replan, repeat_days=repeat_days)
-               for p in projects}
-    if replan:
-        _write_plan(projects, by_project, derived, state["rev"], now, settings)
-    return derived
-
-
-def _write_plan(projects: list[dict], by_project: dict[str, list[dict]],
-                derived: dict[str, dict], rev: int, now: datetime,
-                settings: dict) -> None:
-    """Write down where the app just decided each thing goes.
-
-    Only the placements it chose itself: a deadline you set is yours and is
-    not the plan's to remember. Stored on the task so the next read can read
-    it rather than decide it again, and stamped with the rev it covers so the
-    read after a change knows to think again.
-    """
-    for project in projects:
-        for task in by_project.get(project["id"], []):
-            d = derived[project["id"]].get(task["id"])
-            if d is None:
-                continue
-            # A task that is over has no plan. The planner stopped booking it
-            # the moment it closed, so anything stored here is a slot it no
-            # longer holds, and its blocks are now a record of when the work
-            # happened (`logic.finished_blocks`) rather than a claim on time.
-            live = task["status"] in logic.ACTIVE_STATUSES
-            auto = live and d.get("deadline_source") == "auto" and d.get("deadline")
-            planned_at = d["deadline"] if auto else None
-            blocks = d.get("blocks") if auto else None
-            if task.get("planned_at") != planned_at or \
-               task.get("planned_blocks") != blocks:
-                db.save_plan(task["id"], planned_at, blocks)
-    local = now.astimezone(logic.resolve_tz(settings.get("timezone")))
-    db.record_plan(rev, now.isoformat(timespec="seconds"), local.date().isoformat())
-
-
-def _state(project_id: str | None = None, xp_gained: int = 0) -> dict:
-    """Everything the page renders: the task tree the open tab is showing, the
-    tab strip, the cross-project deadline list the alarms run off, and where
-    the XP total stands.
-
-    Only the active project's tasks are sent as a tree — a tab you are not
-    looking at is not on screen — but deadlines are gathered from every
-    project, because a transition alarm you miss because its task lives in
-    another tab is exactly the failure this app exists to prevent.
-
-    Unless the All tab is the one open, in which case the tree *is* every
-    project's tasks, each root carrying the name of the list it came from. It
-    is still one payload and still one round trip: which tab is on screen
-    decides what the tree holds, not how many calls it takes to get it.
-    """
-    settings = db.get_settings()
-    ratios = db.completion_ratios()
-    projects = db.list_projects() or [db.ensure_project()]
-    active_id = project_id or _active_project_id(projects)
-    all_view = _all_tasks_view(settings, projects)
-
-    by_project: dict[str, list[dict]] = {p["id"]: [] for p in projects}
-    for t in db.list_tasks():
-        by_project.setdefault(t["project_id"], []).append(t)
-
-    counts = db.open_task_counts()
-    all_derived = _derive_all(projects, by_project,
-                              _list_settings(settings, all_view), ratios)
-    alarm_tasks: list[dict] = []
-    tree: list[dict] = []
-    next_task_id = None
-    compiled: list[dict] = []
-    compiled_derived: dict[str, dict] = {}
-    for project in projects:
-        tasks = by_project.get(project["id"], [])
-        derived = all_derived[project["id"]]
-        for t in tasks:
-            d = derived[t["id"]]
-            if t["status"] in logic.ACTIVE_STATUSES and d.get("deadline"):
-                alarm_tasks.append({
-                    "id": t["id"], "title": t["title"], "deadline": d["deadline"],
-                    "project_id": project["id"], "project_name": project["name"],
-                    # Its planned slot, for the start cues (see events.py).
-                    "status": t["status"], "blocks": d.get("blocks") or [],
-                })
-        if all_view:
-            # Which list a task came from is the one thing a compiled list
-            # loses, so every task carries it home.
-            compiled.extend({**t, "project_name": project["name"]} for t in tasks)
-            compiled_derived.update(derived)
-        elif project["id"] == active_id:
-            tree = _tree(tasks, derived, recurring.by_task(tasks, settings))
-            nxt = logic.next_task(tasks, derived)
-            next_task_id = nxt["id"] if nxt else None
-    if all_view:
-        tree = _tree(compiled, compiled_derived,
-                     recurring.by_task(compiled, settings))
-        nxt = logic.next_task(compiled, compiled_derived)
-        next_task_id = nxt["id"] if nxt else None
-
-    return {
-        "tasks": tree,
-        "next_task_id": next_task_id,
-        "projects": [{**p, "open_tasks": counts.get(p["id"], 0)} for p in projects],
-        "active_project_id": active_id,
-        # Which tab is lit. The active project stays whatever it was, because
-        # the All tab is a way of reading the lists, not a list to add to.
-        "all_tasks": all_view,
-        # And whether the Overview is over the top of it. It sits above both
-        # of the above rather than replacing either, so the tab underneath is
-        # still there to go back to — see `activate_project`.
-        "overview": _overview_view(settings),
-        # ...and the same for Habits, which layers the same way and for the
-        # same reason: your routines are not one of the lists, so opening them
-        # should not decide which list you come back to.
-        "habits": _habits_view(settings),
-        "alarm_tasks": alarm_tasks,
-        # Levels ride along with every state read so a reload never shows a
-        # stale bar. `gained` is only ever non-zero on the reply to the call
-        # that earned it, which is the page's cue to animate rather than
-        # silently jump.
-        "xp": _xp_state(settings, ratios, gained=xp_gained),
-        # Rides along for the same reason the XP bar does: the badge that says
-        # the app has gone cheap for the day has to appear the moment it is
-        # true, not the next time someone opens the settings dialog.
-        "spend": _spend(settings),
-        # When the app last worked out where things go. On screen, because
-        # "I'm not sure when it runs" is a fair thing to say about a scheduler
-        # that never tells you. Read *after* the derive above, so it is the
-        # plan this payload was built from.
-        "plan": db.plan_state(),
-    }
-
-
-# ---------- overview ----------
-# What every list adds up to. The tabs answer "what is on this list"; this
-# answers "how much is there, what next, and am I getting anywhere" — which
-# are questions about all of them at once, and questions no single list can be
-# asked.
-
-OVERVIEW_TOP = 6           # "do this next" rows — a shortlist, not a list
-OVERVIEW_UPCOMING = 6      # ...and the same again for what is coming at you
-OVERVIEW_TREND_DAYS = 30   # how far the finished-work chart looks back
-OVERVIEW_SOON_DAYS = 7     # what "due soon" means on the tiles
-
-
-def _overview_row(task: dict, d: dict, project: dict, tasks: list[dict],
-                  series: dict) -> dict:
-    """One task as the Overview lists it.
-
-    Carries what the rows draw *and* what the detail dialog needs, because
-    clicking one opens it in place: the task is usually in another tab
-    entirely, so this payload is the only copy of it the page has — the same
-    arrangement the calendar already runs on.
-    """
-    return {
-        "id": task["id"],
-        "title": task["title"],
-        "description": task["description"],
-        "parent_id": task["parent_id"],
-        "project_id": project["id"],
-        "project_name": project["name"],
-        "status": task["status"],
-        "deadline": d.get("deadline") or d.get("inherited_deadline"),
-        # Only a real deadline of its own has a source; a step showing the
-        # date its tree is aimed at must not read as one somebody set.
-        "deadline_source": d["deadline_source"] if d.get("deadline") else None,
-        "start_at": task["start_at"],
-        "estimated_time": task["estimated_time"],
-        "buffered_estimate": d["buffered_estimate"],
-        "impact": task["impact"],
-        "effort": task["effort"],
-        "flexibility": task["flexibility"],
-        "workday_only": task["workday_only"],
-        "repeat_carry": task["repeat_carry"],
-        "quadrant": d["quadrant"],
-        "urgency": d["urgency"],
-        "score": d["score"],
-        "length_min": d["length_min"],
-        "has_subtasks": d["has_subtasks"],
-        "rollup_remaining": d["rollup_remaining"],
-        "blocks": d["blocks"],
-        "recurrence": series.get(task["id"]),
-        # Which tree a step came from. A step's title is half a sentence on
-        # its own — "ask her sister" says nothing without "buy gift" above it.
-        "path": logic.ancestor_titles(tasks, task),
-    }
-
-
-def _minutes_left(d: dict) -> int:
-    """What is actually left on a top-level task, in buffered minutes.
-
-    A container is worth the sum of what it still holds, not the estimate
-    somebody put on the container — the same rule the rail counts by, so the
-    two numbers never disagree.
-    """
-    if d["has_subtasks"]:
-        return d["rollup_remaining"] or 0
-    return d["buffered_estimate"] or 0
-
-
-def _booked_today(blocks: list, start: datetime, end: datetime) -> int:
-    """Minutes of a task's booked blocks that fall inside today.
-
-    Blocks are UTC instants and today is a local day, so this is an overlap
-    rather than a match: work that runs past midnight counts on both days, for
-    exactly the minutes it spends in each.
-    """
-    total = 0
-    for block in blocks or []:
-        begin = logic.parse_dt(block[0])
-        finish = logic.parse_dt(block[1])
-        if begin is None or finish is None:
-            continue
-        overlap = min(finish, end) - max(begin, start)
-        total += max(0, int(overlap.total_seconds() // 60))
-    return total
-
-
-def _overview_trend(days: int, tz) -> list[dict]:
-    """Work finished per local day, every day in the window — zeroes included.
-
-    A chart drawn only from the days you finished something on quietly
-    rewrites the week: four bars in a row read as four days on the trot, and
-    the three empty days between them vanish. The gaps are the point.
-    """
-    counts: dict[str, int] = {}
-    minutes: dict[str, int] = {}
-    for row in db.finished_log(days):
-        when = logic.parse_dt(row.get("finished_at"))
-        if when is None:
-            continue
-        key = when.astimezone(tz).date().isoformat()
-        counts[key] = counts.get(key, 0) + 1
-        minutes[key] = minutes.get(key, 0) + int(row.get("minutes") or 0)
-    today = datetime.now(tz).date()
-    series = []
-    for back in range(days - 1, -1, -1):
-        day = (today - timedelta(days=back)).isoformat()
-        series.append({"day": day, "finished": counts.get(day, 0),
-                       "minutes": minutes.get(day, 0)})
-    return series
-
-
-def _overview() -> dict:
-    """Every list, counted.
-
-    One payload, the same shape however many projects there are, and derived
-    through the same shared day book the calendar and the task list are
-    derived through — so "4h 30m booked today" here is the same four and a
-    half hours the calendar draws, rather than a second opinion about them.
-    """
-    settings = db.get_settings()
-    ratios = db.completion_ratios()
-    projects = db.list_projects() or [db.ensure_project()]
-    # Every list at once, so hand-arranged order means nothing here for the
-    # same reason it means nothing on the All tab: where you dragged a task in
-    # one tab says nothing about where it sits among another tab's.
-    lens = _list_settings(settings, True)
-
-    by_project: dict[str, list[dict]] = {p["id"]: [] for p in projects}
-    for t in db.list_tasks():
-        by_project.setdefault(t["project_id"], []).append(t)
-    all_derived = _derive_all(projects, by_project, lens, ratios)
-
-    now = datetime.now(timezone.utc)
-    tz = logic.resolve_tz(settings.get("timezone"))
-    today = datetime.now(tz).date()
-    day_start = datetime(today.year, today.month, today.day, tzinfo=tz)
-    day_end = day_start + timedelta(days=1)
-    soon = now + timedelta(days=OVERVIEW_SOON_DAYS)
-
-    open_tasks = overdue = due_soon = 0
-    minutes_left = booked_today = 0
-    per_project: list[dict] = []
-    per_quadrant: dict[str, dict] = {
-        key: {"quadrant": key, "tasks": 0, "minutes": 0}
-        for key in ("quick_win", "major_project", "fill_in", "thankless", "none")
-    }
-    candidates: list[tuple] = []   # (sort_key, row) — the shortlist to rank
-    dated: list[dict] = []
-
-    for project in projects:
-        tasks = by_project.get(project["id"], [])
-        derived = all_derived[project["id"]]
-        series = recurring.by_task(tasks, settings)
-        project_minutes = project_open = 0
-        for t in tasks:
-            d = derived[t["id"]]
-            if t["status"] not in logic.ACTIVE_STATUSES:
-                continue
-            open_tasks += 1
-            project_open += 1
-            if d["actionable"]:
-                candidates.append(
-                    (d["sort_key"], _overview_row(t, d, project, tasks, series)))
-            # Everything below is about scheduled work, and only a top-level
-            # task is scheduled: a tree is one commitment, and counting its
-            # steps as well would count the same afternoon twice.
-            if t["parent_id"]:
-                continue
-            left = _minutes_left(d)
-            minutes_left += left
-            project_minutes += left
-            bucket = per_quadrant[d["quadrant"] or "none"]
-            bucket["tasks"] += 1
-            bucket["minutes"] += left
-            booked_today += _booked_today(d["blocks"], day_start, day_end)
-            when = logic.parse_dt(d.get("deadline"))
-            if when is None:
-                continue
-            if when < now:
-                overdue += 1
-            elif when <= soon:
-                due_soon += 1
-            dated.append(_overview_row(t, d, project, tasks, series))
-        per_project.append({"id": project["id"], "name": project["name"],
-                            "open": project_open, "minutes": project_minutes})
-
-    candidates.sort(key=lambda pair: pair[0])
-    trend = _overview_trend(OVERVIEW_TREND_DAYS, tz)
-    dated.sort(key=lambda row: row["deadline"])
-    return {
-        "stats": {
-            "open": open_tasks,
-            "overdue": overdue,
-            "due_soon": due_soon,
-            "soon_days": OVERVIEW_SOON_DAYS,
-            "minutes_left": minutes_left,
-            "booked_today": booked_today,
-            "finished": sum(day["finished"] for day in trend),
-            "finished_minutes": sum(day["minutes"] for day in trend),
-            "trend_days": OVERVIEW_TREND_DAYS,
-            "projects": len(projects),
-        },
-        "top": [row for _, row in candidates[:OVERVIEW_TOP]],
-        "upcoming": dated[:OVERVIEW_UPCOMING],
-        "trend": trend,
-        "by_project": per_project,
-        # In the app's own order — quick wins first, thankless last — rather
-        # than by size, so the four bars stay in the same places from one day
-        # to the next and the shape is the thing that changed.
-        "by_quadrant": [per_quadrant[key] for key in
-                        ("quick_win", "major_project", "fill_in", "thankless",
-                         "none")],
-        "capacity": _capacity(settings),
-        "xp": _xp_state(settings, ratios),
-    }
-
-
-# ---------- habits ----------
-# The routines you keep, what they add up to, and the year of squares that
-# says how it has actually been going. Nothing here touches the planner: a
-# routine has no estimate and no slot, so it can neither be late nor take up
-# an afternoon. See `habits.py`.
-
-
-def _today_local(settings: dict | None = None) -> date:
-    """The local date the server should count a bare tick against.
-
-    The page sends its own day with every check-in, because it is the side
-    that knows the timezone for certain. This is the fallback for a request
-    that didn't, and for the "is it done today" the payload answers on its own.
-    """
-    settings = settings or db.get_settings()
-    return datetime.now(logic.resolve_tz(settings.get("timezone"))).date()
-
-
-def _habit_row(habit: dict, days: list[str], today: date, week_start: int) -> dict:
-    """One routine, with its ticks and everything derived from them.
-
-    The check-ins ride along rather than being fetched per habit: the page
-    draws a year of squares for each one, and a payload it has to assemble
-    from a dozen round trips is a heatmap that arrives in pieces.
-    """
-    rule = habit["rule"]
-    window_start, window_end = habits.heatmap_window(today, first_day=week_start)
-    return {
-        "id": habit["id"],
-        "name": habit["name"],
-        "category": habit["category"],
-        "rule": rule,
-        "rule_label": habits.rule_label(rule),
-        "created_at": habit["created_at"],
-        # Only the squares the calendar can draw. The stats above are counted
-        # off every tick there has ever been — see `habits.stats`.
-        "checkins": [d for d in days if window_start.isoformat() <= d
-                     <= window_end.isoformat()],
-        "stats": habits.stats(rule, days, today, week_start),
-    }
-
-
-def _habits() -> dict:
-    """Every routine, grouped-ready and already counted."""
-    settings = db.get_settings()
-    today = _today_local(settings)
-    week_start = int(settings.get("week_start") or 0)
-    checkins = db.habit_checkins()
-    rows = [_habit_row(h, checkins.get(h["id"], []), today, week_start)
-            for h in db.list_habits()]
-
-    window_start, window_end = habits.heatmap_window(today, first_day=week_start)
-    due = [r for r in rows if r["stats"]["due_today"]]
-    done = [r for r in due if r["stats"]["done_today"]]
-    return {
-        "habits": rows,
-        "categories": list(habits.CATEGORIES),
-        "today": today.isoformat(),
-        "week_start": week_start,
-        "window": {"start": window_start.isoformat(), "end": window_end.isoformat()},
-        # The one line the tab is really for: how today is going. Counted over
-        # what is actually due — a Sunday rest day is not a routine you failed.
-        "today_due": len(due),
-        "today_done": len(done),
-        # A day everything was ticked off is worth saying out loud, and it is
-        # not the same thing as having no routines at all.
-        "today_clear": bool(due) and len(done) == len(due),
-    }
-
-
-# How much of the rhythms' future the calendar draws — three months, which is
-# further than anyone pages. The day book looks further ahead still
-# (`recurring.FORECAST_DAYS`, which has to cover the planner's search window);
-# there is no sense in shipping all of that to a page nobody scrolls that far.
-CALENDAR_FORECAST_DAYS = 90
-
-
-def _calendar_events() -> list[dict]:
-    """Every scheduled task across every project, with what a calendar needs.
-
-    The calendar is deliberately the one place in the app that ignores the
-    open tab: "what is due this week" is a question about your whole life,
-    not about whichever list happens to be on screen. Filtering by project
-    happens on the page, over this one payload, so switching filters or
-    flipping between day, week and month costs nothing.
-
-    Times go out as UTC instants. Which day a task lands on, where a block
-    sits in a day, and what "this week" means are all local-timezone
-    questions, and the page is the only side that knows the timezone.
-    """
-    settings = db.get_settings()
-    ratios = db.completion_ratios()
-    projects = db.list_projects() or [db.ensure_project()]
-
-    by_project: dict[str, list[dict]] = {p["id"]: [] for p in projects}
-    for t in db.list_tasks():
-        by_project.setdefault(t["project_id"], []).append(t)
-
-    forecast = recurring.forecast(settings=settings, ratios=ratios)
-    book: dict = {}
-    all_derived = _derive_all(projects, by_project, settings, ratios, forecast,
-                              book=book)
-    events: list[dict] = []
-    for project in projects:
-        tasks = by_project.get(project["id"], [])
-        derived = all_derived[project["id"]]
-        series = recurring.by_task(tasks, settings)
-        children_count: dict[str, int] = {}
-        for t in tasks:
-            if t["parent_id"] and t["status"] != "discarded":
-                children_count[t["parent_id"]] = children_count.get(t["parent_id"], 0) + 1
-        for t in tasks:
-            d = derived[t["id"]]
-            # Steps are drawn inside their root's block, not beside it: a tree
-            # is one commitment, and six chips for six steps is the same
-            # afternoon counted six times. They carry no deadline of their own
-            # now (see `logic.compute`), so this only says out loud what the
-            # next line would do anyway.
-            if t["parent_id"]:
-                continue
-            # Discarded work is off the plan entirely; done work stays, because
-            # a calendar you can look back at is half of what a calendar is for.
-            if t["status"] == "discarded" or not d.get("deadline"):
-                continue
-            events.append({
-                "id": t["id"],
-                "title": t["title"],
-                "description": t["description"],
-                "parent_id": t["parent_id"],
-                "project_id": project["id"],
-                "project_name": project["name"],
-                "status": t["status"],
-                "deadline": d["deadline"],
-                "deadline_source": d["deadline_source"],
-                # When it wanted to begin, which for anything the app placed
-                # itself is also where its block starts.
-                "start_at": t["start_at"],
-                "estimated_time": t["estimated_time"],
-                "buffered_estimate": d["buffered_estimate"],
-                "buffer_applied": d["buffer_applied"],
-                # How long the block is, and how much of that is the time tax
-                # rather than the work — the day view draws the difference.
-                "length_min": d["length_min"],
-                "raw_length_min": d["raw_length_min"],
-                "impact": t["impact"],
-                "effort": t["effort"],
-                "quadrant": d["quadrant"],
-                "urgency": d["urgency"],
-                "score": d["score"],
-                "has_subtasks": d["has_subtasks"],
-                "subtask_count": children_count.get(t["id"], 0),
-                # A block you will see again next week reads differently from
-                # a one-off with the same date on it, so the calendar says so.
-                "recurrence": series.get(t["id"]),
-                "path": logic.ancestor_titles(tasks, t),
-                # Where the work actually sits, which is not always one run
-                # back from the deadline: work due first thing was done the
-                # evening before, and work too big for a day is in pieces.
-                "blocks": d["blocks"],
-                # And the minutes that did not fit anywhere before the
-                # deadline, so the calendar can say the blocks above are the
-                # part of the job that has a home rather than the whole of it.
-                "overflow_min": d["overflow_min"],
-                # A real task, as against one of the outlines below.
-                "projected": False,
-            })
-    events.extend(_forecast_events(forecast, projects, by_project, settings,
-                                   ratios, book.get("planner")))
-    return events
-
-
-def _forecast_events(forecast: list[dict], projects: list[dict],
-                     by_project: dict[str, list[dict]], settings: dict,
-                     ratios: list[float],
-                     planner: logic.DayPlanner | None = None) -> list[dict]:
-    """The rhythms' future, as blocks that do not exist yet.
-
-    A repeating job puts one copy on your list at a time, which is the right
-    answer for a list and leaves the calendar telling you a lie: a fortnight
-    of empty afternoons for a fortnight in which you will work every one of
-    them. These are the occurrences still to come — when they land, how long
-    they will take, whose they are — carrying everything a block needs to be
-    drawn and counted, and marked `projected` so the page can draw them as
-    the forecast they are. There is nothing to tick off and nothing to nudge:
-    a click opens the copy that *is* on your list, which is the thing you can
-    actually change.
-    """
-    now = datetime.now(timezone.utc)
-    buf = logic.effective_buffer(settings, ratios)
-    threshold = int(settings.get("matrix_threshold", 5))
-    names = {p["id"]: p["name"] for p in projects}
-    horizon = now + timedelta(days=CALENDAR_FORECAST_DAYS)
-
-    open_of: dict[str, str] = {}
-    for tasks in by_project.values():
-        for t in tasks:
-            if t.get("series_id") and t["status"] in logic.ACTIVE_STATUSES:
-                open_of.setdefault(t["series_id"], t["id"])
-
-    described: dict[str, dict | None] = {}
-    events: list[dict] = []
-    for occ in forecast:
-        if occ["at"] > horizon:
-            continue
-        sid = occ["series_id"]
-        if sid not in described:
-            described[sid] = recurring.describe(db.get_series(sid), settings)
-        template, length = occ["template"], occ["minutes"]
-        # The beat is when the work happens; the deadline is the end of the
-        # window it opens. They are the same instant unless the rule named an
-        # hour, in which case that hour starts the work rather than ending it
-        # (`logic.occurrence_window`).
-        due = occ.get("due_at") or occ["at"]
-        opens = occ.get("start_at")
-        pressure = logic.urgency(due, length, now)
-        events.append({
-            "id": occ["key"],
-            "title": template.get("title") or "Recurring task",
-            # Deliberately not the template's description: there is nothing
-            # here to open and read, and one long note copied onto ninety
-            # outlines is ninety copies of it on the wire.
-            "description": "",
-            "parent_id": None,
-            "project_id": occ["project_id"],
-            "project_name": names.get(occ["project_id"], ""),
-            # Not a status a task can have: nothing here is a task yet.
-            "status": "planned",
-            "deadline": due.isoformat(timespec="seconds"),
-            "deadline_source": "recurring",
-            "start_at": opens.isoformat(timespec="seconds") if opens else None,
-            "estimated_time": template.get("estimated_time"),
-            "buffered_estimate": length,
-            "buffer_applied": buf,
-            "length_min": length,
-            "raw_length_min": max(1, round(length / (1.0 + buf))),
-            "impact": template.get("impact"),
-            "effort": template.get("effort"),
-            "quadrant": logic.quadrant(template.get("impact"),
-                                       template.get("effort"), threshold),
-            "urgency": pressure,
-            "score": logic.priority_score(template.get("impact"),
-                                          template.get("effort"), pressure, length),
-            # One outline stands for the whole tree it will be planted as, so
-            # the day it lands on is charged for it exactly once.
-            "has_subtasks": False,
-            "subtask_count": len(template.get("subtasks") or []),
-            "recurrence": described[sid],
-            "path": [],
-            "blocks": (logic.task_blocks(planner, occ["key"],
-                                         {"deadline": due.isoformat(),
-                                          "length_min": length})
-                       if planner is not None else []),
-            "projected": True,
-            "occurrence": occ["number"],
-            "source_task_id": open_of.get(sid),
-        })
-    return events
-
-
-def _now_local(settings: dict) -> str:
-    """The clock the AI is told it is reading, in the user's own timezone.
-
-    A start time is the one thing the model is asked for that it cannot work
-    out from the task alone: "eat dinner" is six hours off at noon and thirty
-    minutes off at half past five, and only the local hour says which.
-    """
-    tz = logic.resolve_tz(settings.get("timezone"))
-    return datetime.now(tz).strftime("%A %d %B %Y, %H:%M (%Z)").strip()
-
-
-def _annotate_tasks(task_ids: list[str], want_scores: bool,
-                    want_start: bool = False) -> None:
-    """Best effort: fill missing estimates, scores and start times via one
-    batched fast-tier call. Never blocks or fails the surrounding operation.
-
-    Start times are only ever written onto top-level tasks. A step inside a
-    task is scheduled from the slot its parent was given — that is what makes
-    a plan one block on the calendar rather than a scatter — so a start time
-    on one would be a number nothing reads.
-    """
-    settings = db.get_settings()
-    targets = []
-    for tid in task_ids:
-        t = db.get_task(tid)
-        if not t:
-            continue
-        wants_start = want_start and t["parent_id"] is None and t["start_at"] is None
-        if (t["estimated_time"] is None or wants_start or
-                (want_scores and (t["impact"] is None or t["effort"] is None))):
-            targets.append(t)
-    if not targets:
-        return
-    ask_start = want_start and any(t["parent_id"] is None for t in targets)
-    try:
-        _apply_annotations(settings, targets, want_scores, ask_start)
-    except ai.AINetworkError:
-        # The server itself has no route to the internet right now — queue it
-        # rather than silently giving up; queue.py retries once it does.
-        queue.enqueue("annotate_batch", {
-            "task_ids": [t["id"] for t in targets],
-            "want_scores": want_scores, "want_start": ask_start,
-        })
-    except ai.AIUnavailable as exc:
-        log.warning("best-effort annotate skipped: %s", exc)
-
-
-def _apply_annotations(settings: dict, targets: list[dict], want_scores: bool,
-                       ask_start: bool) -> None:
-    """The actual annotate call and applying its results — shared by the
-    best-effort path above and the queued retry in `_process_annotate_batch`.
-    """
-    results = ai.annotate(settings, targets, want_scores=want_scores,
-                          want_start=ask_start,
-                          now_local=_now_local(settings) if ask_start else "")
-    now = datetime.now(timezone.utc)
-    for t in targets:
-        row = results.get(t["id"])
-        if not row:
-            continue
-        fields = {}
-        if t["estimated_time"] is None and row.get("minutes"):
-            fields["estimated_time"] = int(row["minutes"])
-        if want_scores and t["impact"] is None and row.get("impact") is not None:
-            fields["impact"] = int(row["impact"])
-        if want_scores and t["effort"] is None and row.get("effort") is not None:
-            fields["effort"] = int(row["effort"])
-        if (ask_start and t["parent_id"] is None and t["start_at"] is None
-                and row.get("start_in_minutes") is not None):
-            when = now + timedelta(minutes=int(row["start_in_minutes"]))
-            fields["start_at"] = when.isoformat(timespec="seconds")
-        if fields:
-            db.update_task(t["id"], fields)
-
-
-def _process_annotate_batch(payload: dict) -> None:
-    """Queue handler for `annotate_batch`: re-reads the tasks fresh, since a
-    field one of them was missing when queued may have been filled in by hand
-    since — `_apply_annotations` only ever writes a field that is still
-    None, so that is safe to check again here rather than trust the payload.
-    """
-    targets = [t for t in (db.get_task(tid) for tid in payload["task_ids"]) if t]
-    if not targets:
-        return
-    settings = db.get_settings()
-    try:
-        _apply_annotations(settings, targets, payload["want_scores"],
-                           payload["want_start"])
-    except ai.AINetworkError as exc:
-        raise queue.NetworkRetry(str(exc)) from exc
-
-
-queue.register("annotate_batch", _process_annotate_batch)
 
 
 def _parse_title_triggers(settings: dict, title: str) -> dict:
@@ -1180,7 +214,7 @@ def _parse_title_triggers(settings: dict, title: str) -> dict:
     if parsed["matched"] or not settings.get("title_parsing_ai", True):
         return parsed
     try:
-        data = ai.extract_schedule(settings, title, _now_local(settings))
+        data = ai.extract_schedule(settings, title, core.now_local(settings))
     except ai.AIUnavailable as exc:
         # Best effort, like every other AI call task creation makes — a
         # missing key or a network hiccup must not stop the task being made.
@@ -1203,101 +237,6 @@ def _parse_title_triggers(settings: dict, title: str) -> dict:
     return {"clean_title": data["clean_title"], "deadline": deadline,
            "repeat": repeat, "matched": True}
 
-
-def _reveal(task_id: str | None) -> None:
-    """Unfold a collapsed task, so whatever just landed inside it is on screen.
-
-    Adding a subtask to a folded-away task and seeing nothing happen is
-    exactly the "did that even work?" moment this app exists to spare you,
-    so anything that puts a task inside another one opens the container.
-    """
-    if not task_id:
-        return
-    task = db.get_task(task_id)
-    if task and task["collapsed"]:
-        db.update_task(task_id, {"collapsed": False})
-
-
-def _require_task(task_id: str) -> dict:
-    task = db.get_task(task_id)
-    if not task:
-        raise HTTPException(404, "Task not found")
-    return task
-
-
-def _require_project(project_id: str) -> dict:
-    project = db.get_project(project_id)
-    if not project:
-        raise HTTPException(404, "Project not found")
-    return project
-
-
-def _project_derived(project_id: str) -> dict[str, dict]:
-    """Derived fields for one project's tasks — the same numbers the page is
-    already showing, planned against every project's shared day book."""
-    settings = db.get_settings()
-    ratios = db.completion_ratios()
-    projects = db.list_projects() or [db.ensure_project()]
-    by_project: dict[str, list[dict]] = {p["id"]: [] for p in projects}
-    for t in db.list_tasks():
-        by_project.setdefault(t["project_id"], []).append(t)
-    return _derive_all(projects, by_project, settings, ratios).get(project_id, {})
-
-
-def _finish(task_id: str, fields: dict | None = None) -> int:
-    """Mark a task and everything still open under it done, and pay the XP out.
-
-    The scores are read *before* anything is marked done, because finishing a
-    task drops its urgency — and so its score — to nothing: what it pays has
-    to be what it was worth while you still had it to do.
-
-    Only leaves pay. A container's score is borrowed from the steps beneath it
-    (see `logic._rollup_score`), so paying for both would pay twice for one
-    afternoon's work; completing a parent finishes those steps, and they are
-    what pays. A task that has already been paid for never pays again, however
-    often it is reopened and finished — the XP you earned stays earned, and
-    nothing is farmable by ticking the same box twice.
-    """
-    task = db.get_task(task_id)
-    if task is None:
-        return 0
-    # Whether this was still open decides whether finishing it means anything
-    # to its rhythm. Ticking a copy that was already closed — one you missed
-    # and did anyway, one ticked twice — must not step the series a second
-    # time and skip a beat nobody has done.
-    was_open = task["status"] in logic.ACTIVE_STATUSES
-    derived = _project_derived(task["project_id"])
-    awards: list[tuple[str, int]] = []
-    for tid in [task_id, *db.descendant_ids(task_id)]:
-        row = db.get_task(tid)
-        if row is None or row["status"] not in logic.ACTIVE_STATUSES:
-            continue                      # already finished, or discarded
-        if row["xp_awarded"] is not None:
-            continue                      # paid for once already
-        d = derived.get(tid)
-        if d is None or d["has_subtasks"]:
-            continue                      # a container pays through its steps
-        awards.append((tid, logic.task_xp(d["score"])))
-
-    db.update_task(task_id, {**(fields or {}), "status": "done"})
-    for tid in db.descendant_ids(task_id):
-        child = db.get_task(tid)
-        if child and child["status"] in ("todo", "in_progress"):
-            db.update_task(tid, {"status": "done"})
-
-    gained = 0
-    for tid, amount in awards:
-        db.award_xp(tid, amount)
-        gained += amount
-    # Last, once everything is marked done: finishing one occurrence of a
-    # repeating job is what opens the next. Doing it here means the list, a
-    # checkbox, the detail modal and Focus mode all repeat the same way,
-    # because all four already come through here.
-    if task.get("series_id") and was_open:
-        recurring.close_occurrence(db.get_task(task_id) or task)
-    return gained
-
-
 def _freeze_manual_order() -> None:
     """Switch the list from sorted to hand-arranged, keeping what's on screen.
 
@@ -1318,7 +257,7 @@ def _freeze_manual_order() -> None:
     # Planned exactly the way the page plans it — one shared day book over
     # every project — so a list sorted by deadline freezes in the order it was
     # actually drawn in rather than in a slightly different one.
-    all_derived = _derive_all(projects, by_project, settings, ratios)
+    all_derived = core.derive_all(projects, by_project, settings, ratios)
     # Manual order is one switch for the whole app, so every tab's top level
     # is frozen, not just the one being dragged in — otherwise the other tabs
     # would silently rearrange the next time you looked at them.
@@ -1363,7 +302,7 @@ def _sorted_child_position(task: dict, parent_id: str,
         by_project.setdefault(t["project_id"], []).append(t)
     # Read the same way the page reads it — one shared day book over every
     # project — so the slot matches the order that was on screen at the drop.
-    derived = _derive_all(projects, by_project, settings, ratios)[project_id]
+    derived = core.derive_all(projects, by_project, settings, ratios)[project_id]
     status = {t["id"]: t["status"] for t in by_project.get(project_id, [])}
 
     key = derived[task["id"]]["list_sort_key"]
@@ -1410,27 +349,8 @@ def get_state(project_id: str | None = None):
     """The page state; `project_id` reads that project's tasks without
     switching the open tab, the way the MCP server's `list_tasks` does."""
     if project_id:
-        _require_project(project_id)
-    return _state(project_id)
-
-
-@app.get("/api/events")
-async def stream_events():
-    """Transition alarms as they fire, as server-sent events (`event: alarm`,
-    the event as JSON in `data`). The page listens here for its banner; so can
-    anything else. See `events.py`."""
-    inbox: asyncio.Queue = asyncio.Queue()
-    events.subscribers.add(inbox)
-
-    async def stream():
-        try:
-            while True:
-                event = await inbox.get()
-                yield {"event": event["type"], "data": json.dumps(event)}
-        finally:
-            events.subscribers.discard(inbox)
-
-    return EventSourceResponse(stream(), ping=15)
+        core.require_project(project_id)
+    return core.state(project_id)
 
 
 # ---------- projects ----------
@@ -1440,7 +360,7 @@ async def stream_events():
 
 @app.get("/api/projects")
 def list_projects():
-    state = _state()
+    state = core.state()
     return {"projects": state["projects"],
             "active_project_id": state["active_project_id"]}
 
@@ -1452,17 +372,17 @@ def create_project(body: ProjectCreate):
     project = db.create_project(body.name.strip() or "New project")
     db.update_settings({"active_project": project["id"], "all_tasks_view": False,
                         "overview_view": False, "habits_view": False})
-    return _state(project["id"])
+    return core.state(project["id"])
 
 
 @app.patch("/api/projects/{project_id}")
 def rename_project(project_id: str, body: ProjectUpdate):
-    _require_project(project_id)
+    core.require_project(project_id)
     name = body.name.strip()
     if not name:
         raise HTTPException(400, "A project needs a name")
     db.rename_project(project_id, name)
-    return _state()
+    return core.state()
 
 
 @app.delete("/api/projects/{project_id}")
@@ -1477,16 +397,16 @@ def delete_project(project_id: str):
     index = next(i for i, p in enumerate(projects) if p["id"] == project_id)
     neighbour = projects[index - 1] if index else projects[1]
     db.delete_project(project_id)
-    if _active_project_id_raw() == project_id:
+    if core.active_project_id_raw() == project_id:
         db.update_settings({"active_project": neighbour["id"]})
-    return _state()
+    return core.state()
 
 
 @app.post("/api/projects/{project_id}/move")
 def move_project(project_id: str, body: ProjectMove):
     """Reorder the tab strip. Which tab is open doesn't change: dragging a
     tab rearranges the row, it doesn't switch to it."""
-    _require_project(project_id)
+    core.require_project(project_id)
     others = [p["id"] for p in db.list_projects() if p["id"] != project_id]
     position = body.position
     if body.target_id:
@@ -1494,11 +414,11 @@ def move_project(project_id: str, body: ProjectMove):
             raise HTTPException(400, "mode is required when target_id is given")
         if body.target_id == project_id:
             raise HTTPException(400, "A project cannot be dropped onto itself")
-        _require_project(body.target_id)
+        core.require_project(body.target_id)
         idx = others.index(body.target_id)
         position = idx if body.mode == "before" else idx + 1
     db.move_project(project_id, position)
-    return _state()
+    return core.state()
 
 
 @app.post("/api/projects/{project_id}/activate")
@@ -1515,27 +435,30 @@ def activate_project(project_id: str):
     each other off: they are both somewhere you go, and only one of them can
     be on screen.
     """
-    if project_id == OVERVIEW_ID:
+    if project_id in (core.OVERVIEW_ID, core.HABITS_ID) and \
+            not modules.enabled(project_id):
+        raise HTTPException(404, modules.off_message(project_id))
+    if project_id == core.OVERVIEW_ID:
         db.update_settings({"overview_view": True, "habits_view": False})
-        return _state()
-    if project_id == HABITS_ID:
+        return core.state()
+    if project_id == core.HABITS_ID:
         db.update_settings({"habits_view": True, "overview_view": False})
-        return _state()
-    if project_id == ALL_TASKS_ID:
+        return core.state()
+    if project_id == core.ALL_TASKS_ID:
         db.update_settings({"all_tasks_view": True, "overview_view": False,
                             "habits_view": False})
-        return _state()
-    _require_project(project_id)
+        return core.state()
+    core.require_project(project_id)
     db.update_settings({"active_project": project_id, "all_tasks_view": False,
                         "overview_view": False, "habits_view": False})
-    return _state(project_id)
+    return core.state(project_id)
 
 
 @app.post("/api/tasks", status_code=201)
 def create_task(body: TaskCreate):
-    project_id = _active_project_id(db.list_projects() or [db.ensure_project()])
+    project_id = core.active_project_id(db.list_projects() or [db.ensure_project()])
     if body.parent_id:
-        parent = _require_task(body.parent_id)
+        parent = core.require_task(body.parent_id)
         project_id = parent["project_id"]  # a subtask lives where its parent does
     fields = body.model_dump(exclude={"annotate"})
     for column in ("flexibility", "workday_only"):
@@ -1548,6 +471,9 @@ def create_task(body: TaskCreate):
     repeat = None
     if settings.get("title_parsing", True) and not fields.get("deadline"):
         parsed = _parse_title_triggers(settings, body.title)
+        if parsed["repeat"] and not modules.enabled("recurring", settings):
+            # With repeating tasks off, "every monday" is part of the title.
+            parsed = {**parsed, "matched": False}
         if parsed["matched"]:
             fields["title"] = parsed["clean_title"]
             if parsed["deadline"]:
@@ -1560,16 +486,16 @@ def create_task(body: TaskCreate):
         rule = logic.normalize_rule(repeat)
         if rule:
             recurring.start_series(task, rule, settings)
-    _reveal(body.parent_id)
+    core.reveal(body.parent_id)
     if body.annotate:
-        _annotate_tasks([task["id"]], want_scores=settings["ai_scoring"],
-                        want_start=settings["ai_start_times"])
-    return _state()
+        estimates.annotate_tasks([task["id"]], want_scores=settings["ai_scoring"],
+                                 want_start=settings["ai_start_times"])
+    return core.state()
 
 
 @app.patch("/api/tasks/{task_id}")
 def update_task(task_id: str, body: TaskUpdate):
-    _require_task(task_id)
+    core.require_task(task_id)
     fields = body.model_dump(exclude_unset=True,
                              exclude={"clear_deadline", "clear_start_at"})
     if body.clear_deadline:
@@ -1582,13 +508,13 @@ def update_task(task_id: str, body: TaskUpdate):
         # One way in to "done", whichever door it came through, so a task
         # ticked from the list and one patched by hand pay the same XP.
         rest = {k: v for k, v in fields.items() if k != "status"}
-        return _state(xp_gained=_finish(task_id, rest))
+        return core.state(xp_gained=core.finish(task_id, rest))
     task = db.update_task(task_id, fields) or {}
     if fields.get("status") == "discarded" and task.get("series_id"):
         # Dropping this week's copy is not dropping the job: the rhythm steps
         # past it and the next one turns up on time.
         recurring.close_occurrence(task)
-    return _state()
+    return core.state()
 
 
 @app.delete("/api/tasks/{task_id}")
@@ -1612,7 +538,7 @@ def delete_task(task_id: str):
     db.delete_task(task_id)
     if task.get("series_id"):
         recurring.close_occurrence(task, template=template)
-    return _state()
+    return core.state()
 
 
 @app.post("/api/tasks/{task_id}/move")
@@ -1622,7 +548,7 @@ def move_task(task_id: str, body: TaskMove):
     A move stays inside one project — dragging is for arranging a list, not
     for crossing tabs; `POST /api/tasks/{id}/project` does that.
     """
-    task = _require_task(task_id)
+    task = core.require_task(task_id)
     project_id = task["project_id"]
 
     parent_id = body.parent_id
@@ -1632,7 +558,7 @@ def move_task(task_id: str, body: TaskMove):
             raise HTTPException(400, "mode is required when target_id is given")
         if body.target_id == task_id:
             raise HTTPException(400, "A task cannot be dropped onto itself")
-        target = _require_task(body.target_id)
+        target = core.require_task(body.target_id)
         if target["project_id"] != project_id:
             raise HTTPException(400, "That task is in a different project")
         parent_id = target["id"] if body.mode == "into" else target["parent_id"]
@@ -1640,7 +566,7 @@ def move_task(task_id: str, body: TaskMove):
     if parent_id:
         if parent_id == task_id:
             raise HTTPException(400, "A task cannot be its own parent")
-        parent = _require_task(parent_id)
+        parent = core.require_task(parent_id)
         if parent["project_id"] != project_id:
             raise HTTPException(400, "That task is in a different project")
         if parent_id in db.descendant_ids(task_id):
@@ -1664,308 +590,30 @@ def move_task(task_id: str, body: TaskMove):
         position = _sorted_child_position(task, parent_id, project_id)
 
     db.move_task(task_id, parent_id, project_id, position)
-    _reveal(parent_id)
-    return _state()
+    core.reveal(parent_id)
+    return core.state()
 
 
 @app.post("/api/tasks/{task_id}/project")
 def move_task_to_project(task_id: str, body: TaskProjectMove):
     """Send a task (with its subtasks) to another tab."""
-    task = _require_task(task_id)
-    _require_project(body.project_id)
+    task = core.require_task(task_id)
+    core.require_project(body.project_id)
     if task["project_id"] != body.project_id:
         db.move_task_to_project(task_id, body.project_id)
-    return _state()
-
-
-# ---------- recurring tasks ----------
-# A repeating job is a `series`: the rule, a snapshot of what to copy, and
-# where in the rhythm it has got to. The task on your list is one occurrence
-# of it, and there is only ever one open at a time — see `recurring.py`.
-
-@app.put("/api/tasks/{task_id}/repeat")
-def set_repeat(task_id: str, body: RepeatRule):
-    """Make a task repeat, or re-time a rhythm it already has.
-
-    Only top-level tasks repeat. A subtask is a step *inside* something, and
-    a step that came back on its own schedule while the thing containing it
-    did not would be a plan nobody could read; repeat the task it belongs to
-    and the steps come with it, because the copy is of the whole tree.
-    """
-    task = _require_task(task_id)
-    if task["parent_id"]:
-        raise HTTPException(
-            400, "Only a top-level task can repeat — its subtasks come with it")
-    rule = logic.normalize_rule(body.model_dump())
-    if not rule:
-        raise HTTPException(400, "That repeat rule doesn't describe a schedule")
-    settings = db.get_settings()
-    existing = db.get_series(task["series_id"])
-    if existing and existing["active"]:
-        updated = recurring.change_rule(existing, rule, task, settings)
-    else:
-        updated = recurring.start_series(task, rule, settings)
-    if not updated:
-        raise HTTPException(400, "That repeat rule never comes round again")
-    return _state()
-
-
-@app.delete("/api/tasks/{task_id}/repeat")
-def clear_repeat(task_id: str):
-    """Stop a job coming back. The copy on your list stays — it is a real
-    task you may still mean to do; it just has no sequel."""
-    task = _require_task(task_id)
-    if not task["series_id"]:
-        raise HTTPException(404, "This task doesn't repeat")
-    recurring.stop_series(task["series_id"])
-    return _state()
-
-
-@app.post("/api/recurring/preview")
-def preview_repeat(body: RepeatPreview):
-    """What a rule would actually do, before anyone commits to it.
-
-    Three or four real dates say what a rule means far better than the rule
-    does — "the last Friday of every second month" is a sentence; *27 Feb,
-    24 Apr, 26 Jun* is an answer. It is also the reason the page has no date
-    arithmetic of its own: the dialog, the badge and the schedule all come
-    from the one implementation in `logic.py`.
-    """
-    rule = logic.normalize_rule(body.model_dump(exclude={"task_id"}))
-    if not rule:
-        raise HTTPException(400, "That repeat rule doesn't describe a schedule")
-    settings = db.get_settings()
-    task = db.get_task(body.task_id) if body.task_id else None
-    anchor = recurring.first_occurrence(rule, task, settings)
-    dates = recurring.upcoming(rule, anchor, 4, settings)
-    return {
-        "summary": logic.describe_rule(rule, anchor,
-                                       logic.resolve_tz(settings.get("timezone"))),
-        "occurrences": [d.isoformat(timespec="seconds") for d in dates],
-    }
-
-
-@app.get("/api/recurring")
-def list_recurring():
-    """Every rhythm the app is keeping, with its rule in words.
-
-    Mostly for looking under the bonnet: the page reads each task's own
-    `recurrence`, which is the same data attached where it is used.
-    """
-    settings = db.get_settings()
-    return {"series": [recurring.describe(s, settings)
-                       for s in db.list_series(active_only=False)]}
-
-
-@app.post("/api/recurring/run")
-def run_recurring():
-    """Run the scheduled sweep now, and hand back the page.
-
-    The same call the background job makes once an hour, exposed because a
-    sweep you cannot trigger is a sweep you cannot debug — and because it
-    lets a real cron drive this instead, with `ADDERALL_RECUR_INTERVAL=0`.
-    """
-    result = scheduler.run_once()
-    state = _state()
-    state["recurring"] = {"ran_at": result["ran_at"],
-                          "created": [t["id"] for t in result["created"]]}
-    return state
-
-
-# ---------- ClickUp sync ----------
-# A one-way mirror of "tasks assigned to me" into a dedicated project — see
-# clickup.py. This route runs the same pass the background loop does on a
-# timer, exposed because a sync you cannot trigger on demand is a sync you
-# cannot test right after pasting in a token.
-
-def _queued_state(kind: str, message: str) -> dict:
-    """The normal state payload, plus a note that this action didn't run yet
-    because the server itself has no route to the internet — it's queued and
-    will apply on its own once queue.py gets it through. See queue.py."""
-    state = _state()
-    state["queued"] = {"kind": kind, "message": message}
-    return state
-
-
-@app.post("/api/clickup/sync")
-def sync_clickup():
-    settings = db.get_settings()
-    try:
-        result = clickup.sync(settings)
-    except clickup.ClickUpNetworkError:
-        queue.enqueue("clickup_sync", {})
-        return _queued_state(
-            "clickup_sync",
-            "No internet connection on the server — sync is queued and will "
-            "run automatically once it's back.",
-        )
-    except clickup.ClickUpUnavailable as exc:
-        raise HTTPException(502, str(exc))
-    state = _state()
-    state["clickup"] = result
-    return state
-
-
-def _process_clickup_sync(payload: dict) -> None:
-    settings = db.get_settings()
-    try:
-        clickup.sync(settings)
-    except clickup.ClickUpNetworkError as exc:
-        raise queue.NetworkRetry(str(exc)) from exc
-    except clickup.ClickUpUnavailable:
-        # The token was removed or is now invalid — nothing a retry can fix.
-        pass
-
-
-queue.register("clickup_sync", _process_clickup_sync)
-
-
-@app.post("/api/tasks/{task_id}/breakdown")
-def breakdown_task(task_id: str, body: BreakdownRequest):
-    task = _require_task(task_id)
-    settings = db.get_settings()
-    granularity = body.granularity or settings["granularity"]
-    parents = []
-    cursor = task
-    while cursor.get("parent_id"):
-        cursor = db.get_task(cursor["parent_id"])
-        if not cursor:
-            break
-        parents.insert(0, cursor["title"])
-    try:
-        steps = ai.breakdown(settings, task["title"], task["description"],
-                             granularity, parents)
-    except ai.AINetworkError:
-        queue.enqueue("breakdown", {"task_id": task_id, "granularity": granularity})
-        return _queued_state(
-            "breakdown",
-            "No internet connection on the server — this breakdown is "
-            "queued and will run automatically once it's back.",
-        )
-    except ai.AIUnavailable as exc:
-        raise HTTPException(502, str(exc))
-    new_ids = []
-    for step in steps:
-        sub = db.create_task({"title": step, "parent_id": task_id,
-                              "project_id": task["project_id"]})
-        new_ids.append(sub["id"])
-    if new_ids:
-        _reveal(task_id)
-    _annotate_tasks(new_ids, want_scores=settings["ai_scoring"])
-    return _state()
-
-
-def _process_breakdown(payload: dict) -> None:
-    task_id = payload["task_id"]
-    task = db.get_task(task_id)
-    if task is None:
-        return  # deleted before the queue got to it
-    settings = db.get_settings()
-    granularity = payload.get("granularity") or settings["granularity"]
-    parents = []
-    cursor = task
-    while cursor.get("parent_id"):
-        cursor = db.get_task(cursor["parent_id"])
-        if not cursor:
-            break
-        parents.insert(0, cursor["title"])
-    try:
-        steps = ai.breakdown(settings, task["title"], task["description"],
-                             granularity, parents)
-    except ai.AINetworkError as exc:
-        raise queue.NetworkRetry(str(exc)) from exc
-    new_ids = []
-    for step in steps:
-        sub = db.create_task({"title": step, "parent_id": task_id,
-                              "project_id": task["project_id"]})
-        new_ids.append(sub["id"])
-    if new_ids:
-        _reveal(task_id)
-    _annotate_tasks(new_ids, want_scores=settings["ai_scoring"])
-
-
-queue.register("breakdown", _process_breakdown)
-
-
-@app.post("/api/tasks/{task_id}/annotate")
-def annotate_task(task_id: str):
-    task = _require_task(task_id)
-    settings = db.get_settings()
-    # Explicit re-annotation clears prior AI values so they refresh — the
-    # start time included, since asking again is how you say "you had this
-    # one wrong". Only for a top-level task: a step is scheduled inside its
-    # parent's slot, so a start time on one would go unread.
-    want_start = bool(settings["ai_start_times"]) and task["parent_id"] is None
-    try:
-        results = ai.annotate(settings, [task], want_scores=settings["ai_scoring"],
-                              want_start=want_start,
-                              now_local=_now_local(settings) if want_start else "")
-    except ai.AINetworkError:
-        queue.enqueue("reannotate", {"task_id": task_id, "want_start": want_start})
-        return _queued_state(
-            "reannotate",
-            "No internet connection on the server — this re-estimate is "
-            "queued and will run automatically once it's back.",
-        )
-    except ai.AIUnavailable as exc:
-        raise HTTPException(502, str(exc))
-    row = results.get(task_id)
-    if row:
-        fields = {"estimated_time": int(row["minutes"])}
-        if settings["ai_scoring"]:
-            if row.get("impact") is not None:
-                fields["impact"] = int(row["impact"])
-            if row.get("effort") is not None:
-                fields["effort"] = int(row["effort"])
-        if want_start and row.get("start_in_minutes") is not None:
-            when = (datetime.now(timezone.utc)
-                    + timedelta(minutes=int(row["start_in_minutes"])))
-            fields["start_at"] = when.isoformat(timespec="seconds")
-        db.update_task(task_id, fields)
-    return _state()
-
-
-def _process_reannotate(payload: dict) -> None:
-    task_id = payload["task_id"]
-    task = db.get_task(task_id)
-    if task is None:
-        return  # deleted before the queue got to it
-    settings = db.get_settings()
-    want_start = payload.get("want_start", False)
-    try:
-        results = ai.annotate(settings, [task], want_scores=settings["ai_scoring"],
-                              want_start=want_start,
-                              now_local=_now_local(settings) if want_start else "")
-    except ai.AINetworkError as exc:
-        raise queue.NetworkRetry(str(exc)) from exc
-    row = results.get(task_id)
-    if row:
-        fields = {"estimated_time": int(row["minutes"])}
-        if settings["ai_scoring"]:
-            if row.get("impact") is not None:
-                fields["impact"] = int(row["impact"])
-            if row.get("effort") is not None:
-                fields["effort"] = int(row["effort"])
-        if want_start and row.get("start_in_minutes") is not None:
-            when = (datetime.now(timezone.utc)
-                    + timedelta(minutes=int(row["start_in_minutes"])))
-            fields["start_at"] = when.isoformat(timespec="seconds")
-        db.update_task(task_id, fields)
-
-
-queue.register("reannotate", _process_reannotate)
+    return core.state()
 
 
 @app.post("/api/tasks/{task_id}/start")
 def start_task(task_id: str):
-    _require_task(task_id)
+    core.require_task(task_id)
     db.update_task(task_id, {"status": "in_progress", "started_at": db.now_iso()})
-    return _state()
+    return core.state()
 
 
 @app.post("/api/tasks/{task_id}/complete")
 def complete_task(task_id: str, body: CompleteRequest):
-    task = _require_task(task_id)
+    task = core.require_task(task_id)
     actual = body.actual_time
     if actual is None and task["started_at"]:
         started = logic.parse_dt(task["started_at"])
@@ -1974,66 +622,7 @@ def complete_task(task_id: str, body: CompleteRequest):
     fields: dict = {}
     if actual is not None:
         fields["actual_time"] = actual
-    return _state(xp_gained=_finish(task_id, fields))
-
-
-def _plant_compiled(items: list[dict], project_id: str) -> list[str]:
-    """Store a compiled braindump tree as real parent/child tasks, depth
-    first. Shared by the route and its queued retry."""
-    new_ids: list[str] = []
-
-    def plant(nodes: list[dict], parent_id: str | None) -> None:
-        for item in nodes:
-            task = db.create_task({
-                "title": item["title"].strip(),
-                "description": item.get("description", "").strip(),
-                "parent_id": parent_id,
-                "project_id": project_id,
-            })
-            new_ids.append(task["id"])
-            plant(item.get("subtasks") or [], task["id"])
-
-    plant(items, None)
-    return new_ids
-
-
-@app.post("/api/compile")
-def compile_braindump(body: CompileRequest):
-    settings = db.get_settings()
-    project_id = _active_project_id(db.list_projects() or [db.ensure_project()])
-    try:
-        items = ai.compile_braindump(settings, body.text)
-    except ai.AINetworkError:
-        queue.enqueue("compile", {"text": body.text, "project_id": project_id})
-        return _queued_state(
-            "compile",
-            "No internet connection on the server — this braindump is "
-            "queued and will compile automatically once it's back.",
-        )
-    except ai.AIUnavailable as exc:
-        raise HTTPException(502, str(exc))
-    new_ids = _plant_compiled(items, project_id)
-    _annotate_tasks(new_ids, want_scores=settings["ai_scoring"],
-                    want_start=settings["ai_start_times"])
-    return _state()
-
-
-def _process_compile(payload: dict) -> None:
-    project = db.get_project(payload["project_id"])
-    if project is None:
-        return  # the project was deleted before the queue got to it
-    settings = db.get_settings()
-    try:
-        items = ai.compile_braindump(settings, payload["text"])
-    except ai.AINetworkError as exc:
-        raise queue.NetworkRetry(str(exc)) from exc
-    new_ids = _plant_compiled(items, payload["project_id"])
-    _annotate_tasks(new_ids, want_scores=settings["ai_scoring"],
-                    want_start=settings["ai_start_times"])
-
-
-queue.register("compile", _process_compile)
-
+    return core.state(xp_gained=core.finish(task_id, fields))
 
 @app.get("/api/next")
 def get_next():
@@ -2042,196 +631,15 @@ def get_next():
     task wearing the "next up" badge is the task this hands back."""
     projects = db.list_projects() or [db.ensure_project()]
     settings = db.get_settings()
-    all_view = _all_tasks_view(settings, projects)
-    project_id = _active_project_id(projects)
+    all_view = core.all_tasks_view(settings, projects)
+    project_id = core.active_project_id(projects)
     tasks = db.list_tasks(None if all_view else project_id)
-    derived = logic.compute(tasks, _list_settings(settings, all_view),
+    derived = logic.compute(tasks, core.list_settings(settings, all_view),
                             db.completion_ratios())
     nxt = logic.next_task(tasks, derived)
     if not nxt:
         return {"task": None}
     return {"task": {**nxt, **derived[nxt["id"]]}}
-
-
-@app.get("/api/focus")
-def get_focus(root: str | None = None):
-    """The ordered walk Taskmaster follows through a task tree.
-
-    `root` scopes the session to one task's subtree; without it the most
-    urgent tree in the open tab is chosen — or in any tab at all, when the
-    open tab is the compiled All list. The queue is depth-first — subtasks
-    before the task that contains them — so a session drills down to the
-    smallest first step and works its way back up.
-
-    A named root keeps the session in *its* project, whichever tab is open:
-    ducking out to another project to jot something down must not hijack a
-    running timer onto a different task.
-    """
-    projects = db.list_projects() or [db.ensure_project()]
-    settings = db.get_settings()
-    # A named root brings its own project, so the lens only decides anything
-    # when the session is being chosen rather than resumed.
-    lens = _all_tasks_view(settings, projects) and not root
-    project_id = (_require_task(root)["project_id"] if root
-                  else _active_project_id(projects))
-    tasks = db.list_tasks(None if lens else project_id)
-    derived = logic.compute(tasks, _list_settings(settings, lens),
-                            db.completion_ratios())
-    root_id = root or logic.focus_root_id(tasks, derived)
-    if not root_id:
-        return {"root_id": None, "root_title": None, "project_id": project_id,
-                "queue": []}
-    by_id = {t["id"]: t for t in tasks}
-    if root_id not in by_id:
-        raise HTTPException(404, "Task not found")
-    if lens:
-        # The session belongs to the project the chosen tree lives in, not to
-        # whichever tab the All list was opened from.
-        project_id = by_id[root_id]["project_id"]
-    queue = [
-        {**t, **derived[t["id"]], "path": logic.ancestor_titles(tasks, t)}
-        for t in logic.focus_queue(tasks, root_id)
-    ]
-    return {
-        "root_id": root_id,
-        "root_title": by_id[root_id]["title"],
-        "project_id": project_id,
-        "queue": queue,
-    }
-
-
-@app.get("/api/calendar")
-def get_calendar():
-    """Everything with a date on it, from every project, scored.
-
-    One payload for all three views: the page slices it into days, weeks and
-    months locally, so ‹ › navigation and changing a filter never wait on the
-    network.
-
-    `capacity` rides along: the day cap the views warn against overshooting,
-    plus the history that moved it, so the warning can explain itself instead
-    of quoting a number from nowhere.
-    """
-    return {"events": _calendar_events(), "capacity": _capacity()}
-
-
-@app.get("/api/overview")
-def get_overview():
-    """The Overview tab's numbers, graphs and shortlists.
-
-    One payload like the calendar's, and fetched the same way: only while the
-    tab is actually up. Everything in it spans every project, so unlike
-    `/api/state` there is no open tab to ask about.
-    """
-    return _overview()
-
-
-# ---------- habits ----------
-# Every route here answers with the whole Habits payload, the way the project
-# routes answer with the whole page state: ticking a box changes a streak, a
-# rate and a square, and a reply that carried only the box would leave the
-# page to work the rest out for itself and disagree with the server about it.
-
-
-def _require_habit(habit_id: str) -> dict:
-    habit = db.get_habit(habit_id)
-    if habit is None:
-        raise HTTPException(404, "Routine not found")
-    return habit
-
-
-def _habit_category(value: str | None) -> str:
-    category = (value or habits.DEFAULT_CATEGORY).strip()
-    if category not in habits.CATEGORY_IDS:
-        raise HTTPException(400, f"Unknown category: {category}")
-    return category
-
-
-def _habit_rule(rule: HabitRule | None) -> dict:
-    try:
-        return habits.normalize_rule(rule.model_dump() if rule else None)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-
-
-def _habit_day(day: str | None) -> str:
-    """The local day a tick belongs to, as the page reported it.
-
-    Trusted, within reason: the page knows its own timezone and the server
-    does not, so the only thing worth checking is that it is a date at all —
-    and that it is not one that hasn't happened yet, because a tick in the
-    future is a typo rather than a plan.
-    """
-    if not day:
-        return _today_local().isoformat()
-    try:
-        parsed = date.fromisoformat(day.strip())
-    except ValueError:
-        raise HTTPException(400, "A day looks like 2026-09-21")
-    # A day's grace either side of the server's idea of today: whoever is
-    # ticking is somewhere, and every zone on Earth is inside that window.
-    if parsed > _today_local() + timedelta(days=1):
-        raise HTTPException(400, "That day hasn't happened yet")
-    return parsed.isoformat()
-
-
-@app.get("/api/habits")
-def get_habits():
-    """The Habits tab: your routines, their streaks, and a year of squares."""
-    return _habits()
-
-
-@app.post("/api/habits", status_code=201)
-def create_habit(body: HabitCreate):
-    name = body.name.strip()
-    if not name:
-        raise HTTPException(400, "A routine needs a name")
-    db.create_habit(name, _habit_category(body.category), _habit_rule(body.rule))
-    return _habits()
-
-
-@app.patch("/api/habits/{habit_id}")
-def update_habit(habit_id: str, body: HabitUpdate):
-    """Rename a routine, move it to another part of your life, or change how
-    often it wants doing. The ticks it already has are never touched — you did
-    those days, whatever the rule says now."""
-    _require_habit(habit_id)
-    fields: dict = {}
-    if body.name is not None:
-        name = body.name.strip()
-        if not name:
-            raise HTTPException(400, "A routine needs a name")
-        fields["name"] = name
-    if body.category is not None:
-        fields["category"] = _habit_category(body.category)
-    if body.rule is not None:
-        fields["rule"] = _habit_rule(body.rule)
-    db.update_habit(habit_id, fields)
-    return _habits()
-
-
-@app.delete("/api/habits/{habit_id}")
-def delete_habit(habit_id: str):
-    """Forget a routine and every tick it collected. There is no archive: a
-    routine you have stopped keeping is not a thing to file away."""
-    _require_habit(habit_id)
-    db.delete_habit(habit_id)
-    return _habits()
-
-
-@app.post("/api/habits/{habit_id}/check")
-def check_habit(habit_id: str, body: HabitCheck):
-    """Tick — or untick — one day.
-
-    Idempotent both ways, so the page sends the state it wants rather than a
-    toggle it has to have guessed right. Untick matters as much as tick: a
-    square you filled in by mistake that you cannot clear turns the calendar
-    into something you distrust.
-    """
-    _require_habit(habit_id)
-    db.set_checkin(habit_id, _habit_day(body.day), bool(body.done))
-    return _habits()
-
 
 @app.post("/api/nudge")
 def nudge(body: NudgeRequest):
@@ -2253,7 +661,7 @@ def nudge(body: NudgeRequest):
         when = logic.parse_dt(item.deadline)
         if when is None:
             raise HTTPException(400, f"Unparseable deadline: {item.deadline!r}")
-        _require_task(item.task_id)
+        core.require_task(item.task_id)
         wanted[item.task_id] = when
 
     # Group by project so each task's current (possibly auto-assigned) deadline
@@ -2279,7 +687,7 @@ def nudge(body: NudgeRequest):
 
     for tid, fields in moves.items():
         db.update_task(tid, fields)
-    return _state()
+    return core.state()
 
 
 @app.post("/api/reschedule")
@@ -2322,7 +730,7 @@ def reschedule(body: RescheduleRequest):
 
     for move in moves:
         db.update_task(move["task_id"], {"deadline": move["deadline"]})
-    return {"moves": moves, "applied": True, "state": _state()}
+    return {"moves": moves, "applied": True, "state": core.state()}
 
 
 @app.post("/api/tasks/drop")
@@ -2333,14 +741,14 @@ def drop_tasks(body: DropRequest):
     exactly as it does one at a time."""
     dropped: list[dict] = []
     for task_id in body.task_ids:
-        _require_task(task_id)
+        core.require_task(task_id)
     for task_id in body.task_ids:
         was = db.get_task(task_id)
         task = db.update_task(task_id, {"status": "discarded"})
         if task and task.get("series_id") and was["status"] in logic.ACTIVE_STATUSES:
             recurring.close_occurrence(task)
         dropped.append({"task_id": task_id, "was": was["status"]})
-    return {"dropped": dropped, "state": _state()}
+    return {"dropped": dropped, "state": core.state()}
 
 
 @app.post("/api/replan")
@@ -2353,7 +761,7 @@ def replan_now():
     against it.
     """
     db.bump_plan_rev()
-    return _state()
+    return core.state()
 
 
 @app.get("/api/settings")
@@ -2368,10 +776,13 @@ def get_settings():
     settings["has_clickup_token"] = has_clickup_token
     # Derived, not stored: what the day cap has actually learned to be, so the
     # dialog can show it next to the number you set.
-    settings["capacity"] = _capacity()
+    settings["capacity"] = core.capacity()
     # Likewise derived: what today has cost so far, and where that leaves the
     # routing, next to the budget that decides it.
-    settings["spend"] = _spend(settings)
+    settings["spend"] = core.spend(settings)
+    # Static: what each module is called and does, for the Modules section.
+    # Whether it is on is the stored `modules` setting beside it.
+    settings["module_catalog"] = modules.catalog()
     return settings
 
 
@@ -2382,6 +793,7 @@ def put_settings(body: SettingsUpdate):
     changes.pop("has_clickup_token", None)
     changes.pop("capacity", None)  # derived; the page only ever echoes it back
     changes.pop("spend", None)     # likewise
+    changes.pop("module_catalog", None)
     if changes.get("api_key") == "":
         changes.pop("api_key")  # empty field means "leave unchanged"
     if changes.get("clickup_api_token") == "":
@@ -2391,33 +803,19 @@ def put_settings(body: SettingsUpdate):
     return get_settings()
 
 
-HELP_DIR = os.path.join(os.path.dirname(__file__), "help")
-
-
-@app.get("/api/help")
-def get_help():
-    """Every help article, in order. One Markdown file per feature under
-    `app/help/`, so the articles ship and change with the code they describe;
-    the filename orders them and its first `# ` line is the title. All of
-    them at once, because together they are smaller than one calendar read
-    and the page can then move between them without asking again."""
-    articles = []
-    for name in sorted(os.listdir(HELP_DIR)):
-        if not name.endswith(".md"):
-            continue
-        with open(os.path.join(HELP_DIR, name), encoding="utf-8") as f:
-            text = f.read()
-        head, _, body = text.partition("\n")
-        articles.append({"slug": name[:-3], "title": head.removeprefix("# ").strip(),
-                         "body": body.strip()})
-    return articles
+# Each module's routes, every one of them answering 404 while its module is
+# off. See `modules.py`.
+for module_routes in (clickup_routes, magic_todo, braindump, estimates, calendar,
+                      overview, habits, help, recurring_routes, focus, alarms):
+    app.include_router(module_routes.router)
 
 
 # AI agents: the MCP server at /mcp. Added before the static mount, which
 # would otherwise answer for every path. See `mcp_server.py`.
 mcp = mcp_server.build()
 app.router.routes.extend(
-    mcp.streamable_http_app(stateless_http=True, json_response=True).routes)
+    Route(r.path, modules.Gate("mcp", r.app))
+    for r in mcp.streamable_http_app(stateless_http=True, json_response=True).routes)
 
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")

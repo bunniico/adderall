@@ -141,7 +141,7 @@ function renderStats() {
     { label: `Finished in ${s.trend_days} days`, value: s.finished,
       note: s.finished_minutes ? fmtMinutes(s.finished_minutes) + " of work" : "" },
   ];
-  if (xp && settings?.gamification) {
+  if (xp && mod("xp")) {
     tiles.push({ label: "Level", value: xp.level,
                  note: `${xp.into_level} / ${xp.level_span} XP`,
                  meter: xp.progress });

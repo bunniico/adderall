@@ -13,7 +13,7 @@ The side rail shows two averages:
 - **Average hourly XP**, across every estimated task that has ever paid out.
 - **Average daily XP** over the last 30 days, counting quiet days. The Overview repeats this one as a tile.
 
-The Done list keeps what each task paid. The whole thing, confetti included, is one switch in ⚙ Settings: *Gamification*.
+The Done list keeps what each task paid. The whole thing, confetti included, is one switch: the *XP and levels* [module](27-modules.md) in ⚙ Settings.
 
 ## Why it works this way
 
