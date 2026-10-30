@@ -14,7 +14,7 @@ Each task has an **XP rate**, set by its impact and effort:
 
 An unrated task earns 1 XP a minute. The most important, hardest work earns 1.75.
 
-A finished task pays its rate for every minute of its **padded estimate** (the estimate plus the [time tax](12-estimates-and-time-tax.md)). A task nobody estimated counts as 30 minutes. Open a task to see its rate and what it will pay.
+A finished task pays its rate for every minute of its **padded estimate** (the estimate plus the [time tax](12-estimates-and-time-tax.md)). A task nobody estimated counts as 30 minutes. Each open task shows what it will pay as a green **XP** badge next to its ★ score; hover over it, or open the task, to see the rate.
 
 **Speed bonus.** If you time a task (with ▶ Start or [Focus mode](20-focus-mode.md)) and finish inside its padded estimate, it pays up to 20% more. The bonus grows as you get closer to your raw estimate and is full once you are inside it. Going faster than that earns nothing extra, and running over costs nothing.
 

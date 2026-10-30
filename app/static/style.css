@@ -526,6 +526,8 @@ textarea { resize: vertical; }
   font-weight: 600; padding-left: 0; padding-right: 4px;
 }
 .badge.xp-badge { color: var(--good); border-color: var(--good); font-weight: 600; }
+/* What an open task will pay, in the same quiet style as the score beside it. */
+.badge.score-badge.xp-ahead { color: var(--good); }
 /* A rhythm, not a deadline: it says what will happen again, so it reads in
    the same quiet register as the quadrant rather than competing with the
    date next to it. */
