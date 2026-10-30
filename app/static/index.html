@@ -46,10 +46,10 @@
       <span id="focus-pill-title" class="focus-pill-title"></span>
       <span id="focus-pill-end" class="focus-pill-end" title="End this focus session">✕</span>
     </button>
-    <button id="btn-view" class="ghost" title="Switch between the task list and the calendar">📅 Calendar</button>
-    <button id="btn-braindump" class="ghost" title="Dump everything in your head; the Compiler turns it into tasks">🧠 Braindump</button>
-    <button id="btn-focus" class="accent" title="One task at a time with a visual timer">▶ Focus</button>
-    <button id="btn-help" class="ghost" title="Help: how each feature works, and why">❓</button>
+    <button id="btn-view" class="ghost" data-module="calendar" title="Switch between the task list and the calendar">📅 Calendar</button>
+    <button id="btn-braindump" class="ghost" data-module="braindump" title="Dump everything in your head; the Compiler turns it into tasks">🧠 Braindump</button>
+    <button id="btn-focus" class="accent" data-module="focus" title="One task at a time with a visual timer">▶ Focus</button>
+    <button id="btn-help" class="ghost" data-module="help" title="Help: how each feature works, and why">❓</button>
     <button id="btn-settings" class="ghost" title="Settings">⚙</button>
   </div>
 </header>
@@ -71,7 +71,7 @@
   <div class="list-main">
   <form id="add-form" autocomplete="off">
     <input id="add-title" type="text" placeholder="Add a task… (Enter to add)" maxlength="500" required>
-    <label class="granularity" title="Breakdown granularity (1 = broad steps, 5 = tiny steps)">
+    <label class="granularity" data-module="magic_todo" title="Breakdown granularity (1 = broad steps, 5 = tiny steps)">
       🌶 <input id="add-granularity" type="range" min="1" max="5" value="3">
     </label>
     <button type="submit" class="accent">Add</button>
@@ -103,8 +103,9 @@
 
   <section id="task-list" class="task-list" aria-live="polite"></section>
   <p id="empty-hint" class="empty-hint" hidden>
-    <span id="empty-project"></span>Add a task above, or hit
-    <b>🧠 Braindump</b> and empty your head.
+    <span id="empty-project"></span>Add a task above<span
+    data-module="braindump">, or hit <b>🧠 Braindump</b> and empty your
+    head</span>.
   </p>
   <p id="list-hint" class="list-hint" hidden>
     <b>+</b> adds a subtask by hand · <b>▾</b> folds a task's subtasks out of
@@ -434,9 +435,9 @@
       <select id="d-project" title="Move this task — and everything under it — to another tab"></select>
     </label>
     <div class="modal-actions">
-      <button type="button" id="d-breakdown" class="ghost">⚡ Break down</button>
-      <button type="button" id="d-annotate" class="ghost" title="Ask the AI to re-estimate and re-score">🎲 Re-estimate</button>
-      <button type="button" id="d-focus" class="accent">▶ Focus</button>
+      <button type="button" id="d-breakdown" class="ghost" data-module="magic_todo">⚡ Break down</button>
+      <button type="button" id="d-annotate" class="ghost" data-module="ai_estimates" title="Ask the AI to re-estimate and re-score">🎲 Re-estimate</button>
+      <button type="button" id="d-focus" class="accent" data-module="focus">▶ Focus</button>
       <button type="button" id="d-done" class="good">✓ Done</button>
       <button type="button" id="d-discard" class="bad">🗑 Discard</button>
     </div>
@@ -504,7 +505,7 @@
     <div class="modal-actions">
       <button id="t-discard" class="bad">🗑 Discard it</button>
       <button id="t-keep" class="ghost">Keep anyway</button>
-      <button id="t-rescore" class="ghost">Re-score</button>
+      <button id="t-rescore" class="ghost" data-module="ai_estimates">Re-score</button>
     </div>
   </div>
 </dialog>
@@ -531,6 +532,17 @@
   <div class="modal-body">
     <div class="modal-head"><h2>⚙ Settings</h2>
       <button type="button" class="ghost close" data-close>✕</button></div>
+
+    <!-- Which parts of the app are on. Built from the server's module list
+         (see modules.py), so a new module needs no change here. Turning one
+         off hides it and stops it on the server; its data stays put. -->
+    <fieldset class="s-group">
+      <legend>🧩 Modules</legend>
+      <div id="s-modules" class="module-list"></div>
+      <p class="muted">Turning a module off hides it and stops its work on the
+        server. Nothing it saved is deleted: turn it back on and it is all
+        still there.</p>
+    </fieldset>
 
     <label class="row"><input id="s-auto-deadlines" type="checkbox">
       Auto-deadlines <span class="muted">— assign a deadline when you don't set one</span></label>
@@ -591,10 +603,10 @@
       <input id="s-threshold" type="range" min="1" max="9" value="5">
     </label>
 
-    <label class="row"><input id="s-ai-scoring" type="checkbox">
+    <label class="row" data-module="ai_estimates"><input id="s-ai-scoring" type="checkbox">
       AI impact/effort suggestions</label>
 
-    <label class="row"><input id="s-ai-start-times" type="checkbox">
+    <label class="row" data-module="ai_estimates"><input id="s-ai-start-times" type="checkbox">
       AI start times <span class="muted">— let the AI say when each new task
       wants to begin. Dinner lands this evening, a game you'll get to
       eventually lands weeks out, and the scheduler works from that.</span></label>
@@ -608,16 +620,17 @@
       …and let the AI take a second look <span class="muted">— only when the
       title's phrasing is too loose for the built-in parser to catch.</span></label>
 
-    <label class="row"><input id="s-alarms" type="checkbox">
-      Transition alarms</label>
-    <div class="grid3">
-      <label>Stop <input id="s-stop-lead" type="number" min="0" max="240"> <span class="muted">min before</span></label>
-      <label>Ready <input id="s-ready-lead" type="number" min="0" max="240"> <span class="muted">min before</span></label>
-      <label>Go <input id="s-go-lead" type="number" min="0" max="60"> <span class="muted">min before</span></label>
-    </div>
-    <label>Alarm webhooks <span class="muted">— one URL per line; each alarm is
-      POSTed to every one. A Discord webhook URL gets a Discord message.</span>
-      <textarea id="s-webhooks" rows="2" placeholder="https://discord.com/api/webhooks/…"></textarea></label>
+    <fieldset class="s-group" data-module="alarms">
+      <legend>⏰ Transition alarms</legend>
+      <div class="grid3">
+        <label>Stop <input id="s-stop-lead" type="number" min="0" max="240"> <span class="muted">min before</span></label>
+        <label>Ready <input id="s-ready-lead" type="number" min="0" max="240"> <span class="muted">min before</span></label>
+        <label>Go <input id="s-go-lead" type="number" min="0" max="60"> <span class="muted">min before</span></label>
+      </div>
+      <label>Alarm webhooks <span class="muted">— one URL per line; each alarm is
+        POSTed to every one. A Discord webhook URL gets a Discord message.</span>
+        <textarea id="s-webhooks" rows="2" placeholder="https://discord.com/api/webhooks/…"></textarea></label>
+    </fieldset>
 
     <label>Week starts on
       <select id="s-week-start">
@@ -634,19 +647,15 @@
       </select>
     </label>
 
-    <label>Default breakdown granularity: <output id="s-granularity-val"></output>
+    <label data-module="magic_todo">Default breakdown granularity: <output id="s-granularity-val"></output>
       <input id="s-granularity" type="range" min="1" max="5" value="3">
     </label>
-
-    <label class="row"><input id="s-gamification" type="checkbox">
-      Gamification <span class="muted">— the confetti when you finish something,
-      and the level and XP bar in the corner</span></label>
 
     <!-- Sounds. The built-in set is synthesized on the fly, so there is
          nothing to download and nothing to load before the first click makes
          a noise. Anything you pick here replaces one of them; the files stay
          in this browser and are never uploaded anywhere. -->
-    <fieldset class="s-group">
+    <fieldset class="s-group" data-module="sounds">
       <legend>🔉 Sounds</legend>
       <label class="row"><input id="s-sound" type="checkbox">
         Sound on <span class="muted">— a soft click on every press, and a
@@ -685,7 +694,7 @@
     <!-- One-way import of tasks assigned to you in ClickUp, into their own
          "ClickUp" tab. See clickup.py for what a sync does and does not
          touch. -->
-    <fieldset class="s-group">
+    <fieldset class="s-group" data-module="clickup">
       <legend>🔄 ClickUp sync</legend>
       <label>ClickUp API token <span id="s-clickup-status" class="tag"></span>
         <input id="s-clickup-token" type="password" placeholder="pk_… (leave blank to keep current)">
@@ -719,7 +728,7 @@
       <button type="button" class="ghost close" data-close>✕</button></div>
     <label class="row"><input id="cal-auto" type="checkbox" checked>
       Auto-scheduled <span class="muted">— deadlines the app assigned</span></label>
-    <label class="row"><input id="cal-repeats" type="checkbox" checked>
+    <label class="row" data-module="recurring"><input id="cal-repeats" type="checkbox" checked>
       Repeats ahead <span class="muted">— copies a repeating task will make</span></label>
   </div>
 </dialog>

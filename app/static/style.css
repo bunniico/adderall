@@ -689,6 +689,13 @@ dialog.closing::backdrop { animation: fade-in var(--t-fast) var(--ease-in) rever
   padding: 12px 14px 14px;
 }
 .s-group legend { font-size: 13px; color: var(--muted); padding: 0 6px; }
+/* Settings → Modules: a switch per module, under the group it belongs to. */
+.module-list { display: flex; flex-direction: column; gap: 12px; }
+.module-group { display: flex; flex-direction: column; gap: 6px; }
+.module-group-name { font-weight: 600; }
+/* Whatever belongs to a module that is off. Wins over every display rule in
+   this file, so the one attribute is all an element needs. */
+[data-module][hidden] { display: none !important; }
 .modal-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .modal-actions button { flex: 1; min-width: 100px; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }

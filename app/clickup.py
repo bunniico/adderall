@@ -35,7 +35,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from . import db, events, logic
+from . import db, events, logic, modules
 
 log = logging.getLogger(__name__)
 
@@ -228,9 +228,11 @@ def run_once() -> dict | None:
 
     Returns None without contacting ClickUp when no token is configured, so
     the background loop stays quiet on a fresh install instead of logging a
-    failure every tick.
+    failure every tick, and likewise while the ClickUp module is off.
     """
     settings = db.get_settings()
+    if not modules.enabled("clickup", settings):
+        return None
     try:
         _token(settings)
     except ClickUpUnavailable:

@@ -2049,7 +2049,7 @@ def test_a_setting_that_changes_the_day_changes_the_plan(client):
     client.get("/api/state")
     before = client.get("/api/state").json()["plan"]["rev"]
 
-    client.put("/api/settings", json={"gamification": False})
+    client.put("/api/settings", json={"timer_style": "analog"})
     assert client.get("/api/state").json()["plan"]["rev"] == before
 
     client.put("/api/settings", json={"day_start": 7})
@@ -2593,8 +2593,8 @@ def test_help_serves_every_article_in_filename_order(client):
     """One Markdown file per feature under app/help/: the filename orders
     them, and the first line is the title rather than part of the body."""
     import os
-    from app import main
-    names = sorted(n for n in os.listdir(main.HELP_DIR) if n.endswith(".md"))
+    from app.routes import help as help_routes
+    names = sorted(n for n in os.listdir(help_routes.HELP_DIR) if n.endswith(".md"))
     articles = client.get("/api/help").json()
     assert [a["slug"] + ".md" for a in articles] == names
     assert articles[0] == {**articles[0], "slug": "01-welcome", "title": "Welcome"}

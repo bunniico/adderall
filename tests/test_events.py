@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 NOW = datetime(2026, 9, 23, 12, 0, tzinfo=timezone.utc)
-SETTINGS = {"alarms": {"enabled": True, "stop_lead": 30, "ready_lead": 10, "go_lead": 0}}
+SETTINGS = {"alarms": {"stop_lead": 30, "ready_lead": 10, "go_lead": 0}}
 
 
 @pytest.fixture()
@@ -48,7 +48,7 @@ def test_stale_cues_are_dropped_not_replayed(events):
 
 def test_disabled_alarms_fire_nothing(events):
     t = task(NOW)
-    off = {"alarms": {**SETTINGS["alarms"], "enabled": False}}
+    off = {**SETTINGS, "modules": {"alarms": False}}
     assert events.due_alarms([t], off, NOW) == []
 
 
