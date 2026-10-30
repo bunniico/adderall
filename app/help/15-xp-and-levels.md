@@ -27,7 +27,7 @@ The side rail shows two averages:
 - **Average XP / minute**, across every estimated task that has ever paid out. This is the number to raise: it goes up when you spend your time on work that matters and when tasks go to plan.
 - **Average daily XP** over the last 30 days, counting quiet days. The Overview repeats this one as a tile.
 
-The Done list keeps what each task paid. The whole thing, confetti included, is one switch: the *XP and levels* [module](27-modules.md) in ⚙ Settings.
+The rail's **XP left** adds up what finishing every open task in the list would pay, before any speed bonus. The Done list keeps what each task paid. The whole thing, confetti included, is one switch: the *XP and levels* [module](27-modules.md) in ⚙ Settings.
 
 ## Why it works this way
 

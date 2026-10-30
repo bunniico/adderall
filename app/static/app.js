@@ -1260,9 +1260,13 @@ function renderRail() {
   const open = mine.filter((t) => t.status === "todo" || t.status === "in_progress");
   const timeLeft = open.reduce((sum, t) =>
     sum + (t.has_subtasks ? (t.rollup_remaining || 0) : (t.buffered_estimate || 0)), 0);
-  const pointsLeft = open.reduce((sum, t) => sum + (t.score || 0), 0);
+  // What finishing all of it would pay: every open step not yet paid for.
+  // Containers carry no figure of their own and pay through their steps.
+  const xpLeft = flatten(open).reduce((sum, t) =>
+    sum + ((t.status === "todo" || t.status === "in_progress") &&
+           t.xp_awarded == null ? (t.xp_value || 0) : 0), 0);
   $("rail-time-total").textContent = open.length ? fmtMinutes(timeLeft) : "—";
-  $("rail-points-total").textContent = open.length ? Math.round(pointsLeft) : "—";
+  $("rail-xp-left").textContent = !on ? "off" : open.length ? xpLeft : "—";
 }
 
 /* The list is rebuilt wholesale on every state change, so anything the user
