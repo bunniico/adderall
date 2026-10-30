@@ -1027,7 +1027,8 @@ function taskNode(task, isSub) {
       const b = document.createElement("span");
       b.className = "badge xp-badge";
       b.textContent = `+${task.xp_awarded} XP`;
-      b.title = "What finishing this one paid out — its score at the time.";
+      b.title = "What finishing this one paid out: its XP rate for every " +
+        "minute of its padded estimate, plus any speed bonus.";
       badges.appendChild(b);
     }
     if (task.recurrence) {
@@ -1080,9 +1081,10 @@ function scoreTitle(task) {
     : `Score ${score}/100 — deadline pressure, impact, and how cheap it is ` +
       `in both effort and time, in one number`;
   if (!mod("xp")) return how + ".";
-  return how + (task.has_subtasks
-    ? ". Each of those steps pays out its own score in XP when you finish it."
-    : `. Finishing it earns ${Math.max(1, score)} XP.`);
+  return how + (task.has_subtasks || task.xp_value == null
+    ? ". Each of those steps pays its own XP when you finish it."
+    : `. Finishing it earns ${task.xp_value} XP: ${task.xp_rate} XP a minute ` +
+      `for its padded estimate, up to 20% more if you time it and come in under.`);
 }
 
 /* The overdue badge, as a button. Clicking it opens the nudge dialog on this
@@ -1244,7 +1246,8 @@ function renderRail() {
   $("rail-goal").textContent = on ? `${xp.into_level} / ${xp.level_span}` : "off";
   $("rail-goal-fill").style.width = (on ? xp.progress * 100 : 0) + "%";
   $("rail-xp").textContent = on ? `level ${xp.level} · ${xp.total} XP earned` : "";
-  $("rail-hourly-xp").textContent = on && xp.hourly != null ? Math.round(xp.hourly) : "—";
+  $("rail-minute-xp").textContent =
+    on && xp.per_minute != null ? xp.per_minute.toFixed(2) : "—";
   // Pace rather than rate: what the last month has paid out per day, quiet
   // days included. The window is only in the tooltip because the row is a
   // label and a number wide, and an unlabelled 30 would read as the value.
@@ -1257,9 +1260,13 @@ function renderRail() {
   const open = mine.filter((t) => t.status === "todo" || t.status === "in_progress");
   const timeLeft = open.reduce((sum, t) =>
     sum + (t.has_subtasks ? (t.rollup_remaining || 0) : (t.buffered_estimate || 0)), 0);
-  const pointsLeft = open.reduce((sum, t) => sum + (t.score || 0), 0);
+  // What finishing all of it would pay: every open step not yet paid for.
+  // Containers carry no figure of their own and pay through their steps.
+  const xpLeft = flatten(open).reduce((sum, t) =>
+    sum + ((t.status === "todo" || t.status === "in_progress") &&
+           t.xp_awarded == null ? (t.xp_value || 0) : 0), 0);
   $("rail-time-total").textContent = open.length ? fmtMinutes(timeLeft) : "—";
-  $("rail-points-total").textContent = open.length ? Math.round(pointsLeft) : "—";
+  $("rail-xp-left").textContent = !on ? "off" : open.length ? xpLeft : "—";
 }
 
 /* The list is rebuilt wholesale on every state change, so anything the user
@@ -1481,7 +1488,7 @@ function renderXp() {
   $("xp-level").textContent = xp.level;
   $("xp-count").textContent = `${xp.into_level} / ${xp.level_span}`;
   meter.title = `Level ${xp.level} — ${xp.total} XP earned, ${xp.to_next} to ` +
-    `level ${xp.level + 1}. Finishing a task pays out its score.`;
+    `level ${xp.level + 1}. Finishing a task pays its XP rate for every minute of it.`;
   meter.setAttribute("aria-label",
     `Level ${xp.level}, ${xp.into_level} of ${xp.level_span} XP`);
 

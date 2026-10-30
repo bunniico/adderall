@@ -207,7 +207,8 @@ CREATE TABLE IF NOT EXISTS plan (
 CREATE TABLE IF NOT EXISTS progress (
     id         INTEGER PRIMARY KEY CHECK (id = 1),
     xp         INTEGER NOT NULL DEFAULT 0,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    xp_formula INTEGER NOT NULL DEFAULT 0
 );
 -- Routines, and the days you actually did them. Deliberately nothing to do
 -- with tasks or series: a routine is never finished, has no estimate, no
@@ -326,6 +327,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
         # behavior underneath anyone.
         conn.execute(
             "ALTER TABLE tasks ADD COLUMN repeat_carry INTEGER NOT NULL DEFAULT 1"
+        )
+    progress_cols = {r[1] for r in conn.execute("PRAGMA table_info(progress)").fetchall()}
+    if "xp_formula" not in progress_cols:
+        # Everything paid so far was paid under the first formula. Zero marks
+        # it as older than any real one, so startup re-scores it once.
+        conn.execute(
+            "ALTER TABLE progress ADD COLUMN xp_formula INTEGER NOT NULL DEFAULT 0"
         )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_series ON tasks(series_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_clickup ON tasks(clickup_id)")
@@ -701,7 +709,7 @@ def completion_ratios(limit: int = 20) -> list[float]:
 
 def xp_estimate_pairs() -> list[dict]:
     """(xp, estimated_time) for every finished, paid-out task that carried an
-    estimate, for the average-hourly-XP stat."""
+    estimate, for the average-XP-per-minute stat."""
     with connect() as conn:
         rows = conn.execute(
             """SELECT xp_awarded, estimated_time FROM tasks
@@ -985,6 +993,45 @@ def get_xp() -> int:
     with connect() as conn:
         row = conn.execute("SELECT xp FROM progress WHERE id = 1").fetchone()
     return int(row["xp"]) if row else 0
+
+
+def xp_formula() -> int:
+    """Which XP formula the running total was paid under; 0 for none yet."""
+    with connect() as conn:
+        row = conn.execute("SELECT xp_formula FROM progress WHERE id = 1").fetchone()
+    return int(row["xp_formula"]) if row else 0
+
+
+def rescore_xp(pay, formula: int) -> int:
+    """Re-pay every task that has paid out, with `pay(row)`, and record that
+    the total now stands under `formula`. Hands back the new total.
+
+    XP from tasks deleted since they paid has no row left to re-score, so it
+    stays on the total exactly as it was paid. One transaction, so a crash
+    part-way leaves the old figures and the old formula, and the next start
+    simply tries again.
+    """
+    ts = now_iso()
+    with connect() as conn:
+        rows = conn.execute(
+            """SELECT id, impact, effort, estimated_time, actual_time, xp_awarded
+               FROM tasks WHERE xp_awarded IS NOT NULL""").fetchall()
+        row = conn.execute("SELECT xp FROM progress WHERE id = 1").fetchone()
+        total = int(row["xp"]) if row else 0
+        orphaned = max(0, total - sum(r["xp_awarded"] for r in rows))
+        new_total = orphaned
+        for r in rows:
+            amount = max(0, int(pay(dict(r))))
+            conn.execute("UPDATE tasks SET xp_awarded = ? WHERE id = ?",
+                         (amount, r["id"]))
+            new_total += amount
+        conn.execute(
+            "INSERT INTO progress (id, xp, updated_at, xp_formula) VALUES (1, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET xp = excluded.xp, "
+            "updated_at = excluded.updated_at, xp_formula = excluded.xp_formula",
+            (new_total, ts, formula),
+        )
+    return new_total
 
 
 def award_xp(task_id: str, amount: int) -> int:

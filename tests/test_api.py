@@ -2291,33 +2291,88 @@ def test_state_carries_the_level_and_xp(client):
     state = client.get("/api/state").json()
     assert state["xp"] == {"total": 0, "level": 1, "into_level": 0,
                            "level_span": 100, "to_next": 100, "progress": 0.0,
-                           "gained": 0, "hourly": None,
+                           "gained": 0, "per_minute": None,
                            "daily": 0.0, "daily_days": logic.XP_WINDOW_DAYS}
 
 
-def test_completing_a_task_pays_out_its_score(client):
+def test_completing_a_task_pays_its_rate_for_every_padded_minute(client):
     state = create(client, title="a real task", impact=9, effort=2,
                    estimated_time=20)
     task = find(state, "a real task")
-    score = task["score"]
-    assert score is not None
+    expected = logic.task_xp(9, 2, 20, task["buffered_estimate"])
+    # The task says up front what it will pay.
+    assert task["xp_value"] == expected
+    assert task["xp_rate"] == round(logic.xp_rate(9, 2), 2)
     state = client.post(f"/api/tasks/{task['id']}/complete", json={}).json()
-    expected = round(score)
     assert state["xp"]["gained"] == expected
     assert state["xp"]["total"] == expected
     # ...and the task remembers what it paid, for the Done list to show.
     assert find(state, "a real task")["xp_awarded"] == expected
 
 
-def test_average_hourly_xp_reflects_completed_estimated_work(client):
+def test_a_timed_finish_inside_the_estimate_earns_the_speed_bonus(client):
+    state = create(client, title="went to plan", impact=5, effort=5,
+                   estimated_time=60)
+    task = find(state, "went to plan")
+    padded = task["buffered_estimate"]
+    state = client.post(f"/api/tasks/{task['id']}/complete",
+                        json={"actual_time": 60}).json()
+    assert state["xp"]["gained"] == round(padded * 1.2)
+
+
+def test_finishing_a_parent_pays_its_steps_by_their_minutes(client):
+    """Splitting a job into steps must not multiply what it pays."""
+    parent = find(create(client, title="the job", impact=5, effort=5),
+                  "the job")
+    for n in range(3):
+        create(client, title=f"step {n}", parent_id=parent["id"],
+               impact=5, effort=5, estimated_time=10)
+    state = client.get("/api/state").json()
+    steps = [find(state, f"step {n}") for n in range(3)]
+    assert find(state, "the job")["xp_value"] is None   # pays through its steps
+    expected = sum(s["xp_value"] for s in steps)
+    state = client.post(f"/api/tasks/{parent['id']}/complete",
+                        json={"actual_time": 1}).json()
+    # The parent's quick finish is its own timing, not each step's.
+    assert state["xp"]["gained"] == expected
+
+
+def test_average_xp_per_minute_reflects_completed_estimated_work(client):
     state = create(client, title="timed task", impact=9, effort=2,
                    estimated_time=30)
     task = find(state, "timed task")
-    score = task["score"]
     buffered_minutes = task["buffered_estimate"]
     state = client.post(f"/api/tasks/{task['id']}/complete", json={}).json()
-    xp = round(score)
-    assert state["xp"]["hourly"] == xp / (buffered_minutes / 60)
+    assert state["xp"]["per_minute"] == state["xp"]["gained"] / buffered_minutes
+
+
+def test_startup_rescores_xp_paid_under_the_old_formula_once(client):
+    """A database paid a flat score per task is re-paid by the minute on the
+    next start. XP from tasks deleted since stays as it was, and the re-score
+    never runs a second time."""
+    from app import db, main
+    kept = find(create(client, title="still here", impact=10, effort=10,
+                       estimated_time=30), "still here")
+    gone = find(create(client, title="deleted later", impact=5, effort=5,
+                       estimated_time=30), "deleted later")
+    client.post(f"/api/tasks/{kept['id']}/complete", json={})
+    client.post(f"/api/tasks/{gone['id']}/complete", json={})
+    client.delete(f"/api/tasks/{gone['id']}")
+    # Pretend both were paid 40 under the first formula.
+    with db.connect() as conn:
+        conn.execute("UPDATE tasks SET xp_awarded = 40 WHERE id = ?", (kept["id"],))
+        conn.execute("UPDATE progress SET xp = 80, xp_formula = 0 WHERE id = 1")
+
+    main._rescore_xp()
+    repaid = logic.task_xp(10, 10, 30, kept["buffered_estimate"])
+    assert db.get_task(kept["id"])["xp_awarded"] == repaid
+    assert db.get_xp() == 40 + repaid
+    assert db.xp_formula() == logic.XP_FORMULA
+
+    # Editing a paid task after the re-score must not change what it paid.
+    client.patch(f"/api/tasks/{kept['id']}", json={"impact": 0})
+    main._rescore_xp()
+    assert db.get_xp() == 40 + repaid
 
 
 def test_average_daily_xp_spreads_what_was_earned_over_the_window(client):
@@ -2421,12 +2476,12 @@ def test_enough_finished_tasks_raise_the_level(client):
     total = 0
     for i in range(6):
         state = create(client, title=f"task {i}", impact=10, effort=0,
-                       estimated_time=10)
+                       estimated_time=30)
         tid = find(state, f"task {i}")["id"]
         total = client.post(f"/api/tasks/{tid}/complete", json={}).json()["xp"]["total"]
     xp = client.get("/api/state").json()["xp"]
     assert xp["total"] == total
-    assert xp["level"] > 1                     # six real tasks is a level or two
+    assert xp["level"] > 1                     # three hours of real work is a level or two
     assert xp["level"] == logic.level_progress(total)["level"]
     assert xp["into_level"] + xp["to_next"] == xp["level_span"]
 

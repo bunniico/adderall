@@ -159,7 +159,7 @@ def xp_state(settings: dict, ratios: list[float], gained: int | None = None) -> 
     """
     payload = {
         **logic.level_progress(db.get_xp()),
-        "hourly": logic.average_hourly_xp(
+        "per_minute": logic.average_xp_per_minute(
             db.xp_estimate_pairs(), logic.effective_buffer(settings, ratios)),
         "daily": logic.average_daily_xp(db.xp_since(logic.XP_WINDOW_DAYS)),
         "daily_days": logic.XP_WINDOW_DAYS,
@@ -398,14 +398,12 @@ def project_derived(project_id: str) -> dict[str, dict]:
 def finish(task_id: str, fields: dict | None = None) -> int:
     """Mark a task and everything still open under it done, and pay the XP out.
 
-    The scores are read *before* anything is marked done, because finishing a
-    task drops its urgency — and so its score — to nothing: what it pays has
-    to be what it was worth while you still had it to do.
+    Each step pays its XP rate for every minute of its padded estimate (see
+    `logic.task_xp`), with the speed bonus when this finish was timed.
 
-    Only leaves pay. A container's score is borrowed from the steps beneath it
-    (see `logic._rollup_score`), so paying for both would pay twice for one
-    afternoon's work; completing a parent finishes those steps, and they are
-    what pays. A task that has already been paid for never pays again, however
+    Only leaves pay. A container's minutes are the steps beneath it, so paying
+    for both would pay twice for one afternoon's work; completing a parent
+    finishes those steps, and they are what pays. A task that has already been paid for never pays again, however
     often it is reopened and finished — the XP you earned stays earned, and
     nothing is farmable by ticking the same box twice.
     """
@@ -428,7 +426,13 @@ def finish(task_id: str, fields: dict | None = None) -> int:
         d = derived.get(tid)
         if d is None or d["has_subtasks"]:
             continue                      # a container pays through its steps
-        awards.append((tid, logic.task_xp(d["score"])))
+        # The time this finish reports belongs to the task it was reported
+        # for, never to the steps it closes along the way.
+        actual = (fields or {}).get("actual_time") if tid == task_id else None
+        awards.append((tid, logic.task_xp(row["impact"], row["effort"],
+                                          row["estimated_time"], d["length_min"],
+                                          actual if actual is not None
+                                          else row["actual_time"])))
 
     db.update_task(task_id, {**(fields or {}), "status": "done"})
     for tid in db.descendant_ids(task_id):

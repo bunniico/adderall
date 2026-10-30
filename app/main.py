@@ -83,6 +83,25 @@ app = FastAPI(title="Adderall", docs_url="/api/docs", openapi_url="/api/openapi.
 db.init()
 
 
+def _rescore_xp() -> None:
+    """Re-pay every finished task under the current XP formula, once.
+
+    Runs only when the database was paid under an older formula, and marks
+    it current afterwards, so XP paid from here on is never re-scored again.
+    """
+    if db.xp_formula() >= logic.XP_FORMULA:
+        return
+    buf = logic.effective_buffer(db.get_settings(), db.completion_ratios())
+    db.rescore_xp(
+        lambda r: logic.task_xp(r["impact"], r["effort"], r["estimated_time"],
+                                logic.buffered_estimate(r["estimated_time"], buf),
+                                r["actual_time"]),
+        logic.XP_FORMULA)
+
+
+_rescore_xp()
+
+
 # ---------- request bodies ----------
 
 class TaskCreate(BaseModel):

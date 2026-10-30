@@ -27,4 +27,4 @@ A task nobody has estimated or rated sits at neutral, never at zero.
 
 **The score is shown on the task** so the order of your list is something you can check rather than something you have to take on trust.
 
-Re-rating a container changes nothing, because the work is in the steps. The score also decides who gets a crowded day when the app [plans your days](17-planning-your-days.md), and it is what a finished task pays out as [XP](15-xp-and-levels.md).
+Re-rating a container changes nothing, because the work is in the steps. The score also decides who gets a crowded day when the app [plans your days](17-planning-your-days.md). It does not decide what a task pays: [XP](15-xp-and-levels.md) is paid by the minute.

@@ -976,34 +976,82 @@ def priority_score(impact: int | None, effort: int | None, urgency_value: float,
 # ---------------------------------------------------------------------------
 # XP: what finishing something is worth
 # ---------------------------------------------------------------------------
-# The score already says what a task deserves, so it is also what the task
-# pays. One number, not two: nothing extra to learn, and nothing to farm —
-# the only way to earn more is to do the work that was worth more. Finishing
-# a hard, urgent, important thing lands a bigger number than clearing three
-# more trivia off the list, which is the whole point.
+# XP is paid by the minute. A task earns a rate, set by how much it matters
+# and how hard it is to face, for every minute of its padded estimate. So the
+# number that tells you how well an hour went is XP per minute, and the way to
+# raise it is to spend the hour on work that matters.
 #
+# Paying by the minute is what stops the old leaks. A flat payout per task
+# made a five-minute email worth twenty times a two-hour report per minute,
+# and splitting one job into ten steps paid ten times over. Minutes add up the
+# same however the work is cut. Urgency stays out of the pay on purpose: it is
+# how the list is ranked, but paying for it would pay you to let things slide
+# until they were overdue.
+#
+# Impact counts twice what effort does, the same balance the score keeps.
+# Effort counts *for* you here, where it counts against a task in the ranking:
+# the list puts easy wins first to get you moving, and the pay makes up for
+# the dreaded ones.
+XP_RATE_BASE = 0.25     # XP a minute for work that matters not at all
+XP_RATE_IMPACT = 0.10   # per point of impact
+XP_RATE_EFFORT = 0.05   # per point of effort
+# Timed and finished inside the padded estimate earns up to this much extra,
+# all of it once you are inside your own raw guess. Capped so that it rewards
+# a task going to plan, not a race; running over costs nothing.
+XP_SPEED_BONUS = 0.20
+# Bumped whenever the payout formula changes, so a database paid under an
+# older one is re-scored once on startup.
+XP_FORMULA = 2
+
 # Levels sit steadily further apart — 100 XP to reach level 2, another 200 to
 # reach 3, another 300 to reach 4 — so the bar never stops moving, but the
 # first few come fast enough to be worth having at all.
 XP_PER_LEVEL = 100
 
 
-def task_xp(score: float) -> int:
-    """What one finished task pays out: its score, rounded.
+def xp_rate(impact: int | None, effort: int | None) -> float:
+    """XP a minute: 0.25 for work of no impact and no effort, 1.75 at the
+    top of both, and 1.0 for a task nobody has rated."""
+    imp = NEUTRAL_SCORE if impact is None else max(0, min(10, impact))
+    eff = NEUTRAL_SCORE if effort is None else max(0, min(10, effort))
+    return XP_RATE_BASE + XP_RATE_IMPACT * imp + XP_RATE_EFFORT * eff
 
-    Never nothing. A task with no impact, no deadline and no estimate still
-    scores something, and a payout of zero would read as "that didn't count"
-    for work that was, in fact, done.
+
+def speed_bonus(raw_min: int | None, padded_min: int, actual_min: int | None) -> float:
+    """0 to 1: how far a timed task came in under its padded estimate.
+
+    Nothing at the padded estimate or over it, everything at the raw guess or
+    under it, and a straight line between. No estimate or no timing means
+    nothing to beat.
     """
-    return max(1, int(round(score)))
+    if not raw_min or actual_min is None:
+        return 0.0
+    if padded_min <= raw_min:
+        return 1.0 if actual_min <= raw_min else 0.0
+    return max(0.0, min(1.0, (padded_min - actual_min) / (padded_min - raw_min)))
 
 
-def average_hourly_xp(pairs: list[dict], buf: float) -> float | None:
-    """XP earned per hour of buffered estimate, across every task that ever
+def task_xp(impact: int | None, effort: int | None, raw_min: int | None,
+            padded_min: int | None, actual_min: int | None = None) -> int:
+    """What one finished task pays out: its rate for every padded minute,
+    plus the speed bonus when it was timed.
+
+    `padded_min` is the buffered estimate, or the app's default length for a
+    task nobody estimated. Never nothing: a payout of zero would read as
+    "that didn't count" for work that was, in fact, done.
+    """
+    minutes = padded_min if padded_min and padded_min > 0 else DEFAULT_ESTIMATE_MIN
+    base = xp_rate(impact, effort) * minutes
+    bonus = base * XP_SPEED_BONUS * speed_bonus(raw_min, minutes, actual_min)
+    return max(1, int(round(base + bonus)))
+
+
+def average_xp_per_minute(pairs: list[dict], buf: float) -> float | None:
+    """XP earned per minute of buffered estimate, across every task that ever
     paid out XP and carried an estimate. None with nothing to divide by."""
     total_xp = sum(p["xp"] for p in pairs)
     total_minutes = sum(buffered_estimate(p["estimated_time"], buf) for p in pairs)
-    return (total_xp / (total_minutes / 60)) if total_minutes else None
+    return (total_xp / total_minutes) if total_minutes else None
 
 
 # How far back "per day" looks. A window rather than all of it, because the
@@ -1494,6 +1542,12 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
         # have this replaced outright by the pass below.
         d["score"] = priority_score(t["impact"], t["effort"], d["urgency"],
                                     d["length_min"])
+        # What finishing it would pay, before any speed bonus. A container
+        # pays through its steps, so it has no figure of its own.
+        d["xp_rate"] = round(xp_rate(t["impact"], t["effort"]), 2)
+        d["xp_value"] = (None if d["has_subtasks"] else
+                         task_xp(t["impact"], t["effort"], t["estimated_time"],
+                                 d["length_min"]))
 
     # A parent is its parts. Bottom-up, so a container at any depth ends up
     # holding the combined score of the work underneath it.
