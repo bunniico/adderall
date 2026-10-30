@@ -2,6 +2,8 @@
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from app import logic
 
 NOW = datetime(2026, 8, 29, 12, 0, tzinfo=timezone.utc)
@@ -1224,11 +1226,61 @@ def test_unknown_timezone_falls_back_to_utc():
 
 # ---- XP and levels ----
 
-def test_task_xp_is_the_score_rounded():
-    assert logic.task_xp(62.4) == 62
-    assert logic.task_xp(62.6) == 63
-    assert logic.task_xp(0.0) == 1      # doing something always counts for something
-    assert logic.task_xp(100.0) == 100
+def test_xp_rate_runs_from_a_quarter_to_one_and_three_quarters():
+    assert logic.xp_rate(0, 0) == 0.25
+    assert logic.xp_rate(10, 10) == 1.75
+    assert logic.xp_rate(None, None) == 1.0     # unrated sits at neutral
+    assert logic.xp_rate(5, 5) == 1.0
+    # Impact counts twice what effort does, and both are clamped to 0-10.
+    assert logic.xp_rate(6, 5) - logic.xp_rate(5, 5) == pytest.approx(0.10)
+    assert logic.xp_rate(5, 6) - logic.xp_rate(5, 5) == pytest.approx(0.05)
+    assert logic.xp_rate(99, -3) == logic.xp_rate(10, 0)
+
+
+def test_task_xp_pays_the_rate_for_every_padded_minute():
+    # 1.0 XP a minute for 78 padded minutes.
+    assert logic.task_xp(5, 5, 60, 78) == 78
+    # 1.75 XP a minute for 40 minutes.
+    assert logic.task_xp(10, 10, 30, 40) == 70
+    # A task nobody estimated counts as the app's default length.
+    assert logic.task_xp(5, 5, None, None) == logic.DEFAULT_ESTIMATE_MIN
+    # Never nothing: doing something always counts for something.
+    assert logic.task_xp(0, 0, 1, 1) == 1
+
+
+def test_task_xp_is_not_inflated_by_splitting_a_task_into_steps():
+    whole = logic.task_xp(9, 8, 120, 156)
+    steps = sum(logic.task_xp(9, 8, 12, 16) for _ in range(10))
+    assert abs(steps - whole) <= 0.05 * whole
+
+
+def test_task_xp_pays_more_per_minute_for_work_that_matters():
+    """The bug this replaced: a five-minute trivial task out-earned a
+    two-hour important one per minute, by a factor of twenty."""
+    trivial = logic.task_xp(3, 2, 5, 7) / 7
+    important = logic.task_xp(9, 8, 120, 156) / 156
+    assert important > trivial
+
+
+def test_speed_bonus_runs_from_the_padded_estimate_down_to_the_raw_one():
+    assert logic.speed_bonus(60, 78, 78) == 0.0      # took the padded time
+    assert logic.speed_bonus(60, 78, 120) == 0.0     # running over costs nothing
+    assert logic.speed_bonus(60, 78, 69) == 0.5      # halfway in between
+    assert logic.speed_bonus(60, 78, 60) == 1.0      # inside your own guess
+    assert logic.speed_bonus(60, 78, 5) == 1.0       # capped: no prize for racing
+    # Nothing to beat without an estimate, nothing to measure without a timer.
+    assert logic.speed_bonus(None, 30, 10) == 0.0
+    assert logic.speed_bonus(60, 78, None) == 0.0
+    # No time tax at all: inside the estimate or not.
+    assert logic.speed_bonus(60, 60, 60) == 1.0
+    assert logic.speed_bonus(60, 60, 61) == 0.0
+
+
+def test_task_xp_adds_at_most_a_fifth_for_coming_in_under():
+    assert logic.task_xp(5, 5, 60, 78, actual_min=78) == 78
+    assert logic.task_xp(5, 5, 60, 78, actual_min=60) == round(78 * 1.2)
+    assert logic.task_xp(5, 5, 60, 78, actual_min=1) == round(78 * 1.2)
+    assert logic.task_xp(5, 5, 60, 78, actual_min=500) == 78
 
 
 def test_level_thresholds_get_steadily_further_apart():
@@ -1265,15 +1317,15 @@ def test_level_progress_never_goes_backwards_or_negative():
     assert levels == sorted(levels)
 
 
-def test_average_hourly_xp_divides_total_xp_by_buffered_hours():
-    # 60 buffered minutes (30 * 1.0 buffer) + 120 buffered minutes = 3 hours,
-    # for 90 XP total: 30 XP/hr.
+def test_average_xp_per_minute_divides_total_xp_by_buffered_minutes():
+    # 60 buffered minutes (30 * 1.0 buffer) + 120 buffered minutes = 180,
+    # for 90 XP total: half an XP a minute.
     pairs = [{"xp": 30, "estimated_time": 30}, {"xp": 60, "estimated_time": 60}]
-    assert logic.average_hourly_xp(pairs, buf=1.0) == 30.0
+    assert logic.average_xp_per_minute(pairs, buf=1.0) == 0.5
 
 
-def test_average_hourly_xp_is_none_with_nothing_to_divide_by():
-    assert logic.average_hourly_xp([], buf=0.3) is None
+def test_average_xp_per_minute_is_none_with_nothing_to_divide_by():
+    assert logic.average_xp_per_minute([], buf=0.3) is None
 
 
 def test_average_daily_xp_spreads_the_window_over_every_day_in_it():
