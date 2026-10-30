@@ -4,7 +4,7 @@ Three staged cues before a task's deadline or its planned slot.
 
 ## How it works
 
-Turn on *Transition alarms* in ⚙ Settings and set how many minutes before each cue fires:
+They are on unless you turn off the *Transition alarms* [module](27-modules.md). In ⚙ Settings → **⏰ Transition alarms**, set how many minutes before each cue fires:
 
 1. **Stop**: stop what you are doing.
 2. **Ready**: get ready.

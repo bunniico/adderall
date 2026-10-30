@@ -14,6 +14,8 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
+from . import modules
+
 DB_PATH = os.environ.get("ADDERALL_DB", os.path.join("data", "adderall.db"))
 
 DEFAULT_SETTINGS = {
@@ -47,7 +49,6 @@ DEFAULT_SETTINGS = {
     "title_parsing_ai": True,  # when the title's phrasing is too loose for
                                # the built-in parser, let the AI take a pass
     "alarms": {
-        "enabled": True,
         "stop_lead": 30,       # minutes before deadline: "stop current activity"
         "ready_lead": 10,      # minutes before deadline: "get ready"
         "go_lead": 0,          # minutes before deadline: "time to start/leave"
@@ -57,7 +58,6 @@ DEFAULT_SETTINGS = {
     "timer_style": "both",     # analog | block | both
     "week_start": 0,           # calendar week starts on 0=Sunday, 1=Monday
     "granularity": 3,          # default breakdown spiciness 1-5
-    "gamification": True,
     "manual_order": False,     # you arrange the list yourself (set by dragging)
     "sort_field": "smart",     # how the list is read: smart | manual | score |
                                # deadline | subtasks | created
@@ -88,6 +88,7 @@ DEFAULT_SETTINGS = {
     "clickup_last_sync_at": "", # ISO instant of the last successful sync
     "clickup_webhooks": [],    # URLs a new ClickUp assignment is POSTed to,
                                # Discord-style: {"content": "..."}
+    "modules": dict(modules.DEFAULTS),  # which modules are on; see modules.py
     "models": {
         "fast": "claude-haiku-4-5",    # estimates, impact/effort scoring
         "balanced": "claude-sonnet-5", # interactive task breakdown
@@ -358,6 +359,17 @@ def _migrate(conn: sqlite3.Connection) -> None:
         # exactly right: the first replan after an upgrade fills them in.
         conn.execute("ALTER TABLE tasks ADD COLUMN planned_at TEXT")
         conn.execute("ALTER TABLE tasks ADD COLUMN planned_blocks TEXT")
+    if conn.execute("SELECT 1 FROM settings WHERE k = 'modules'").fetchone() is None:
+        # XP and alarms had switches of their own before there were modules
+        # (`gamification` and `alarms.enabled`), so a database from then keeps
+        # whichever way they were set. Everything else starts on.
+        old = {r["k"]: json.loads(r["v"]) for r in conn.execute(
+            "SELECT k, v FROM settings WHERE k IN ('gamification', 'alarms')")}
+        seeded = {**modules.DEFAULTS,
+                  "xp": bool(old.get("gamification", True)),
+                  "alarms": bool((old.get("alarms") or {}).get("enabled", True))}
+        conn.execute("INSERT INTO settings (k, v) VALUES ('modules', ?)",
+                     (json.dumps(seeded),))
     row = conn.execute(
         "SELECT id FROM projects ORDER BY order_index, created_at LIMIT 1"
     ).fetchone()
@@ -1213,7 +1225,10 @@ def queue_remove(qid: str) -> None:
 PLANNING_SETTINGS = {"day_start", "day_end", "day_capacity", "adaptive_capacity",
                      "working_days",
                      "buffer", "adaptive_buffer", "auto_deadlines", "spread_tasks",
-                     "timezone", "matrix_threshold", "missed_grace_hours"}
+                     "timezone", "matrix_threshold", "missed_grace_hours",
+                     # Turning repeating tasks on or off adds or removes their
+                     # forecast from the day book.
+                     "modules"}
 
 
 def update_settings(changes: dict) -> dict:

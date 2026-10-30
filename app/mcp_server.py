@@ -18,7 +18,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import ValidationError
 
-from . import events
+from . import events, modules
 
 INSTRUCTIONS = """\
 adderall is a single-user task manager for people with executive dysfunction.
@@ -40,8 +40,16 @@ async def _call(fn, *args):
         raise ToolError(str(e)) from None
 
 
+async def _require(module_id: str) -> None:
+    """Tools call route functions directly, past the 404 a module's router
+    gives while it is off, so the ones that belong to a module ask here."""
+    if not await asyncio.to_thread(modules.enabled, module_id):
+        raise ToolError(modules.off_message(module_id))
+
+
 def build() -> MCPServer:
-    from . import main  # the routes; imported here because main imports us
+    from . import core, main  # imported here because main imports us
+    from .routes import braindump, habits
 
     server = MCPServer("adderall", instructions=INSTRUCTIONS)
 
@@ -55,7 +63,7 @@ def build() -> MCPServer:
     async def list_tasks(project_id: str | None = None) -> list[dict]:
         """The task tree of one project, derived deadline and priority
         included. Defaults to the project open in the app."""
-        state = await _call(main._state, project_id)
+        state = await _call(core.state, project_id)
         return state["tasks"]
 
     @server.tool()
@@ -102,24 +110,28 @@ def build() -> MCPServer:
     @server.tool()
     async def compile_braindump(text: str) -> list[dict]:
         """Turn free text into a tree of tasks in the open project (uses AI)."""
-        return (await _call(lambda: main.compile_braindump(
-            main.CompileRequest(text=text))))["tasks"]
+        await _require("braindump")
+        return (await _call(lambda: braindump.compile_braindump(
+            braindump.CompileRequest(text=text))))["tasks"]
 
     @server.tool()
     async def list_habits() -> dict:
         """Routines, their streaks, and which days they were done."""
-        return await _call(main.get_habits)
+        await _require("habits")
+        return await _call(habits.get_habits)
 
     @server.tool()
     async def check_habit(habit_id: str, done: bool = True,
                           day: str | None = None) -> dict:
         """Mark a habit done (or not) for `day` (YYYY-MM-DD, default today)."""
-        return await _call(lambda: main.check_habit(
-            habit_id, main.HabitCheck(done=done, day=day)))
+        await _require("habits")
+        return await _call(lambda: habits.check_habit(
+            habit_id, habits.HabitCheck(done=done, day=day)))
 
     @server.tool()
     async def recent_alarms(limit: int = 20) -> list[dict]:
         """The latest transition alarms the app raised, newest last."""
+        await _require("alarms")
         return list(events.recent)[-limit:]
 
     return server

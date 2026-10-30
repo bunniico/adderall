@@ -27,7 +27,7 @@ The side rail shows two averages:
 - **Average XP / minute**, across every estimated task that has ever paid out. This is the number to raise: it goes up when you spend your time on work that matters and when tasks go to plan.
 - **Average daily XP** over the last 30 days, counting quiet days. The Overview repeats this one as a tile.
 
-The Done list keeps what each task paid. The whole thing, confetti included, is one switch in ⚙ Settings: *Gamification*.
+The Done list keeps what each task paid. The whole thing, confetti included, is one switch: the *XP and levels* [module](27-modules.md) in ⚙ Settings.
 
 ## Why it works this way
 
@@ -41,7 +41,7 @@ The Done list keeps what each task paid. The whole thing, confetti included, is 
 
 **The speed bonus is small and capped** so it rewards a task going to plan, not rushing. It is paid on the estimate, never on the time you took, so working slowly is not rewarded and being slow is not punished.
 
-**XP already earned stays earned.** A task that has paid once never pays again, however often it is reopened, and deleting it later costs you nothing.
+**XP already earned stays earned.** A task that has paid once never pays again, however often it is reopened, and deleting it later costs you nothing. Losing points for tidying up your list would punish exactly the wrong thing.
 
 **Containers pay through their steps**, never twice for the same afternoon's work.
 

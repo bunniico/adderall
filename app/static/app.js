@@ -11,6 +11,12 @@ let state = { tasks: [], next_task_id: null, projects: [], active_project_id: nu
               all_tasks: false, overview: false, habits: false,
               alarm_tasks: [], xp: null };
 let settings = null;
+
+/* Is this module on? See app/modules.py. Everything counts as on until the
+ * settings have loaded, which is also how the server defaults them. */
+function mod(id) {
+  return settings?.modules?.[id] !== false;
+}
 let detailTaskId = null;
 let renamingProject = null;   // project whose tab is currently an input box
 let renameFocusPending = false;
@@ -140,8 +146,8 @@ function renderTabs() {
   const strip = $("tab-strip");
   strip.replaceChildren();
   const projects = state.projects || [];
-  strip.appendChild(overviewTab());
-  strip.appendChild(habitsTab());
+  if (mod("overview")) strip.appendChild(overviewTab());
+  if (mod("habits")) strip.appendChild(habitsTab());
   // A second list is what makes "all of them" a thing worth asking for.
   if (projects.length > 1) strip.appendChild(allTab(projects));
   for (const project of projects) {
@@ -922,19 +928,23 @@ function taskNode(task, isSub) {
     addSub.addEventListener("click", () => openSubtaskComposer(task.id));
     row.appendChild(addSub);
 
-    const bd = document.createElement("button");
-    bd.className = "task-btn ghost";
-    bd.textContent = "⚡";
-    bd.title = "Break down into subtasks";
-    bd.addEventListener("click", () => breakdown(task.id, bd));
-    row.appendChild(bd);
+    if (mod("magic_todo")) {
+      const bd = document.createElement("button");
+      bd.className = "task-btn ghost";
+      bd.textContent = "⚡";
+      bd.title = "Break down into subtasks";
+      bd.addEventListener("click", () => breakdown(task.id, bd));
+      row.appendChild(bd);
+    }
 
-    const focus = document.createElement("button");
-    focus.className = "task-btn ghost";
-    focus.textContent = "▶";
-    focus.title = "Focus on this now";
-    focus.addEventListener("click", () => startFocus(task.id));
-    row.appendChild(focus);
+    if (mod("focus")) {
+      const focus = document.createElement("button");
+      focus.className = "task-btn ghost";
+      focus.textContent = "▶";
+      focus.title = "Focus on this now";
+      focus.addEventListener("click", () => startFocus(task.id));
+      row.appendChild(focus);
+    }
   }
 
   // Last in the row, past everything you press all day: the one control here
@@ -958,7 +968,7 @@ function taskNode(task, isSub) {
     // hiding that without a word is how a good list quietly stops working.
     if (collapsed && holdsNextTask(task)) add("next up inside", "next-badge");
     // The score, out in the open. It is the number the calendar sorts by, the
-    // number "next up" is picked with, and — when gamification is on — the
+    // number "next up" is picked with, and — when the XP module is on — the
     // number finishing the task pays you, so it belongs on the task itself
     // rather than buried in a dialog.
     if (task.score != null) {
@@ -1007,13 +1017,13 @@ function taskNode(task, isSub) {
     // The progress bar stays out in the open when a task is folded: a rolled
     // up "40m left · 60%" is the whole point of hiding the steps.
     if (task.has_subtasks) el.appendChild(progressBar(task));
-  } else if ((task.xp_awarded && settings?.gamification) || task.recurrence) {
+  } else if ((task.xp_awarded && mod("xp")) || task.recurrence) {
     // What it paid, kept next to it. The Done list is the only place the
     // XP total can be traced back to the work that earned it — and the one
     // place you can see a repeating job's history as a run of finished copies.
     const badges = document.createElement("div");
     badges.className = "task-badges";
-    if (task.xp_awarded && settings?.gamification) {
+    if (task.xp_awarded && mod("xp")) {
       const b = document.createElement("span");
       b.className = "badge xp-badge";
       b.textContent = `+${task.xp_awarded} XP`;
@@ -1070,7 +1080,7 @@ function scoreTitle(task) {
     ? `Score ${score}/100, rolled up from the steps still left inside it`
     : `Score ${score}/100 — deadline pressure, impact, and how cheap it is ` +
       `in both effort and time, in one number`;
-  if (!settings?.gamification) return how + ".";
+  if (!mod("xp")) return how + ".";
   return how + (task.has_subtasks || task.xp_value == null
     ? ". Each of those steps pays its own XP when you finish it."
     : `. Finishing it earns ${task.xp_value} XP: ${task.xp_rate} XP a minute ` +
@@ -1231,7 +1241,7 @@ function renderRail() {
   $("rail-streak-fill").style.width = (total ? (done / total) * 100 : 0) + "%";
 
   const xp = state.xp;
-  const on = !!(xp && settings?.gamification);
+  const on = !!(xp && mod("xp"));
   $("rail-goal-label").textContent = on ? `Level ${xp.level}` : "Level";
   $("rail-goal").textContent = on ? `${xp.into_level} / ${xp.level_span}` : "off";
   $("rail-goal-fill").style.width = (on ? xp.progress * 100 : 0) + "%";
@@ -1392,7 +1402,7 @@ function wireConnectionBanner() {
 }
 
 function celebrate() {
-  if (!settings?.gamification) return;
+  if (!mod("xp")) return;
   const box = $("celebration");
   box.hidden = false;
   // The theme's own colours, so the celebration belongs to the app rather
@@ -1462,7 +1472,7 @@ function xpFillDuration(fraction) {
 function renderXp() {
   const meter = $("xp-meter");
   const xp = state.xp;
-  if (!xp || !settings?.gamification) {
+  if (!xp || !mod("xp")) {
     meter.hidden = true;
     // Remembered even while hidden, so turning the setting back on shows the
     // bar where it belongs instead of replaying an animation you missed.
@@ -1896,7 +1906,7 @@ function openDetail(id) {
     : "Scheduled as part of the task above it.";
   // Only a top-level task repeats: a step that came back on its own schedule
   // while the thing containing it did not would be a plan nobody could read.
-  $("d-repeat-block").hidden = isStep;
+  $("d-repeat-block").hidden = isStep || !mod("recurring");
   loadRepeat(task);
   // Preserve-for-repeat only means anything for a step under a task whose
   // tree actually repeats.
@@ -2541,6 +2551,7 @@ async function reportTimezone() {
 }
 
 function openSettings() {
+  renderModuleSwitches();
   $("s-auto-deadlines").checked = settings.auto_deadlines;
   $("s-buffer").value = Math.round(settings.buffer * 100);
   $("s-buffer-val").textContent = Math.round(settings.buffer * 100) + "%";
@@ -2564,7 +2575,6 @@ function openSettings() {
   $("s-ai-start-times").checked = settings.ai_start_times;
   $("s-title-parsing").checked = settings.title_parsing !== false;
   $("s-title-parsing-ai").checked = settings.title_parsing_ai !== false;
-  $("s-alarms").checked = settings.alarms.enabled;
   $("s-stop-lead").value = settings.alarms.stop_lead;
   $("s-ready-lead").value = settings.alarms.ready_lead;
   $("s-go-lead").value = settings.alarms.go_lead;
@@ -2574,7 +2584,6 @@ function openSettings() {
   $("s-week-start").value = String(settings.week_start ?? 0);
   $("s-granularity").value = settings.granularity;
   $("s-granularity-val").textContent = settings.granularity;
-  $("s-gamification").checked = settings.gamification;
   $("s-sound").checked = soundOn;
   $("s-volume").value = Math.round(soundVolume * 100);
   $("s-volume-val").textContent = Math.round(soundVolume * 100) + "%";
@@ -2613,8 +2622,8 @@ async function saveSettings() {
     ai_start_times: $("s-ai-start-times").checked,
     title_parsing: $("s-title-parsing").checked,
     title_parsing_ai: $("s-title-parsing-ai").checked,
+    modules: readModuleSwitches(),
     alarms: {
-      enabled: $("s-alarms").checked,
       stop_lead: Number($("s-stop-lead").value),
       ready_lead: Number($("s-ready-lead").value),
       go_lead: Number($("s-go-lead").value),
@@ -2624,7 +2633,6 @@ async function saveSettings() {
     timer_style: $("s-timer-style").value,
     week_start: Number($("s-week-start").value),
     granularity: Number($("s-granularity").value),
-    gamification: $("s-gamification").checked,
     manual_order: $("s-manual-order").checked,
     daily_budget_usd: Math.max(0, Number($("s-budget").value) || 0),
     workspace_id: $("s-workspace-id").value.trim(),
@@ -2643,9 +2651,69 @@ async function saveSettings() {
     settings = await api("/settings", { method: "PUT", body: JSON.stringify(body) });
     $("modal-settings").close();
     $("add-granularity").value = settings.granularity;
+    applyModules();
     applyState(await api("/state"));
     toast("Settings saved ✓");
   } catch (e) { toast(e.message, true); }
+}
+
+/* Settings → Modules: one switch per module, under its group, in the order
+ * the server lists them (see modules.py). Ticking one shows or hides its own
+ * settings in this dialog straight away, so turning a module on is also how
+ * you get to set it up. */
+function renderModuleSwitches() {
+  // Back to what is saved, in case the dialog was last closed unsaved.
+  for (const el of $("modal-settings").querySelectorAll("[data-module]"))
+    el.hidden = !mod(el.dataset.module);
+  const box = $("s-modules");
+  box.replaceChildren();
+  const groups = new Map();
+  for (const m of settings.module_catalog || []) {
+    if (!groups.has(m.group)) {
+      const group = document.createElement("div");
+      group.className = "module-group";
+      const name = document.createElement("p");
+      name.className = "muted module-group-name";
+      name.textContent = m.group;
+      group.appendChild(name);
+      box.appendChild(group);
+      groups.set(m.group, group);
+    }
+    const label = document.createElement("label");
+    label.className = "row";
+    const tick = document.createElement("input");
+    tick.type = "checkbox";
+    tick.dataset.moduleId = m.id;
+    tick.checked = mod(m.id);
+    tick.addEventListener("change", () => {
+      for (const el of $("modal-settings").querySelectorAll(`[data-module="${m.id}"]`))
+        el.hidden = !tick.checked;
+    });
+    const desc = document.createElement("span");
+    desc.className = "muted";
+    desc.textContent = "— " + m.description;
+    label.append(tick, m.name + " ", desc);
+    groups.get(m.group).appendChild(label);
+  }
+}
+
+function readModuleSwitches() {
+  const out = {};
+  for (const tick of $("s-modules").querySelectorAll("input[data-module-id]"))
+    out[tick.dataset.moduleId] = tick.checked;
+  return out;
+}
+
+/* Show or hide everything that belongs to a module, and put away whatever a
+ * module that has just been turned off was in the middle of. */
+function applyModules() {
+  for (const el of document.querySelectorAll("[data-module]"))
+    el.hidden = !mod(el.dataset.module);
+  if (!mod("calendar") && cal.mode) setCalendarMode(false);
+  if (!mod("help") && help.open) setHelpMode(false);
+  if (!mod("focus") && focus.active) endFocus();
+  applySoundPrefs();
+  listenForAlarms();
 }
 
 /* One-way import of tasks assigned to you in ClickUp — see clickup.py. */
@@ -2695,7 +2763,7 @@ function loadSoundPrefs() {
 }
 
 function applySoundPrefs() {
-  Motion.setEnabled(soundOn);
+  Motion.setEnabled(soundOn && mod("sounds"));
   Motion.setVolume(soundVolume);
 }
 
@@ -2800,7 +2868,7 @@ function beepPattern(freqs, dur = 0.18, gap = 0.12) {
  * chosen sound that means "a deadline moved" beats three that are the same
  * sound and therefore mean nothing. */
 const alarmCue = (pattern) => () => {
-  if (!soundOn) return;
+  if (!soundOn || !mod("sounds")) return;
   if (Motion.customName("alarm")) Motion.play("alarm");
   else pattern();
 };
@@ -2848,7 +2916,19 @@ function notify(text) {
   if (Notification.permission === "granted") new Notification("adderall", { body: text });
 }
 
-new EventSource("/api/events").addEventListener("alarm", onAlarm);
+/* The stream is the alarms module's own route, so it is open only while the
+ * module is on. */
+let alarmStream = null;
+
+function listenForAlarms() {
+  if (mod("alarms") && !alarmStream) {
+    alarmStream = new EventSource("/api/events");
+    alarmStream.addEventListener("alarm", onAlarm);
+  } else if (!mod("alarms") && alarmStream) {
+    alarmStream.close();
+    alarmStream = null;
+  }
+}
 
 /* ---------------- Taskmaster focus mode ----------------
  * A focus session outlives the overlay. Closing the overlay only minimizes
@@ -3221,8 +3301,8 @@ function drawDial(frac, remainingSec, overTime) {
 
 /* Staged cues inside a focus session: wrap-up near the end, then time-up. */
 function fireFocusCues() {
+  if (!mod("alarms")) return;
   const alarms = settings?.alarms || {};
-  if (alarms.enabled === false) return;
   const remainingMin = focusRemainingSec() / 60;
   const cues = [
     { key: "wrap", at: Math.min(alarms.stop_lead ?? 30, focus.totalSec / 60 * 0.2),
@@ -3473,12 +3553,16 @@ async function boot() {
     $("add-granularity").value = settings.granularity;
     applyState(await api("/state"));
     // wireCalendar() has already read back which view you were last in.
-    if (cal.mode) setCalendarMode(true);
-    if (!settings.has_api_key)
+    if (cal.mode && mod("calendar")) setCalendarMode(true);
+    const aiOn = ["magic_todo", "braindump", "ai_estimates"].some(mod);
+    if (!settings.has_api_key && aiOn)
       toast("No Anthropic API key set — AI features are off. Add one in ⚙ Settings.");
   } catch (e) {
     toast("Could not load tasks: " + e.message, true);
   }
+  // Outside the try: with no settings every module counts as on, which is
+  // what keeps the alarm stream listening while the server is down.
+  applyModules();
 }
 
 boot();

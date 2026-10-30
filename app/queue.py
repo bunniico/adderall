@@ -24,7 +24,7 @@ import logging
 import os
 from typing import Callable
 
-from . import db
+from . import db, modules
 
 log = logging.getLogger(__name__)
 
@@ -38,13 +38,19 @@ class NetworkRetry(Exception):
     item for good — it is logged and dropped rather than retried forever."""
 
 
-# kind -> callable(payload: dict). Registered by main.py at import time, once
-# the route handlers whose work each one mirrors already exist.
+# kind -> callable(payload: dict). Registered at import time by the module
+# routes in `routes/`, beside the route handlers whose work each one mirrors.
 _HANDLERS: dict[str, Callable[[dict], None]] = {}
+# kind -> the module that owns it. Its items wait in the queue while that
+# module is off, rather than being run or dropped.
+_MODULES: dict[str, str] = {}
 
 
-def register(kind: str, handler: Callable[[dict], None]) -> None:
+def register(kind: str, handler: Callable[[dict], None],
+             module: str | None = None) -> None:
     _HANDLERS[kind] = handler
+    if module:
+        _MODULES[kind] = module
 
 
 def enqueue(kind: str, payload: dict) -> dict:
@@ -75,6 +81,9 @@ def _process_one(row: dict) -> None:
                    row["kind"], row["id"])
         db.queue_remove(row["id"])
         return
+    module = _MODULES.get(row["kind"])
+    if module and not modules.enabled(module):
+        return  # kept for when the module is back on
     try:
         handler(row["payload"])
     except NetworkRetry as exc:

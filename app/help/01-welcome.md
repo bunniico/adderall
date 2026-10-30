@@ -9,7 +9,7 @@ Everything happens on one page. Your tasks sit in a list, one list per [project 
 - **📅 Calendar** swaps the list for a [dated view](06-calendar.md) of every project.
 - **🧠 Braindump** turns a messy paragraph into [tasks](09-braindump.md).
 - **▶ Focus** shows you [one task at a time](20-focus-mode.md) with a visual timer.
-- **⚙** opens Settings.
+- **⚙** opens Settings, including which [modules](27-modules.md) are on.
 - **❓** opens this Help area.
 
 Type a task into the box at the top and press Enter. The app estimates how long it takes, scores it for impact and effort, and gives it a deadline and a start time if you want it to. You can override any of it.

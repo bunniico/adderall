@@ -227,6 +227,16 @@ Nothing here asks who is calling, the same as the rest of the API. The MCP
 server only answers requests addressed to `localhost`, but the event stream
 and the API answer anyone who can reach the port.
 
+### Turning parts of it off
+
+Everything beyond the task list itself (ClickUp sync, the MCP server, the AI
+features, the Calendar, Overview, Habits and Help views, repeating tasks,
+focus mode, transition alarms, XP and sounds) is a module, and each one can be
+switched off in ⚙ Settings → **🧩 Modules**. Off means off: its buttons and
+settings leave the page, its API routes answer 404, and its background job
+stops. Its data stays in the database for when you turn it back on. See
+[Modules](app/help/27-modules.md).
+
 ## What it does
 
 Each feature has its own article, explaining how it works and why it was
@@ -260,6 +270,7 @@ with the code.
 - [ClickUp sync](app/help/24-clickup-sync.md)
 - [When the connection drops](app/help/25-when-the-connection-drops.md)
 - [Other apps and AI agents](app/help/26-other-apps-and-agents.md)
+- [Modules](app/help/27-modules.md)
 
 To add or change one, edit the Markdown file. The number at the front of
 the filename sets its place in the list, the first `# ` line is its title,
@@ -366,6 +377,18 @@ so the tests own the clock;
 `tests/test_clickup.py` covers the ClickUp client against mocked HTTP (no
 network) and what a sync creates, updates and deliberately leaves alone.
 
+### Adding a module
+
+1. Add it to `MODULES` in `app/modules.py`. It is on by default, and it shows
+   up in ⚙ Settings → Modules with no front-end change.
+2. Put its routes in `app/routes/<name>.py` on a router built with
+   `dependencies=[Depends(modules.require("<id>"))]`, and add that router to
+   the list `main.py` includes.
+3. If it has a background job, have each pass check `modules.enabled("<id>")`
+   first; if it queues retries, pass `module="<id>"` to `queue.register`.
+4. Give its buttons and settings in `index.html` a `data-module="<id>"`
+   attribute, and guard anything drawn from JavaScript with `mod("<id>")`.
+
 ### The recurring-task sweep
 
 The scheduled job runs inside the app process: once at startup, then every
@@ -391,7 +414,13 @@ same pass and hands back the page.
 
 ```
 app/
-  main.py       FastAPI routes + static hosting
+  main.py       the FastAPI app: core routes (projects, tasks, planning,
+                settings), module routers, the MCP mount, static hosting
+  core.py       what the routes share: the page state and the plan behind it
+  modules.py    the module registry: what can be switched off, and the
+                checks routes and background jobs use to honour the switch
+  routes/       one router per module (calendar.py, habits.py, clickup.py,
+                …), each answering 404 while its module is off
   db.py         SQLite persistence (schema + migrations, settings, lifetime
                 XP, AI spend, project, task, series and habit CRUD)
   logic.py      deterministic scheduling core — no AI, no I/O
