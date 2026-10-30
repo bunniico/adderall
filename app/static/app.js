@@ -95,6 +95,14 @@ function flatten(tasks) {
   return out;
 }
 
+/* What finishing these tasks would pay: every open step not yet paid for.
+ * Containers carry no figure of their own and pay through their steps. */
+function xpToEarn(tasks) {
+  return flatten(tasks).reduce((sum, t) =>
+    sum + ((t.status === "todo" || t.status === "in_progress") &&
+           t.xp_awarded == null ? (t.xp_value || 0) : 0), 0);
+}
+
 function findTask(id, list = state.tasks) {
   for (const t of list) {
     if (t.id === id) return t;
@@ -967,12 +975,20 @@ function taskNode(task, isSub) {
     // Folded away, but the thing you were told to do next is in there:
     // hiding that without a word is how a good list quietly stops working.
     if (collapsed && holdsNextTask(task)) add("next up inside", "next-badge");
-    // The score, out in the open. It is the number the calendar sorts by, the
-    // number "next up" is picked with, and — when the XP module is on — the
-    // number finishing the task pays you, so it belongs on the task itself
+    // The score, out in the open. It is the number the calendar sorts by and
+    // the number "next up" is picked with, so it belongs on the task itself
     // rather than buried in a dialog.
     if (task.score != null) {
       add(`★ ${Math.round(task.score)}`, "score-badge").title = scoreTitle(task);
+    }
+    // And beside it, what finishing it pays: the score ranks, XP rewards, and
+    // the two are different numbers.
+    const xpAhead = mod("xp") ? xpToEarn([task]) : 0;
+    if (xpAhead) {
+      add(`${xpAhead} XP`, "score-badge xp-ahead").title = task.has_subtasks
+        ? `Finishing the steps still open inside it pays ${xpAhead} XP.`
+        : `Finishing it pays ${xpAhead} XP: ${task.xp_rate} XP a minute for ` +
+          `its padded estimate, up to 20% more if you time it and come in under.`;
     }
     // A task that contains subtasks is worth what it holds: the estimate is
     // the sum of everything underneath. The deadline is the container's own,
@@ -1260,11 +1276,7 @@ function renderRail() {
   const open = mine.filter((t) => t.status === "todo" || t.status === "in_progress");
   const timeLeft = open.reduce((sum, t) =>
     sum + (t.has_subtasks ? (t.rollup_remaining || 0) : (t.buffered_estimate || 0)), 0);
-  // What finishing all of it would pay: every open step not yet paid for.
-  // Containers carry no figure of their own and pay through their steps.
-  const xpLeft = flatten(open).reduce((sum, t) =>
-    sum + ((t.status === "todo" || t.status === "in_progress") &&
-           t.xp_awarded == null ? (t.xp_value || 0) : 0), 0);
+  const xpLeft = xpToEarn(open);
   $("rail-time-total").textContent = open.length ? fmtMinutes(timeLeft) : "—";
   $("rail-xp-left").textContent = !on ? "off" : open.length ? xpLeft : "—";
 }
