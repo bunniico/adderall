@@ -2668,3 +2668,68 @@ def test_help_links_between_articles_all_resolve(client):
     for a in articles:
         for target in re.findall(r"\]\(([^)\s]+)\.md\)", a["body"]):
             assert target in slugs, f"{a['slug']} links to missing {target}.md"
+
+
+# ---------- templates ----------
+
+def test_a_task_saved_as_a_template_comes_back_as_a_fresh_copy(client):
+    state = create(client, title="weekly review", description="the usual",
+                   estimated_time=20, deadline="2030-01-01T09:00:00+00:00")
+    root = find(state, "weekly review")
+    create(client, title="inbox zero", parent_id=root["id"])
+    state = create(client, title="plan next week", parent_id=root["id"])
+    step = find(state, "plan next week")
+    client.post(f"/api/tasks/{step['id']}/complete", json={})
+
+    res = client.post(f"/api/tasks/{root['id']}/template", json={"name": "Review"})
+    assert res.status_code == 201, res.text
+    assert [t["name"] for t in res.json()["templates"]] == ["Review"]
+    template_id = res.json()["templates"][0]["id"]
+
+    res = client.post(f"/api/templates/{template_id}/use")
+    assert res.status_code == 201, res.text
+    copies = [t for t in res.json()["tasks"] if t["title"] == "weekly review"]
+    assert len(copies) == 2
+    copy = next(t for t in copies if t["id"] != root["id"])
+    # What the job is comes along; when and whether it was done do not.
+    assert copy["description"] == "the usual"
+    assert copy["estimated_time"] == 20
+    assert copy["deadline_source"] != "user"
+    assert [s["title"] for s in copy["subtasks"]] == ["inbox zero", "plan next week"]
+    assert all(s["status"] == "todo" for s in copy["subtasks"])
+
+
+def test_a_template_outlives_the_task_it_was_made_from(client):
+    root = find(create(client, title="pack for a trip"), "pack for a trip")
+    client.post(f"/api/tasks/{root['id']}/template", json={"name": "Trip"})
+    client.delete(f"/api/tasks/{root['id']}")
+    template_id = client.get("/api/templates").json()["templates"][0]["id"]
+    state = client.post(f"/api/templates/{template_id}/use").json()
+    assert find(state, "pack for a trip")
+
+
+def test_a_template_lands_in_the_open_project(client):
+    root = find(create(client, title="standup"), "standup")
+    client.post(f"/api/tasks/{root['id']}/template", json={"name": "Standup"})
+    other = client.post("/api/projects", json={"name": "Work"}).json()
+    template_id = client.get("/api/templates").json()["templates"][0]["id"]
+    state = client.post(f"/api/templates/{template_id}/use").json()
+    assert state["active_project_id"] == other["active_project_id"]
+    assert [t["title"] for t in state["tasks"]] == ["standup"]
+
+
+def test_deleting_a_template_removes_it(client):
+    root = find(create(client, title="laundry"), "laundry")
+    client.post(f"/api/tasks/{root['id']}/template", json={"name": "Laundry"})
+    template_id = client.get("/api/templates").json()["templates"][0]["id"]
+    assert client.delete(f"/api/templates/{template_id}").json() == {"templates": []}
+    assert client.post(f"/api/templates/{template_id}/use").status_code == 404
+    assert client.delete(f"/api/templates/{template_id}").status_code == 404
+
+
+def test_a_template_needs_a_name_and_a_task(client):
+    root = find(create(client, title="x"), "x")
+    assert client.post(f"/api/tasks/{root['id']}/template",
+                       json={"name": "   "}).status_code == 400
+    assert client.post("/api/tasks/nope/template",
+                       json={"name": "x"}).status_code == 404

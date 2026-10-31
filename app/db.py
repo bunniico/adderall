@@ -234,6 +234,15 @@ CREATE TABLE IF NOT EXISTS habit_checkins (
     PRIMARY KEY (habit_id, day)
 );
 CREATE INDEX IF NOT EXISTS idx_checkins_day ON habit_checkins(day);
+-- Saved task templates: a named picture of a task and its steps, in the same
+-- shape a repeating job's `series.template` uses, planted as a fresh copy on
+-- demand. Not tied to any project or task, so deleting either leaves it be.
+CREATE TABLE IF NOT EXISTS templates (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    template   TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 -- Outbound calls (to Claude, to ClickUp) that failed because this machine
 -- itself had no route to the internet, not because the request was bad. Kept
 -- so a queued item survives a restart; queue.py retries each on a timer
@@ -1114,6 +1123,44 @@ def delete_habit(habit_id: str) -> bool:
     """Forget a routine, and by cascade every tick it ever collected."""
     with connect() as conn:
         cur = conn.execute("DELETE FROM habits WHERE id = ?", (habit_id,))
+        return cur.rowcount > 0
+
+
+def _row_to_template(row: sqlite3.Row) -> dict:
+    template = dict(row)
+    template["template"] = json.loads(template["template"])
+    return template
+
+
+def list_templates() -> list[dict]:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM templates ORDER BY name COLLATE NOCASE, created_at"
+        ).fetchall()
+    return [_row_to_template(r) for r in rows]
+
+
+def get_template(template_id: str) -> dict | None:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM templates WHERE id = ?", (template_id,)).fetchone()
+    return _row_to_template(row) if row else None
+
+
+def create_template(name: str, template: dict) -> dict:
+    template_id = new_id()
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO templates (id, name, template, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (template_id, name, json.dumps(template), now_iso()),
+        )
+    return get_template(template_id)
+
+
+def delete_template(template_id: str) -> bool:
+    with connect() as conn:
+        cur = conn.execute("DELETE FROM templates WHERE id = ?", (template_id,))
         return cur.rowcount > 0
 
 
