@@ -271,6 +271,7 @@ with the code.
 - [When the connection drops](app/help/25-when-the-connection-drops.md)
 - [Other apps and AI agents](app/help/26-other-apps-and-agents.md)
 - [Modules](app/help/27-modules.md)
+- [Templates](app/help/28-templates.md)
 
 To add or change one, edit the Markdown file. The number at the front of
 the filename sets its place in the list, the first `# ` line is its title,

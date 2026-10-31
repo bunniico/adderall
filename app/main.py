@@ -24,7 +24,7 @@ from starlette.routing import Route
 from . import (ai, clickup, core, db, events, logic, mcp_server, modules, queue,
                recurring, scheduler, title_parse)
 from .routes import (alarms, braindump, calendar, estimates, focus, habits, help,
-                     magic_todo, overview)
+                     magic_todo, overview, templates)
 from .routes import clickup as clickup_routes
 from .routes import recurring as recurring_routes
 
@@ -821,6 +821,9 @@ def put_settings(body: SettingsUpdate):
     db.update_settings(changes)
     return get_settings()
 
+
+# Templates are part of the task list itself, so they have no module switch.
+app.include_router(templates.router)
 
 # Each module's routes, every one of them answering 404 while its module is
 # off. See `modules.py`.

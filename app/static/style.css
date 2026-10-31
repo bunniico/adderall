@@ -396,6 +396,26 @@ textarea { resize: vertical; }
 #add-form input[type="text"] { flex: 1; min-width: 0; padding: 11px 13px; font-size: 13.5px; }
 #add-form button[type="submit"] { flex: none; padding: 11px 22px; font-size: 13.5px; }
 .granularity { display: flex; align-items: center; gap: 4px; width: 120px; flex: none; }
+#templates-btn { flex: none; padding: 11px 12px; font-size: 13.5px; white-space: nowrap; }
+
+/* ---- pop-up menu (a task's ☰, the templates list) ---- */
+.popmenu {
+  position: fixed; z-index: 50; min-width: 180px; max-width: min(320px, calc(100vw - 32px));
+  max-height: 60vh; overflow-y: auto;
+  display: flex; flex-direction: column; padding: 4px;
+  background: var(--panel); border: 1px solid var(--border-strong); border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .45);
+}
+.popmenu-row { display: flex; align-items: center; gap: 4px; }
+.popmenu button.popmenu-item {
+  flex: 1; min-width: 0; text-align: left; padding: 7px 10px; font-size: 13px;
+  background: transparent; border-color: transparent;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.popmenu button.popmenu-item:hover, .popmenu button.popmenu-item:focus-visible {
+  background: var(--panel-2); color: var(--text-bright);
+}
+.popmenu-empty { padding: 8px 10px; font-size: 12.5px; color: var(--muted); }
 
 /* ---- sort bar ---- */
 .list-toolbar {
@@ -1348,6 +1368,7 @@ body.calendar-mode #list-view { display: none; }
 @media (max-width: 560px) {
   .grid2, .grid3 { grid-template-columns: 1fr; }
   .granularity { display: none; }
+  .templates-label { display: none; }
   .focus-pill-title { display: none; }
   .focus-pill { max-width: 130px; }
   main { padding: 16px 12px 80px; }

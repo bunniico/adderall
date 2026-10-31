@@ -958,6 +958,7 @@ function taskNode(task, isSub) {
   // Last in the row, past everything you press all day: the one control here
   // that destroys work rather than doing it. Finished tasks get it too —
   // clearing out the done list is most of what it is for.
+  row.appendChild(taskMenuBtn(task));
   row.appendChild(deleteBtn(task));
   el.appendChild(row);
 
@@ -1192,6 +1193,129 @@ async function deleteTask(id) {
   } catch (e) { toast(e.message, true); }
 }
 
+/* ---------------- menus & templates ----------------
+ * One small pop-up menu, shared by a task's ☰ and the 📋 Templates button.
+ * A template is a saved copy of a task and its steps; using one adds a fresh
+ * copy to the open project. */
+
+let openMenu = null;  // {el, anchor} while a menu is showing
+
+function closeMenu(refocus = false) {
+  if (!openMenu) return;
+  const { el, anchor } = openMenu;
+  openMenu = null;
+  el.remove();
+  anchor.setAttribute("aria-expanded", "false");
+  if (refocus) anchor.focus();
+}
+
+/* `rows` is a list of {label, onClick, onDelete?, deleteLabel?}; an empty
+ * list shows `empty` instead. */
+function showMenu(anchor, rows, empty = "") {
+  const wasOpen = openMenu && openMenu.anchor === anchor;
+  closeMenu();
+  if (wasOpen) return;  // a second click on the same button closes it
+  const el = document.createElement("div");
+  el.className = "popmenu";
+  el.setAttribute("role", "menu");
+  for (const r of rows) {
+    const line = document.createElement("div");
+    line.className = "popmenu-row";
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "popmenu-item";
+    item.setAttribute("role", "menuitem");
+    item.textContent = r.label;
+    item.title = r.label;
+    item.addEventListener("click", () => { closeMenu(); r.onClick(); });
+    line.appendChild(item);
+    if (r.onDelete) {
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "task-btn ghost danger";
+      del.textContent = "✕";
+      del.title = r.deleteLabel;
+      del.setAttribute("aria-label", r.deleteLabel);
+      del.addEventListener("click", () => { closeMenu(); r.onDelete(); });
+      line.appendChild(del);
+    }
+    el.appendChild(line);
+  }
+  if (!rows.length) {
+    const p = document.createElement("div");
+    p.className = "popmenu-empty";
+    p.textContent = empty;
+    el.appendChild(p);
+  }
+  document.body.appendChild(el);
+  // Under the button, right edges lined up, kept on screen.
+  const a = anchor.getBoundingClientRect();
+  const left = Math.max(16, Math.min(a.right - el.offsetWidth,
+                                     window.innerWidth - el.offsetWidth - 16));
+  const below = a.bottom + 4;
+  el.style.left = left + "px";
+  el.style.top = (below + el.offsetHeight > window.innerHeight - 8
+    ? Math.max(8, a.top - el.offsetHeight - 4) : below) + "px";
+  anchor.setAttribute("aria-expanded", "true");
+  openMenu = { el, anchor };
+  const first = el.querySelector("button");
+  if (first) first.focus();
+}
+
+function taskMenuBtn(task) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "task-btn ghost";
+  btn.textContent = "☰";
+  btn.title = "More";
+  btn.setAttribute("aria-label", "More actions for " + task.title);
+  btn.setAttribute("aria-haspopup", "menu");
+  btn.addEventListener("click", () => showMenu(btn, [
+    { label: "Save as template", onClick: () => saveTemplate(task) },
+  ]));
+  return btn;
+}
+
+async function saveTemplate(task) {
+  const name = (prompt("Save as a template named:", task.title) || "").trim();
+  if (!name) return;
+  try {
+    await api(`/tasks/${task.id}/template`, {
+      method: "POST", body: JSON.stringify({ name }) });
+    toast(`Saved “${name}” as a template.`);
+  } catch (e) { toast(e.message, true); }
+}
+
+async function openTemplates() {
+  const btn = $("templates-btn");
+  if (openMenu && openMenu.anchor === btn) { closeMenu(); return; }
+  let templates;
+  try { ({ templates } = await api("/templates")); }
+  catch (e) { toast(e.message, true); return; }
+  showMenu(btn, templates.map((t) => ({
+    label: t.name,
+    onClick: () => useTemplate(t),
+    onDelete: () => deleteTemplate(t),
+    deleteLabel: `Delete the “${t.name}” template`,
+  })), "No templates yet. Use a task's ☰ → Save as template.");
+}
+
+async function useTemplate(t) {
+  try {
+    applyState(await api(`/templates/${t.id}/use`, { method: "POST" }));
+    toast(`Added “${t.name}” from a template.`);
+  } catch (e) { toast(e.message, true); }
+}
+
+async function deleteTemplate(t) {
+  if (!confirm(`Delete the “${t.name}” template? Tasks already made from it stay.`))
+    return;
+  try {
+    await api(`/templates/${t.id}`, { method: "DELETE" });
+    toast(`Deleted the “${t.name}” template.`);
+  } catch (e) { toast(e.message, true); }
+}
+
 /* Which task ids the list has already drawn. The list is rebuilt wholesale on
  * every state change, so without this every row would re-animate every time
  * anything at all happened. Cleared when the open project changes, because
@@ -1199,6 +1323,8 @@ async function deleteTask(id) {
 const drawn = new Set();
 
 function render() {
+  // A task's ☰ menu has no row left to belong to once the list is rebuilt.
+  if (openMenu && openMenu.anchor.closest(".task")) closeMenu();
   const list = $("task-list");
   list.replaceChildren();
   const active = state.tasks.filter(
@@ -3367,6 +3493,21 @@ function wire() {
     $("add-title").value = "";
     addTask(title);
   });
+
+  $("templates-btn").addEventListener("click", openTemplates);
+  // A pop-up menu closes on a click anywhere else, on Escape, and when the
+  // page moves under it.
+  document.addEventListener("pointerdown", (e) => {
+    if (openMenu && !openMenu.el.contains(e.target) &&
+        !openMenu.anchor.contains(e.target)) closeMenu();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && openMenu) { e.preventDefault(); closeMenu(true); }
+  });
+  window.addEventListener("resize", () => closeMenu());
+  window.addEventListener("scroll", (e) => {
+    if (openMenu && !openMenu.el.contains(e.target)) closeMenu();
+  }, true);
 
   wireListDropTarget();
   wireTabStripDropTarget();
