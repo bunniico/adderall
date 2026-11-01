@@ -4,11 +4,11 @@ Adderall is a single-user task app for people with executive dysfunction (ADHD, 
 
 ## How it works
 
-Everything happens on one page. Your tasks sit in a list, one list per [project tab](02-projects-and-tabs.md). The buttons in the header open the rest:
+Everything happens on one page. Your tasks sit in a list, one list per [project tab](02-projects-and-tabs.md). The icon buttons in the header open the rest (hover one to see its name):
 
-- **📅 Calendar** swaps the list for a [dated view](06-calendar.md) of every project.
-- **🧠 Braindump** turns a messy paragraph into [tasks](09-braindump.md).
-- **▶ Focus** shows you [one task at a time](20-focus-mode.md) with a visual timer.
+- **📅** (Calendar) swaps the list for a [dated view](06-calendar.md) of every project.
+- **🧠** (Braindump) turns a messy paragraph into [tasks](09-braindump.md).
+- **▶** (Focus) shows you [one task at a time](20-focus-mode.md) with a visual timer.
 - **⚙** opens Settings, including which [modules](27-modules.md) are on.
 - **❓** opens this Help area.
 
