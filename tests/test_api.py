@@ -24,7 +24,7 @@ def client(monkeypatch, tmp_path):
     # so a stubbed one is always in the future rather than instantly overdue.
     monkeypatch.setattr(main.ai, "annotate",
                         lambda settings, tasks, want_scores=True,
-                               want_start=False, now_local="": {
+                               want_start=False, now_local="", context=None: {
                             t["id"]: {"id": t["id"], "minutes": 30, "impact": 7,
                                       "effort": 3,
                                       **({"start_in_minutes": 120} if want_start else {})}
@@ -36,7 +36,7 @@ def client(monkeypatch, tmp_path):
     # tests that are about start times turn the setting back on themselves.
     db.update_settings({"ai_start_times": False})
     monkeypatch.setattr(main.ai, "breakdown",
-                        lambda settings, title, desc, granularity, parents=None:
+                        lambda settings, title, desc, granularity, **context:
                         [f"step {i}" for i in range(1, 4)])
     # "call dentist" deliberately omits `subtasks` entirely: a leaf is
     # allowed to arrive without the key.
@@ -750,7 +750,7 @@ def test_breakdown_network_failure_is_queued_then_runs_on_retry(client, monkeypa
 
     calls = {"n": 0}
 
-    def flaky(settings, title, desc, granularity, parents=None):
+    def flaky(settings, title, desc, granularity, **context):
         calls["n"] += 1
         if calls["n"] == 1:
             raise main.ai.AINetworkError("no route to the internet")
@@ -776,7 +776,8 @@ def test_reannotate_network_failure_is_queued_then_runs_on_retry(client, monkeyp
 
     calls = {"n": 0}
 
-    def flaky(settings, tasks, want_scores=True, want_start=False, now_local=""):
+    def flaky(settings, tasks, want_scores=True, want_start=False, now_local="",
+              context=None):
         calls["n"] += 1
         if calls["n"] == 1:
             raise main.ai.AINetworkError("no route to the internet")
@@ -2733,3 +2734,46 @@ def test_a_template_needs_a_name_and_a_task(client):
                        json={"name": "   "}).status_code == 400
     assert client.post("/api/tasks/nope/template",
                        json={"name": "x"}).status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# AI context: what the model is told about the rest of the list
+# ---------------------------------------------------------------------------
+
+def test_breakdown_is_told_the_steps_and_tasks_already_there(client, monkeypatch):
+    from app import main
+    seen = {}
+
+    def spy(settings, title, desc, granularity, **context):
+        seen.update(context)
+        return ["new step"]
+
+    monkeypatch.setattr(main.ai, "breakdown", spy)
+    state = create(client, title="clean kitchen")
+    parent = find(state, "clean kitchen")["id"]
+    create(client, title="wipe counters", parent_id=parent)
+    create(client, title="email landlord")
+    client.post(f"/api/tasks/{parent}/breakdown", json={})
+    assert seen["existing"] == ["wipe counters"]
+    assert seen["siblings"] == ["email landlord"]
+    assert seen["parent_titles"] == []
+
+
+def test_annotate_is_told_about_neighbours_and_parents(client, monkeypatch):
+    from app import main
+    calls = []
+
+    def spy(settings, tasks, want_scores=True, want_start=False, now_local="",
+            context=None):
+        calls.append({"tasks": tasks, "context": context})
+        return {}
+
+    create(client, title="email landlord", estimated_time=15, impact=7, effort=2)
+    state = create(client, title="clean kitchen", estimated_time=60, impact=5, effort=5)
+    parent = find(state, "clean kitchen")["id"]
+    monkeypatch.setattr(main.ai, "annotate", spy)
+    create(client, title="buy soap", parent_id=parent)
+    asked = calls[-1]["tasks"][0]
+    assert asked["parent_title"] == "clean kitchen"
+    titles = [c["title"] for c in calls[-1]["context"]]
+    assert titles == ["email landlord"]  # the parent itself is not a neighbour
