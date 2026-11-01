@@ -91,6 +91,12 @@
        tasks only — the steps inside a task keep the order the plan put them
        in — and it never changes what ▶ Focus hands you next. -->
   <div id="list-toolbar" class="list-toolbar" hidden>
+    <!-- Search narrows the list on screen; it never changes what is stored.
+         A step that matches brings its parents along, so it is still read in
+         context. -->
+    <input id="task-search" class="task-search" type="search"
+      placeholder="Search tasks… ( / )" aria-label="Search tasks"
+      autocomplete="off" maxlength="200">
     <label for="sort-field">Sort</label>
     <select id="sort-field"
       title="How this list is ordered. Steps nested inside a task keep their plan order, and Focus still picks by urgency.">
@@ -105,6 +111,7 @@
   </div>
 
   <section id="task-list" class="task-list" aria-live="polite"></section>
+  <p id="search-empty" class="empty-hint" hidden></p>
   <p id="empty-hint" class="empty-hint" hidden>
     <span id="empty-project"></span>Add a task above<span
     data-module="braindump">, or hit <b>🧠 Braindump</b> and empty your

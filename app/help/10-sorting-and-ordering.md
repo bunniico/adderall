@@ -4,6 +4,8 @@ Read your list however you need to, or arrange it by hand.
 
 ## How it works
 
+**Search.** The box beside Sort narrows the list to tasks whose title or description contains what you type, done and dropped ones included. A step that matches brings its parent along, unfolded, so you can still see what it belongs to. Press **/** to jump to it and **Escape** to clear it. It only changes what is drawn: totals, XP and ▶ Focus still see the whole list.
+
 **Sort.** The control above the list orders it by:
 
 - **Smart** (the default): urgency first, quick wins ahead of slogs.
