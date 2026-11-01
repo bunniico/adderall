@@ -505,11 +505,17 @@ def ensure_project() -> dict:
 
 
 def open_task_counts() -> dict[str, int]:
-    """Unfinished tasks per project — the number on each tab."""
+    """Unfinished tasks per project — the number on each tab.
+
+    Top-level only, matching the rows the list shows: a task's steps are part
+    of that one row, not extra tasks, and steps left open under a dropped
+    parent are not on the list at all.
+    """
     with connect() as conn:
         rows = conn.execute(
             "SELECT project_id, COUNT(*) AS n FROM tasks "
-            "WHERE status IN ('todo', 'in_progress') GROUP BY project_id"
+            "WHERE parent_id IS NULL AND status IN ('todo', 'in_progress') "
+            "GROUP BY project_id"
         ).fetchall()
     return {r["project_id"]: r["n"] for r in rows}
 
