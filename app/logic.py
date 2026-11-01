@@ -745,6 +745,13 @@ class DayPlanner:
                 # `task_days` applies when a rhythm's own days and your days
                 # off do not overlap.
                 spans, short = self._lay_back(deadline, length)
+            # A deadline with seconds on it falls part way through a minute.
+            # The work before it is laid on whole minutes and finishes at the
+            # top of that minute, but the rest of the minute is not free:
+            # anything placed in it would start before the deadline it is
+            # meant to sit after.
+            if deadline.second or deadline.microsecond:
+                self.book(deadline.replace(second=0, microsecond=0), deadline)
         for opened, closed in spans:
             self.book(opened, closed)
         self._spans[key] = spans
