@@ -337,6 +337,93 @@ function renderTrend() {
   host.appendChild(key);
 }
 
+/* ---------------- XP per hour ----------------
+ * One bar per day: what that day's finished work paid for each hour of it,
+ * on the same footing as the rail's Average XP / Minute. Days with nothing
+ * paid have no bar rather than a zero one, and the window's own average is
+ * the line to read them against. */
+
+const XPH_H = 110;
+
+function renderXpHourly() {
+  const host = $("ov-xp-hourly");
+  const sub = $("ov-xp-hourly-sub");
+  const days = ov.data.xp_hourly || [];
+  host.replaceChildren();
+  const paid = days.filter((d) => d.per_hour != null);
+  if (!paid.length) {
+    sub.textContent = `No estimated task has paid XP in the last ${days.length} days.`;
+    ovEmpty(host, "Finish a task with an estimate and its day's rate lands here.");
+    return;
+  }
+  const xp = paid.reduce((n, d) => n + d.xp, 0);
+  const minutes = paid.reduce((n, d) => n + d.minutes, 0);
+  const avg = Math.round((xp / minutes) * 600) / 10;
+  sub.textContent = `${avg} XP an hour on average across ${paid.length} day` +
+    `${paid.length === 1 ? "" : "s"} with paid work in the last ${days.length}.`;
+
+  const width = ovChartWidth(host);
+  const height = XPH_H + 20;
+  const max = Math.max(...paid.map((d) => d.per_hour), avg, 1);
+  const svg = ovSvg("svg", {
+    viewBox: `0 0 ${width} ${height}`, class: "ov-svg", role: "img",
+    "aria-label": `XP per hour by day over the last ${days.length} days, ` +
+                  `averaging ${avg}.`,
+  });
+  const plotH = XPH_H - TREND_HEAD;
+  const band = (width - TREND_PAD_L - TREND_PAD_R) / days.length;
+  const barW = Math.max(2, Math.min(OV_BAR_MAX, band - OV_BAR_GAP));
+  const x = (i) => TREND_PAD_L + i * band + (band - barW) / 2;
+  svg.appendChild(ovSvg("line", {
+    class: "ov-axis", x1: TREND_PAD_L, x2: width - TREND_PAD_R, y1: XPH_H, y2: XPH_H,
+  }));
+  const avgY = XPH_H - (avg / max) * plotH;
+  svg.appendChild(ovTip(ovSvg("line", {
+    class: "ov-rule", x1: TREND_PAD_L, x2: width - TREND_PAD_R, y1: avgY, y2: avgY,
+  }), `Average: ${avg} XP an hour`));
+  const avgLabel = ovSvg("text", {
+    class: "ov-rule-label", x: width - TREND_PAD_R, y: Math.max(9, avgY - 4),
+    "text-anchor": "end",
+  });
+  avgLabel.textContent = `${avg} avg`;
+  svg.appendChild(avgLabel);
+
+  const best = paid.reduce((a, d) => (d.per_hour > a.per_hour ? d : a), paid[0]);
+  days.forEach((day, i) => {
+    if (day.per_hour == null) return;
+    const h = Math.max(2, (day.per_hour / max) * plotH);
+    const label = new Date(day.day + "T12:00:00").toLocaleDateString(undefined,
+      { weekday: "short", month: "short", day: "numeric" });
+    svg.appendChild(ovTip(ovSvg("rect", {
+      class: "ov-bar", x: x(i), y: XPH_H - h, width: barW, height: h,
+      rx: Math.min(4, barW / 2),
+    }), `${label} — ${day.per_hour} XP an hour (${day.xp} XP over ` +
+        `${fmtMinutes(day.minutes)})`));
+    svg.appendChild(ovSvg("rect", {
+      class: "ov-bar", x: x(i), y: XPH_H - Math.min(h, 4), width: barW,
+      height: Math.min(h, 4),
+    }));
+    if (day === best) {
+      const text = ovSvg("text", {
+        class: "ov-value", x: x(i) + barW / 2, y: Math.max(9, XPH_H - h - 5),
+        "text-anchor": "middle",
+      });
+      text.textContent = String(day.per_hour);
+      svg.appendChild(text);
+    }
+  });
+  const dayLabel = (iso) => new Date(iso + "T12:00:00")
+    .toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  for (const [i, anchor] of [[0, "start"], [days.length - 1, "end"]]) {
+    const text = ovSvg("text", {
+      class: "ov-tick", x: x(i) + barW / 2, y: XPH_H + 15, "text-anchor": anchor,
+    });
+    text.textContent = dayLabel(days[i].day);
+    svg.appendChild(text);
+  }
+  host.appendChild(svg);
+}
+
 /* ---------------- the breakdowns ----------------
  * Two single-series bar charts. Every bar is labelled with its own name and
  * its own value, so nobody has to decode a colour to read either of them —
@@ -566,6 +653,7 @@ function renderOverview() {
   if (!ov.data) return;
   renderStats();
   renderTrend();
+  if (mod("xp")) renderXpHourly();
   renderShortlist("ov-top", ov.data.top, "top",
                   "Nothing to do. Add a task on one of your lists.");
   renderShortlist("ov-upcoming", ov.data.upcoming, "upcoming",

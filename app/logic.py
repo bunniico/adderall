@@ -1096,6 +1096,35 @@ def average_xp_per_minute(pairs: list[dict], buf: float) -> float | None:
     return (total_xp / total_minutes) if total_minutes else None
 
 
+def hourly_xp_by_day(rows: list[dict], buf: float, tz: tzinfo, days: int,
+                     today: date) -> list[dict]:
+    """XP per hour for each local day in the window, quiet days included.
+
+    Measured the way the rail's Average XP / Minute is (XP over the buffered
+    estimate of the tasks that paid it), times sixty, so a day on this chart
+    and the rail's figure are the same kind of number. A day with nothing
+    paid has no rate rather than a rate of zero: nothing was done slowly on
+    it, nothing was done at all.
+    """
+    xp: dict[str, int] = {}
+    minutes: dict[str, int] = {}
+    for row in rows:
+        when = parse_dt(row.get("finished_at"))
+        spent = buffered_estimate(row.get("estimated_time"), buf)
+        if when is None or not spent:
+            continue
+        key = when.astimezone(tz).date().isoformat()
+        xp[key] = xp.get(key, 0) + int(row["xp"])
+        minutes[key] = minutes.get(key, 0) + spent
+    series = []
+    for back in range(days - 1, -1, -1):
+        day = (today - timedelta(days=back)).isoformat()
+        m = minutes.get(day, 0)
+        series.append({"day": day, "xp": xp.get(day, 0), "minutes": m,
+                       "per_hour": round(xp[day] / m * 60, 1) if m else None})
+    return series
+
+
 # How far back "per day" looks. A window rather than all of it, because the
 # question is what you are earning *now*: a lifetime average answers it more
 # slowly the longer you use the app, and a month is long enough to survive a
