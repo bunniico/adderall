@@ -565,6 +565,79 @@ function renderShortlist(hostId, rows, kind, empty) {
  * fires resize dozens of times a second, and this redraws two SVGs. */
 let overviewResizePending = false;
 
+/* ---------------- average daily XP, day by day ----------------
+ * The line is what the rail's Average Daily XP read at the end of each day:
+ * a rolling month, quiet days included, so it moves slowly and a single
+ * good or bad day nudges it rather than yanking it. What each day itself
+ * paid is in the tooltip rather than drawn: a day's XP is always larger than
+ * the average it moves, and bars for it would squash the line flat. */
+
+const XPD_H = 110;
+
+function renderXpDaily() {
+  const host = $("ov-xp-daily");
+  const sub = $("ov-xp-daily-sub");
+  const days = ov.data.xp_daily || [];
+  host.replaceChildren();
+  if (!days.length || !days.some((d) => d.average > 0)) {
+    sub.textContent = "No XP earned in the last two months yet.";
+    ovEmpty(host, "Finish something and the line starts moving.");
+    return;
+  }
+  const first = days[0].average;
+  const last = days[days.length - 1].average;
+  const change = Math.round((last - first) * 10) / 10;
+  sub.textContent = `${last} XP a day now, ` +
+    (change === 0 ? "the same as" : `${change > 0 ? "up" : "down"} ` +
+     `${Math.abs(change)} from`) + ` ${days.length} days ago.`;
+
+  const width = ovChartWidth(host);
+  const height = XPD_H + 20;
+  const max = Math.max(...days.map((d) => d.average), 1);
+  const svg = ovSvg("svg", {
+    viewBox: `0 0 ${width} ${height}`, class: "ov-svg", role: "img",
+    "aria-label": `Average daily XP over the last ${days.length} days, ` +
+                  `from ${first} to ${last}.`,
+  });
+  const plotH = XPD_H - TREND_HEAD;
+  const band = (width - TREND_PAD_L - TREND_PAD_R) / days.length;
+  const cx = (i) => TREND_PAD_L + i * band + band / 2;
+  const y = (v) => XPD_H - (v / max) * plotH;
+  svg.appendChild(ovSvg("line", {
+    class: "ov-axis", x1: TREND_PAD_L, x2: width - TREND_PAD_R, y1: XPD_H, y2: XPD_H,
+  }));
+  const label = (iso, opts) => new Date(iso + "T12:00:00").toLocaleDateString(undefined, opts);
+  days.forEach((day, i) => {
+    const tip = `${label(day.day, { weekday: "short", month: "short", day: "numeric" })}` +
+      ` — average ${day.average} XP a day` + (day.xp ? ` · ${day.xp} XP that day` : "");
+    // A day-wide invisible hit area, so every day has a tooltip.
+    svg.appendChild(ovTip(ovSvg("rect", {
+      x: cx(i) - band / 2, y: 0, width: band, height: XPD_H, fill: "transparent",
+    }), tip));
+  });
+  const points = days.map((d, i) => `${cx(i).toFixed(1)},${y(d.average).toFixed(1)}`);
+  svg.appendChild(ovSvg("polygon", {
+    class: "ov-area",
+    points: `${cx(0).toFixed(1)},${XPD_H} ${points.join(" ")} ${cx(days.length - 1).toFixed(1)},${XPD_H}`,
+  }));
+  svg.appendChild(ovSvg("polyline", { class: "ov-line", points: points.join(" ") }));
+  const end = days.length - 1;
+  svg.appendChild(ovSvg("circle", { class: "ov-dot", cx: cx(end), cy: y(last), r: 3 }));
+  const value = ovSvg("text", {
+    class: "ov-value", x: cx(end), y: Math.max(9, y(last) - 7), "text-anchor": "end",
+  });
+  value.textContent = String(last);
+  svg.appendChild(value);
+  for (const [i, anchor] of [[0, "start"], [end, "end"]]) {
+    const text = ovSvg("text", {
+      class: "ov-tick", x: cx(i), y: XPD_H + 15, "text-anchor": anchor,
+    });
+    text.textContent = label(days[i].day, { month: "short", day: "numeric" });
+    svg.appendChild(text);
+  }
+  host.appendChild(svg);
+}
+
 function wireOverview() {
   window.addEventListener("resize", () => {
     if (overviewResizePending || !onOverview() || !ov.data) return;
@@ -587,4 +660,5 @@ function renderOverview() {
                   "Nothing has a date on it yet.");
   renderByProject();
   renderByQuadrant();
+  if (mod("xp")) renderXpDaily();
 }

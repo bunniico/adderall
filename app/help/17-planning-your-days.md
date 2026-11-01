@@ -13,7 +13,7 @@ Your working day is set in ⚙ Settings → *How much a day holds*:
 - **Hours of work in a day**: how much a day is allowed to hold (8 by default).
 - **Learn my real day**: lets that number move to match the days you actually have.
 - **Which days you work**: nothing the app schedules for itself lands on a day you have not ticked.
-- **Day start and end**: nothing the app schedules goes before or after these.
+- **Day start and end**: nothing the app schedules goes before or after these. An end earlier than the start is an **overnight shift**: 4 PM to 4 AM runs past midnight, and the hours after midnight belong to the day the shift started on, for working days, the day cap and what the cap learns from.
 - **Spread work out**: gives each task its own slot on a day with room, rather than stacking them.
 
 The calendar warns when a day is booked past its cap, and says which number it is using and why.

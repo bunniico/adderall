@@ -505,11 +505,17 @@ def ensure_project() -> dict:
 
 
 def open_task_counts() -> dict[str, int]:
-    """Unfinished tasks per project — the number on each tab."""
+    """Unfinished tasks per project — the number on each tab.
+
+    Top-level only, matching the rows the list shows: a task's steps are part
+    of that one row, not extra tasks, and steps left open under a dropped
+    parent are not on the list at all.
+    """
     with connect() as conn:
         rows = conn.execute(
             "SELECT project_id, COUNT(*) AS n FROM tasks "
-            "WHERE status IN ('todo', 'in_progress') GROUP BY project_id"
+            "WHERE parent_id IS NULL AND status IN ('todo', 'in_progress') "
+            "GROUP BY project_id"
         ).fetchall()
     return {r["project_id"]: r["n"] for r in rows}
 
@@ -769,6 +775,18 @@ def xp_log(days: int) -> list[dict]:
         ).fetchall()
     return [{"xp": r["xp_awarded"], "estimated_time": r["estimated_time"],
              "finished_at": r["updated_at"]} for r in rows]
+
+
+def xp_paid_log(days: int) -> list[dict]:
+    """Every payout inside the window, with when — the rows `xp_since` sums,
+    dated, so the daily average can be worked out as of any day in it."""
+    with connect() as conn:
+        rows = conn.execute(
+            """SELECT xp_awarded, updated_at FROM tasks
+               WHERE xp_awarded IS NOT NULL AND updated_at >= ?""",
+            (cutoff_iso(days),),
+        ).fetchall()
+    return [{"xp": r["xp_awarded"], "finished_at": r["updated_at"]} for r in rows]
 
 
 def completed_history(days: int = 45) -> list[dict]:

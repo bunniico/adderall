@@ -31,7 +31,15 @@
     <div id="xp-meter" class="xp-meter" hidden>
       <span class="xp-level">Lv <b id="xp-level">1</b></span>
       <div class="xp-track">
-        <div id="xp-fill" class="xp-fill"></div>
+        <!-- The fill is liquid: a wavy leading edge, and a few bubbles rising
+             through it. Purely decorative, so hidden from screen readers. -->
+        <div id="xp-fill" class="xp-fill">
+          <span class="xp-bubble" aria-hidden="true" style="--x: 12%; --d: 0s;    --s: 4px"></span>
+          <span class="xp-bubble" aria-hidden="true" style="--x: 34%; --d: 1.1s;  --s: 3px"></span>
+          <span class="xp-bubble" aria-hidden="true" style="--x: 55%; --d: .5s;   --s: 5px"></span>
+          <span class="xp-bubble" aria-hidden="true" style="--x: 73%; --d: 1.7s;  --s: 3px"></span>
+          <span class="xp-bubble" aria-hidden="true" style="--x: 88%; --d: .9s;   --s: 4px"></span>
+        </div>
         <span id="xp-count" class="xp-count"></span>
       </div>
       <span id="xp-gain" class="xp-gain" role="status" hidden></span>
@@ -49,6 +57,7 @@
     <button id="btn-view" class="ghost" data-module="calendar" title="Switch between the task list and the calendar">📅 Calendar</button>
     <button id="btn-braindump" class="ghost" data-module="braindump" title="Dump everything in your head; the Compiler turns it into tasks">🧠 Braindump</button>
     <button id="btn-focus" class="accent" data-module="focus" title="One task at a time with a visual timer">▶ Focus</button>
+    <button id="btn-chat" class="ghost" data-module="ai_chat" title="Ask: questions about how the app works, or ask it to change your tasks">💬</button>
     <button id="btn-help" class="ghost" data-module="help" title="Help: how each feature works, and why">❓</button>
     <button id="btn-settings" class="ghost" title="Settings">⚙</button>
   </div>
@@ -196,6 +205,12 @@
         <h2>Work left by category</h2>
         <p class="ov-sub">Where it sits on the impact/effort matrix.</p>
         <div id="ov-quadrants" class="ov-chart"></div>
+      </section>
+
+      <section id="ov-xp-daily-card" class="ov-card ov-span" data-module="xp">
+        <h2>Average daily XP</h2>
+        <p id="ov-xp-daily-sub" class="ov-sub"></p>
+        <div id="ov-xp-daily" class="ov-chart"></div>
       </section>
     </div>
   </section>
@@ -536,6 +551,27 @@
   </div>
 </dialog>
 
+<!-- 💬 Ask. The conversation lives here in the page and is sent whole each
+     time; the server keeps nothing. See chat.py. -->
+<dialog id="modal-chat" class="chat-dialog">
+  <div class="modal-body">
+    <div class="modal-head"><h2>💬 Ask</h2>
+      <button type="button" id="chat-clear" class="ghost" title="Start a new conversation">New chat</button>
+      <button type="button" class="ghost close" data-close>✕</button></div>
+    <div id="chat-log" class="chat-log" aria-live="polite">
+      <p class="muted chat-hint">Ask how anything in the app works ("why did
+        this task land on Thursday?"), or ask it to do something ("add call the
+        dentist tomorrow", "mark the laundry done"). It only changes your tasks
+        when you ask it to.</p>
+    </div>
+    <form id="chat-form" class="chat-form" autocomplete="off">
+      <textarea id="chat-input" rows="2" maxlength="8000"
+        placeholder="Ask anything… (Enter sends, Shift+Enter for a new line)"></textarea>
+      <button id="chat-send" type="submit" class="accent">Send</button>
+    </form>
+  </div>
+</dialog>
+
 <!-- Settings -->
 <dialog id="modal-settings">
   <div class="modal-body">
@@ -599,7 +635,9 @@
         <select id="s-day-end"></select>
         <span class="muted">The other end of the same window. Nothing the app
           schedules runs past it — only a start time or a deadline you set
-          yourself can put work outside these hours.</span>
+          yourself can put work outside these hours. Pick an hour earlier than
+          your start for a shift that runs past midnight.</span>
+        <span id="s-day-overnight" class="muted" hidden></span>
       </label>
 
       <label class="row"><input id="s-spread" type="checkbox">
@@ -769,6 +807,8 @@
 <!-- Taskmaster focus overlay -->
 <div id="focus-overlay" class="focus-overlay" hidden>
   <div class="focus-corner">
+    <button id="f-auto" class="ghost" aria-pressed="false"
+      title="Auto: when the timer runs out, move on to the next task by itself and tell you, instead of waiting for you to press a button. The task you were on stays open.">⏭ Auto: off</button>
     <button id="f-min" class="ghost" title="Close this view — the timer keeps running">— Minimize</button>
     <button id="f-end" class="ghost" title="End the focus session for good">⏹ End session</button>
     <button id="f-close" class="ghost close" title="Close this view — the timer keeps running">✕</button>
