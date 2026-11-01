@@ -58,6 +58,10 @@ GRANULARITY_HINTS = {
 # Schemas below therefore carry types only, and every bound is enforced
 # locally after parsing — which is where the app does its validation anyway.
 MAX_STEPS = 16       # cap on subtasks from one breakdown
+# How many neighbouring tasks a prompt is shown for context. Titles are short,
+# but every one is input tokens on a call that runs for each new task, and a
+# few nearby tasks say as much about "what this list is" as fifty do.
+MAX_CONTEXT = 15
 MAX_COMPILED = 60    # cap on tasks from one braindump, subtasks included
 MAX_MINUTES = 60 * 24 * 30  # a month of minutes; anything larger is nonsense
 # How far ahead a suggested start time may sit: a year. "Some day" has to have
@@ -418,15 +422,34 @@ def _call(settings: dict, tier: str, prompt: str, schema: dict,
     return json.loads(text)
 
 
+def _bullets(titles: list[str]) -> str:
+    return "".join(f"- {t}\n" for t in titles[:MAX_CONTEXT])
+
+
 def breakdown(settings: dict, title: str, description: str, granularity: int,
-              parent_titles: list[str] | None = None) -> list[str]:
-    """Magic ToDo: break one task into subtasks. Balanced tier, interactive."""
+              parent_titles: list[str] | None = None,
+              existing: list[str] | None = None,
+              siblings: list[str] | None = None) -> list[str]:
+    """Magic ToDo: break one task into subtasks. Balanced tier, interactive.
+
+    `existing` is the steps the task already has: breaking a task down a
+    second time should fill in what is missing, not hand back a second copy
+    of what is already there. `siblings` is the tasks beside it in the same
+    list, which say what kind of list this is without being part of the job.
+    """
     granularity = min(5, max(1, int(granularity)))
     context = ""
     if parent_titles:
         context = f"This task is a subtask of: {' > '.join(parent_titles)}.\n"
     if description:
         context += f"Extra context from the user: {description}\n"
+    if existing:
+        context += ("It already has these steps. Do not repeat or reword them; "
+                    "only add the steps that are still missing:\n"
+                    + _bullets(existing))
+    if siblings:
+        context += ("Other tasks in the same list, for context only (do not "
+                    "break those down or include them):\n" + _bullets(siblings))
     prompt = (
         f"{context}Break this task into {GRANULARITY_HINTS[granularity]}, in the "
         f"order they should be done:\n\nTASK: {title}"
@@ -505,14 +528,32 @@ START_GUIDANCE = (
 )
 
 
+def _context_line(t: dict) -> str:
+    known = []
+    if t.get("estimated_time"):
+        known.append(f"~{t['estimated_time']} min")
+    if t.get("impact") is not None:
+        known.append(f"impact {t['impact']}")
+    if t.get("effort") is not None:
+        known.append(f"effort {t['effort']}")
+    return t["title"] + (f" ({', '.join(known)})" if known else "")
+
+
 def annotate(settings: dict, tasks: list[dict], want_scores: bool = True,
-             want_start: bool = False, now_local: str = "") -> dict[str, dict]:
+             want_start: bool = False, now_local: str = "",
+             context: list[dict] | None = None) -> dict[str, dict]:
     """Estimator + matrix seeding: one fast-tier call for a whole batch of
     tasks, returning {id: {minutes, impact?, effort?, start_in_minutes?}}.
 
     Raw minutes only — the time-tax buffer is applied locally, never by the
     model — and start times come back as an offset from `now_local`, which is
     the caller's own clock rendered for the prompt.
+
+    A task may carry `parent_title`, the task it is a step of, since "buy
+    soap" is a different size inside "clean the kitchen" than inside "open a
+    shop". `context` is other tasks from the same list with what is already
+    known about them, so new scores are relative to the list rather than
+    picked in a vacuum.
     """
     if not tasks:
         return {}
@@ -520,7 +561,8 @@ def annotate(settings: dict, tasks: list[dict], want_scores: bool = True,
     lines = []
     for t in tasks:
         desc = f" — {t['description']}" if t.get("description") else ""
-        lines.append(f"- id={t['id']}: {t['title']}{desc}")
+        part = f" (a step of: {t['parent_title']})" if t.get("parent_title") else ""
+        lines.append(f"- id={t['id']}: {t['title']}{part}{desc}")
     fields = "estimated working minutes" + (
         ", impact 0-10, effort 0-10" if want_scores else ""
     )
@@ -533,6 +575,11 @@ def annotate(settings: dict, tasks: list[dict], want_scores: bool = True,
     )
     if want_start:
         prompt += START_GUIDANCE + "\n"
+    if context:
+        prompt += ("\nOther tasks already in the same list, for reference only "
+                   "(keep estimates and scores consistent with them; do not "
+                   "return them):\n"
+                   + _bullets([_context_line(c) for c in context]))
     prompt += "\n" + "\n".join(lines)
     data = _call(settings, "fast", prompt, annotate_schema(want_scores, want_start))
     valid_ids = {t["id"] for t in tasks}

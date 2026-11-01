@@ -8,6 +8,8 @@ Open a task and press **⚡ Break down**. The AI writes a list of concrete subta
 
 Any subtask can be broken down again, as deep as you like.
 
+The AI is shown what is already there: the steps the task has (so breaking it down a second time fills gaps instead of repeating them), the tasks it sits inside, and the other open tasks beside it in the same list.
+
 If you already know a step, the **+** on any task adds a subtask by hand, at any depth. The box stays open after each one so you can type several in a row.
 
 The task's **description** is passed to the AI, so anything specific about your situation ("I don't have a car") shapes the steps it writes.

@@ -215,6 +215,10 @@ def _overview() -> dict:
         "top": [row for _, row in candidates[:OVERVIEW_TOP]],
         "upcoming": dated[:OVERVIEW_UPCOMING],
         "trend": trend,
+        # Where Average Daily XP stood at the end of each day in the window.
+        "xp_daily": logic.daily_xp_average_by_day(
+            db.xp_paid_log(OVERVIEW_TREND_DAYS + logic.XP_WINDOW_DAYS), tz,
+            OVERVIEW_TREND_DAYS, today),
         "by_project": per_project,
         # In the app's own order — quick wins first, thankless last — rather
         # than by size, so the four bars stay in the same places from one day

@@ -127,9 +127,10 @@ It's a one-way mirror, and deliberately simple about it: re-syncing refreshes
 an imported task's title, description and due date from ClickUp, but nothing
 else — its estimate, impact/effort, status, subtasks and which tab it lives
 in are yours, and sync never touches them once it exists. Nothing is pushed
-back to ClickUp, and a task that stops showing up as "assigned and open" in
-ClickUp (finished, reassigned, deleted) is simply left alone rather than
-auto-completed or removed here.
+back to ClickUp. A task moved to a completed status in ClickUp (a status of
+type closed or done) is marked done here on the next sync and pays its XP like
+a tick; one that stops showing up for any other reason (reassigned, deleted)
+is simply left alone rather than removed here.
 
 Runs on the same kind of sweep as the recurring-task job below — once at
 startup, then every `ADDERALL_CLICKUP_INTERVAL` seconds (1800 by default; `0`
@@ -230,7 +231,7 @@ and the API answer anyone who can reach the port.
 ### Turning parts of it off
 
 Everything beyond the task list itself (ClickUp sync, the MCP server, the AI
-features, the Calendar, Overview, Habits and Help views, repeating tasks,
+features and the 💬 Ask chat, the Calendar, Overview, Habits and Help views, repeating tasks,
 focus mode, transition alarms, XP and sounds) is a module, and each one can be
 switched off in ⚙ Settings → **🧩 Modules**. Off means off: its buttons and
 settings leave the page, its API routes answer 404, and its background job
@@ -272,6 +273,7 @@ with the code.
 - [Other apps and AI agents](app/help/26-other-apps-and-agents.md)
 - [Modules](app/help/27-modules.md)
 - [Templates](app/help/28-templates.md)
+- [Ask](app/help/29-ask.md)
 
 To add or change one, edit the Markdown file. The number at the front of
 the filename sets its place in the list, the first `# ` line is its title,
@@ -314,6 +316,7 @@ Claude API only, routed by cost/quality (configurable in the DB settings):
 | Estimates + impact/effort scores + start times | `claude-haiku-4-5` | off | yes — one call per batch of tasks |
 | Task breakdown (Magic ToDo) | `claude-sonnet-5` | low effort | no (interactive) |
 | Braindump compiler | `claude-opus-5` | adaptive | yes — one call |
+| 💬 Ask (chat, with tool use) | `claude-sonnet-5` (balanced) | model default | no (interactive) |
 
 Every call uses structured JSON output (`output_config.format`), so responses
 are compact and parse deterministically. The system prompt is cache-marked.
