@@ -253,3 +253,53 @@ def test_compile_tolerates_a_missing_subtasks_key(monkeypatch):
     assert ai.compile_braindump({}, "text") == [
         {"title": "flat", "description": "", "subtasks": []}
     ]
+
+
+# ---- context: what else is in the list goes into the prompt ----
+
+def _capture_prompt(monkeypatch, reply):
+    seen = {}
+
+    def fake(settings, tier, prompt, schema, **kw):
+        seen["prompt"] = prompt
+        return reply
+
+    monkeypatch.setattr(ai, "_call", fake)
+    return seen
+
+
+def test_breakdown_lists_existing_steps_and_neighbours(monkeypatch):
+    seen = _capture_prompt(monkeypatch, {"steps": ["scrub the sink"]})
+    ai.breakdown({}, "clean the kitchen", "", 3, parent_titles=["house"],
+                 existing=["wipe counters", "buy dish soap"],
+                 siblings=["email the landlord"])
+    p = seen["prompt"]
+    assert "wipe counters" in p and "buy dish soap" in p
+    assert "Do not repeat" in p
+    assert "email the landlord" in p and "for context only" in p
+    assert "house" in p
+
+
+def test_breakdown_without_context_says_nothing_about_it(monkeypatch):
+    seen = _capture_prompt(monkeypatch, {"steps": []})
+    ai.breakdown({}, "t", "", 3)
+    assert "already has" not in seen["prompt"]
+    assert "same list" not in seen["prompt"]
+
+
+def test_breakdown_context_is_capped(monkeypatch):
+    seen = _capture_prompt(monkeypatch, {"steps": []})
+    ai.breakdown({}, "t", "", 3, siblings=[f"sib {i}" for i in range(50)])
+    assert f"sib {ai.MAX_CONTEXT - 1}" in seen["prompt"]
+    assert f"sib {ai.MAX_CONTEXT}\n" not in seen["prompt"]
+
+
+def test_annotate_shows_neighbours_and_the_parent_of_a_step(monkeypatch):
+    seen = _capture_prompt(monkeypatch, {"tasks": []})
+    ai.annotate({}, [{"id": "a", "title": "buy soap", "parent_title": "clean kitchen"}],
+                context=[{"title": "email landlord", "estimated_time": 15,
+                          "impact": 7, "effort": 2}])
+    p = seen["prompt"]
+    assert "buy soap (a step of: clean kitchen)" in p
+    assert "email landlord (~15 min, impact 7, effort 2)" in p
+    assert "do not return them" in p
