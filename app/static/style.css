@@ -145,20 +145,56 @@ body {
   transition: transform var(--t-base) var(--pop);
 }
 .xp-track {
-  position: relative; width: 170px; height: 22px; border-radius: 11px;
+  --xp-track-w: 170px;
+  position: relative; width: var(--xp-track-w); height: 22px; border-radius: 11px;
   background: var(--panel-2); border: 1px solid var(--border);
   overflow: hidden; display: grid; place-items: center;
 }
+/* Red when the level has just started, yellow halfway, green as it nears
+   the next one. The gradient is sized to the whole track rather than to the
+   fill, so the colour at the leading edge *is* the percentage. */
 .xp-fill {
   position: absolute; left: 0; top: 0; bottom: 0; width: 0;
-  background: var(--bar-xp);
+  background: linear-gradient(90deg, var(--bad), var(--warn) 50%, var(--good));
+  background-size: var(--xp-track-w) 100%;
   transition: width .6s var(--ease-out);
+  overflow: hidden;
+  /* The leading edge is a column of little bulges that roll downwards, so
+     the fill reads as liquid sloshing rather than a flat bar. */
+  --wave: 4px;
+  -webkit-mask:
+    linear-gradient(#000 0 0) left top / calc(100% - var(--wave)) 100% no-repeat,
+    radial-gradient(var(--wave) 7px at left, #000 97%, transparent) right 0 / var(--wave) 12px repeat-y;
+  mask:
+    linear-gradient(#000 0 0) left top / calc(100% - var(--wave)) 100% no-repeat,
+    radial-gradient(var(--wave) 7px at left, #000 97%, transparent) right 0 / var(--wave) 12px repeat-y;
+  animation: xp-wave 1.2s linear infinite;
+}
+@keyframes xp-wave {
+  from { -webkit-mask-position: left top, right 0;    mask-position: left top, right 0; }
+  to   { -webkit-mask-position: left top, right 12px; mask-position: left top, right 12px; }
+}
+.xp-bubble {
+  position: absolute; left: var(--x); bottom: -6px;
+  width: var(--s); height: var(--s); border-radius: 50%;
+  background: rgba(255, 255, 255, .55);
+  box-shadow: inset -1px -1px 0 rgba(255, 255, 255, .35);
+  opacity: 0;
+  animation: xp-bubble 2.4s var(--d) ease-in infinite;
+}
+@keyframes xp-bubble {
+  0%   { transform: translate(0, 0); opacity: 0; }
+  15%  { opacity: .9; }
+  50%  { transform: translate(2px, -14px); }
+  100% { transform: translate(-1px, -30px); opacity: 0; }
 }
 /* The count rides on top of the fill, not beside it — 170px is enough for a
    bar or for a fraction, not for both side by side. */
 .xp-count {
   position: relative; font: 600 10px/1 var(--mono);
   letter-spacing: .08em; color: #eef2ff; white-space: nowrap;
+  /* Legible over red, yellow and green alike. */
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .75), 0 0 1px rgba(0, 0, 0, .9);
 }
 /* Passing a level is the one moment the meter is allowed to shout. The bar
    rings out while the level chip takes a physical hop — the number is what
@@ -195,7 +231,8 @@ body {
 /* Motion is the reward here, so it is also the thing to drop first for
    anyone who has asked the system for less of it. The numbers still land. */
 @media (prefers-reduced-motion: reduce) {
-  .xp-fill { transition: none; }
+  .xp-fill { transition: none; animation: none; -webkit-mask: none; mask: none; }
+  .xp-bubble { display: none; }
   .xp-meter.levelup { animation: none; border-color: var(--good); }
   .xp-gain.rise { animation: none; opacity: 1; }
 }
@@ -224,6 +261,19 @@ main { max-width: 1046px; margin: 0 auto; padding: 20px 24px 80px; }
   gap: 8px; font-size: 12.5px; color: #c3d7ea;
 }
 .rail-row b { font: 500 12px/1 var(--mono); font-weight: 500; color: var(--text); }
+.rail-row { position: relative; }
+/* The "+0.4" that rises off an average when it changes. */
+.rail-float {
+  position: absolute; right: 0; top: -8px; pointer-events: none;
+  font: 600 11px/1 var(--mono); color: var(--good);
+  animation: rail-float 1.4s var(--ease-out) forwards;
+}
+.rail-float.down { color: var(--bad); }
+@keyframes rail-float {
+  0%   { opacity: 0; transform: translateY(4px); }
+  20%  { opacity: 1; transform: translateY(-2px); }
+  100% { opacity: 0; transform: translateY(-18px); }
+}
 .rail-foot { text-align: right; font: 400 10px/1 var(--mono); color: var(--muted-3); }
 /* Placeholder only — the companion itself is not built yet, and a box that
    says so is more honest than a mascot that does nothing. */
@@ -373,6 +423,7 @@ button:disabled { opacity: .5; cursor: wait; }
    thinking, not broken. */
 button:disabled { animation: thinking 1.4s var(--ease-out) infinite; }
 @keyframes thinking { 50% { opacity: .34; } }
+#f-auto.on { color: var(--accent); border-color: var(--accent); }
 
 input, textarea, select {
   font: inherit; color: var(--text); background: var(--panel);
@@ -427,6 +478,25 @@ textarea { resize: vertical; }
 
 /* ---- task list ---- */
 .task-list { display: flex; flex-direction: column; gap: 11px; }
+
+/* A task on its way: the shape of a row, with light sweeping across it. */
+.shimmer-row .task-row { min-height: 40px; }
+.shimmer {
+  display: block; border-radius: 6px;
+  background: linear-gradient(90deg, var(--panel-2) 0%, var(--border-strong) 50%,
+                              var(--panel-2) 100%);
+  background-size: 300% 100%;
+  animation: shimmer 1.3s linear infinite;
+}
+.shimmer-box { flex: none; width: 18px; height: 18px; margin-left: 30px; }
+.shimmer-line { height: 12px; }
+@keyframes shimmer {
+  from { background-position: 100% 0; }
+  to   { background-position: -200% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .shimmer { animation: none; background: var(--panel-2); }
+}
 
 /* Depth is carried by surface, not by indentation alone: a top-level task is
    a container, a nested one is a lit card inside it, and a leaf is a plain
@@ -721,6 +791,30 @@ dialog.closing::backdrop { animation: fade-in var(--t-fast) var(--ease-in) rever
    this file, so the one attribute is all an element needs. */
 [data-module][hidden] { display: none !important; }
 .modal-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* ---- 💬 Ask ---- */
+dialog.chat-dialog { width: min(640px, 96vw); }
+.chat-dialog .modal-head h2 { flex: 1; }
+.chat-log {
+  display: flex; flex-direction: column; gap: 10px;
+  max-height: min(60vh, 520px); min-height: 160px; overflow-y: auto; padding: 2px;
+}
+.chat-msg {
+  max-width: 88%; padding: 9px 12px; border-radius: 10px; font-size: 14px;
+  line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.chat-msg.user { align-self: flex-end; background: var(--accent-dim); color: var(--text-bright); }
+.chat-msg.assistant { align-self: flex-start; background: var(--panel-2); color: var(--text); }
+.chat-msg.error { border: 1px solid var(--bad); color: var(--bad); background: transparent; }
+.chat-msg.pending { color: var(--muted); animation: thinking 1.4s var(--ease-out) infinite; }
+.chat-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.chat-action {
+  font: 500 10.5px/1 var(--mono); padding: 3px 6px; border-radius: 5px;
+  border: 1px solid var(--border-strong); color: var(--muted);
+}
+.chat-action.failed { border-color: var(--bad); color: var(--bad); }
+.chat-form { display: flex; gap: 8px; align-items: flex-end; }
+.chat-form textarea { flex: 1; resize: none; }
 .modal-actions button { flex: 1; min-width: 100px; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
@@ -1173,6 +1267,9 @@ body.calendar-mode #list-view { display: none; }
   content: ""; width: 9px; height: 9px; border-radius: 2px; background: var(--accent);
 }
 .ov-key-soft::before { background: var(--accent-dim); }
+.ov-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.ov-dot { fill: var(--accent); }
+.ov-area { fill: var(--accent); opacity: .12; }
 
 /* The two shortlists. Rows are buttons: the whole thing is the hit target,
    because a link-sized one is exactly the friction this app exists to remove. */
@@ -1387,7 +1484,7 @@ body.calendar-mode #list-view { display: none; }
   .side-rail { display: none; }
   /* The bar survives a phone; the fraction printed on it does not — 170px of
      header is not on offer at this width. */
-  .xp-track { width: 74px; }
+  .xp-track { --xp-track-w: 74px; }
   .xp-count { display: none; }
   /* Two tiles across rather than one: they are short, and a column of seven
      is a scroll before the charts even start. */
