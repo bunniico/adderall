@@ -7,6 +7,7 @@ so the whole class of sync/merge bugs cannot occur.
 
 from __future__ import annotations
 
+import contextvars
 import json
 import os
 import secrets
@@ -97,6 +98,24 @@ DEFAULT_SETTINGS = {
 }
 
 DEFAULT_PROJECT_NAME = "Tasks"
+
+# Which list is on screen. Stored as settings so a fresh tab and the API/MCP
+# callers have an answer, but each browser tab also sends its own (see
+# `ViewMiddleware` in main.py): two tabs on two different projects must not
+# keep switching each other's list. While a request carries a view, reads of
+# these keys see it, and writes to them update it as well as the stored
+# default, so the reply is drawn for the view the request just moved to.
+VIEW_KEYS = ("active_project", "all_tasks_view", "overview_view", "habits_view")
+_view: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
+    "adderall_view", default=None)
+
+
+def set_view(view: dict | None) -> contextvars.Token:
+    return _view.set(view)
+
+
+def reset_view(token: contextvars.Token) -> None:
+    _view.reset(token)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS projects (
@@ -992,6 +1011,7 @@ def get_settings() -> dict:
             merged[key].update(value)
         else:
             merged[key] = value
+    merged.update(_view.get() or {})
     return merged
 
 
@@ -1281,6 +1301,9 @@ PLANNING_SETTINGS = {"day_start", "day_end", "day_capacity", "adaptive_capacity"
 def update_settings(changes: dict) -> dict:
     if PLANNING_SETTINGS & set(changes):
         bump_plan_rev()
+    view = _view.get()
+    if view is not None:
+        view.update({k: changes[k] for k in VIEW_KEYS if k in changes})
     current = get_settings()
     with connect() as conn:
         for key, value in changes.items():

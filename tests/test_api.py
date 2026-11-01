@@ -2733,3 +2733,66 @@ def test_a_template_needs_a_name_and_a_task(client):
                        json={"name": "   "}).status_code == 400
     assert client.post("/api/tasks/nope/template",
                        json={"name": "x"}).status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# several browser tabs at once: each sends its own view
+# ---------------------------------------------------------------------------
+
+def _view(project=None, **lens):
+    import json
+    return {"X-Adderall-View": json.dumps({"project": project, **lens})}
+
+
+def test_two_tabs_stay_on_their_own_projects(client):
+    home = client.get("/api/state").json()["active_project_id"]
+    work = new_project(client, "work")["active_project_id"]
+    tab_a, tab_b = _view(home), _view(work)
+
+    # Each tab adds to the list it is looking at, whichever was opened last.
+    a = client.post("/api/tasks", json={"title": "home thing"}, headers=tab_a).json()
+    b = client.post("/api/tasks", json={"title": "work thing"}, headers=tab_b).json()
+    assert a["active_project_id"] == home and find(a, "home thing")
+    assert b["active_project_id"] == work and find(b, "work thing")
+    assert find(b, "home thing") is None
+
+    # And reading one tab never moves the other.
+    assert client.get("/api/state", headers=tab_a).json()["active_project_id"] == home
+    assert client.get("/api/state", headers=tab_b).json()["active_project_id"] == work
+
+
+def test_a_tab_switching_projects_does_not_switch_another(client):
+    home = client.get("/api/state").json()["active_project_id"]
+    work = new_project(client, "work")["active_project_id"]
+    moved = client.post(f"/api/projects/{work}/activate", headers=_view(home)).json()
+    assert moved["active_project_id"] == work  # the reply is for the new view
+    # The other tab, still on home, is still on home.
+    assert client.get("/api/state", headers=_view(home)).json()["active_project_id"] == home
+    # A fresh tab (no header) opens wherever you were last.
+    assert client.get("/api/state").json()["active_project_id"] == work
+
+
+def test_lenses_belong_to_one_tab(client):
+    home = client.get("/api/state").json()["active_project_id"]
+    new_project(client, "work")
+    on_all = client.post("/api/projects/all/activate", headers=_view(home)).json()
+    assert on_all["all_tasks"] is True
+    plain = client.get("/api/state", headers=_view(home)).json()
+    assert plain["all_tasks"] is False and plain["overview"] is False
+    lensed = client.get("/api/state", headers=_view(home, all=True)).json()
+    assert lensed["all_tasks"] is True
+
+
+def test_a_tab_on_a_deleted_project_falls_back(client):
+    home = client.get("/api/state").json()["active_project_id"]
+    work = new_project(client, "work")["active_project_id"]
+    client.delete(f"/api/projects/{work}", headers=_view(home))
+    state = client.get("/api/state", headers=_view(work)).json()
+    assert state["active_project_id"] == home
+
+
+def test_an_unreadable_view_header_is_ignored(client):
+    home = client.get("/api/state").json()["active_project_id"]
+    res = client.get("/api/state", headers={"X-Adderall-View": "not json"})
+    assert res.status_code == 200
+    assert res.json()["active_project_id"] == home

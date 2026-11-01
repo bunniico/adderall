@@ -10,6 +10,7 @@ routes are in `routes/`, one file per module, and can be switched off (see
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sys
@@ -79,6 +80,57 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Adderall", docs_url="/api/docs", openapi_url="/api/openapi.json",
               lifespan=lifespan)
+
+
+VIEW_HEADER = b"x-adderall-view"
+
+
+def _parse_view(raw: bytes) -> dict | None:
+    """One browser tab's view, from `X-Adderall-View`.
+
+    JSON: {"project": id, "all": bool, "overview": bool, "habits": bool}.
+    Anything unreadable is treated as no header at all, so a bad value falls
+    back to the stored view rather than failing the request.
+    """
+    try:
+        data = json.loads(raw.decode("ascii"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    view = {"all_tasks_view": bool(data.get("all")),
+            "overview_view": bool(data.get("overview")),
+            "habits_view": bool(data.get("habits"))}
+    project = str(data.get("project") or "").strip()[:64]
+    if project:
+        view["active_project"] = project
+    return view
+
+
+class ViewMiddleware:
+    """Serve each request for the view the tab that sent it is on.
+
+    The page sends its own view on every call; without one (a fresh tab, an
+    API or MCP caller) the stored view is used, as it always was. See
+    `db.VIEW_KEYS`.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        raw = dict(scope.get("headers") or []).get(VIEW_HEADER)
+        token = db.set_view(_parse_view(raw) if raw else None)
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            db.reset_view(token)
+
+
+app.add_middleware(ViewMiddleware)
 
 db.init()
 

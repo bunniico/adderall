@@ -4,7 +4,7 @@ Everything the page does goes through a JSON API, so other programs can use the 
 
 ## How it works
 
-**The API.** Its reference is at `/api/docs` on the machine running the app.
+**The API.** Its reference is at `/api/docs` on the machine running the app. Calls act on whichever tab you last switched to, unless they send an `X-Adderall-View` header (`{"project": "<id>", "all": false, "overview": false, "habits": false}`), which is how each browser tab keeps its own place.
 
 **Alarms as events.** [Transition alarms](21-transition-alarms.md) go to three places:
 
