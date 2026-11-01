@@ -1610,6 +1610,26 @@ def test_a_finished_task_is_drawn_where_the_work_happened_not_where_it_was_plann
     assert row["planned_at"] is None and row["planned_blocks"] is None
 
 
+def test_a_night_shift_plans_work_only_inside_the_shift(client):
+    """#120: a 16:00-04:00 day. Everything the app places itself lands in the
+    shift, including the hours after midnight, and never in the daytime."""
+    from app import db
+    db.update_settings({"day_start": 16, "day_end": 4, "day_capacity": 600,
+                        "adaptive_capacity": False, "timezone": "UTC",
+                        "working_days": [0, 1, 2, 3, 4, 5, 6]})
+    for i in range(8):
+        create(client, title=f"night {i}", estimated_time=120, impact=7, effort=3)
+    payload = client.get("/api/calendar").json()
+    blocks = [b for e in payload["events"] for b in e.get("blocks") or []]
+    assert blocks
+    for opened, closed in blocks:
+        start, end = logic_parse(opened), logic_parse(closed)
+        last = end - timedelta(minutes=1)
+        for when in (start, last):
+            assert when.hour >= 16 or when.hour < 4, (opened, closed)
+    assert not _stacked(payload)
+
+
 def test_a_task_finished_without_being_started_is_not_drawn_at_all(client):
     """No start, no honest place on the timeline. The old slot is gone — it
     belongs to whatever the planner has since given it to."""

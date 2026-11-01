@@ -2657,6 +2657,21 @@ function fillDayStarts() {
   }
 }
 
+/* Says out loud that an end hour before the start hour is a night shift,
+ * not a mistake, and which day the hours after midnight belong to. */
+function updateOvernightNote() {
+  const start = Number($("s-day-start").value);
+  const end = Number($("s-day-end").value);
+  const note = $("s-day-overnight");
+  note.hidden = !(end < start);
+  if (note.hidden) return;
+  const hour = (h) => new Date(2000, 0, 1, h)
+    .toLocaleTimeString(undefined, { hour: "numeric" });
+  note.textContent = `🌙 Overnight: your day runs from ${hour(start)} to ` +
+    `${hour(end)} the next morning, and the hours after midnight count as ` +
+    `part of the day the shift started on.`;
+}
+
 /* What the cap has actually learned to be, in a sentence. A setting that
  * quietly overrides itself is worse than no setting, so the dialog says what
  * the number has moved to and on what evidence. */
@@ -2709,6 +2724,7 @@ function openSettings() {
   }
   $("s-day-start").value = String(settings.day_start ?? 9);
   $("s-day-end").value = String(settings.day_end ?? 22);
+  updateOvernightNote();
   $("s-spread").checked = settings.spread_tasks !== false;
   $("s-capacity-note").textContent = capacityLearned();
   $("s-threshold").value = settings.matrix_threshold;
@@ -3548,6 +3564,8 @@ function wire() {
   $("btn-focus").addEventListener("click", () => startFocus(null));
   $("btn-settings").addEventListener("click", openSettings);
   $("s-save").addEventListener("click", saveSettings);
+  $("s-day-start").addEventListener("change", updateOvernightNote);
+  $("s-day-end").addEventListener("change", updateOvernightNote);
   $("s-clickup-sync").addEventListener("click", syncClickUp);
   $("s-buffer").addEventListener("input", () =>
     $("s-buffer-val").textContent = $("s-buffer").value + "%");
