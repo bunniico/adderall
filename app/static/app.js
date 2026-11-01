@@ -3287,6 +3287,9 @@ function listenForAlarms() {
  */
 
 const FOCUS_KEY = "adderall.focus.v1";
+// Auto mode is a preference rather than part of one session, so it outlives
+// the session it was switched on in.
+const FOCUS_AUTO_KEY = "adderall.focus.auto";
 const FOCUS_PERSIST = [
   "active", "projectId", "rootId", "rootTitle", "taskId", "taskTitle",
   "taskDescription", "path", "stepsLeft",
@@ -3316,7 +3319,52 @@ const focus = {
   skipped: [],
   cuesFired: [],
   timer: null,
+  auto: false,        // move on by itself when the timer runs out
 };
+
+function loadFocusAuto() {
+  try { focus.auto = localStorage.getItem(FOCUS_AUTO_KEY) === "1"; } catch {}
+  renderFocusAuto();
+}
+
+function setFocusAuto(on) {
+  focus.auto = on;
+  try { localStorage.setItem(FOCUS_AUTO_KEY, on ? "1" : "0"); } catch {}
+  renderFocusAuto();
+  toast(on ? "Auto on: when time runs out, Focus moves to the next task by itself."
+           : "Auto off: Focus waits for you when time runs out.");
+}
+
+function renderFocusAuto() {
+  const btn = $("f-auto");
+  btn.textContent = focus.auto ? "⏭ Auto: on" : "⏭ Auto: off";
+  btn.setAttribute("aria-pressed", String(focus.auto));
+  btn.classList.toggle("on", focus.auto);
+}
+
+/* Time is up and Auto is on: leave this task open, as Next task would, and
+ * move on without waiting for a click. Said out loud (toast + notification),
+ * because a screen that changed by itself while you looked away is exactly
+ * the "wait, what happened" moment this app is meant to prevent. */
+let focusAutoMoving = false;  // one move per time-up, however slow the server
+
+async function autoAdvanceFocus() {
+  const was = focus.taskTitle;
+  const id = focus.taskId;
+  if (!id || focusAutoMoving) return;
+  focusAutoMoving = true;
+  try {
+    focus.skipped.push(id);
+    await patchTask(id, { status: "todo" });
+    if (await advanceFocus()) {
+      const msg = `⏭ Time's up on “${was}”. Now: “${focus.taskTitle}”`;
+      toast(msg);
+      notify(msg);
+    }
+  } finally {
+    focusAutoMoving = false;
+  }
+}
 
 function saveFocus() {
   try {
@@ -3535,6 +3583,10 @@ function renderFocusPill() {
 function focusTick() {
   if (!focus.active) return;
   if (!focus.paused) fireFocusCues();
+  if (focus.auto && !focus.paused && !focus.advancing && focusRemainingSec() <= 0) {
+    autoAdvanceFocus();
+    return;
+  }
   if (focus.open) drawFocusTimers();
   else renderFocusPill();
 }
@@ -3834,6 +3886,7 @@ function wire() {
   });
   $("f-done").addEventListener("click", finishFocus);
   $("f-skip").addEventListener("click", skipFocus);
+  $("f-auto").addEventListener("click", () => setFocusAuto(!focus.auto));
   $("f-pause").addEventListener("click", () => {
     focus.paused = !focus.paused;
     $("f-pause").textContent = focus.paused ? "▶ Resume" : "⏸ Pause";
@@ -3905,6 +3958,7 @@ async function boot() {
   // custom ones are ready, so nothing is silent and nothing is blocked.
   Motion.loadCustom();
   wire();
+  loadFocusAuto();
   restoreFocus();  // a session survives reloads — pick it back up
   try {
     settings = await api("/settings");
