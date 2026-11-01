@@ -1058,10 +1058,12 @@ function taskNode(task, isSub) {
     el.appendChild(badges);
   }
 
-  if (!collapsed && (subs.length || composing)) {
+  const waiting = pendingFor(task.id);
+  if (!collapsed && (subs.length || composing || waiting.length)) {
     const wrap = document.createElement("div");
     wrap.className = "subtasks";
     for (const sub of subs) wrap.appendChild(taskNode(sub, true));
+    for (const p of waiting) wrap.append(...shimmerRows(p));
     if (composing) wrap.appendChild(subtaskComposer(task.id));
     el.appendChild(wrap);
   }
@@ -1329,6 +1331,9 @@ function render() {
   list.replaceChildren();
   const active = state.tasks.filter(
     (t) => t.status === "todo" || t.status === "in_progress");
+  // New top-level tasks on their way: a placeholder where the eye already is,
+  // at the head of the list under the box they were typed into.
+  for (const p of pendingFor(null)) list.append(...shimmerRows(p));
   for (const t of sortActive(active)) list.appendChild(taskNode(t, false));
   // The compiled list has nowhere to put a new task and no order of its own
   // to drag one into, so the box and the hint about dragging both stand down
@@ -1336,7 +1341,7 @@ function render() {
   const all = !!state.all_tasks;
   $("add-form").hidden = all;
   $("all-hint").hidden = !all;
-  $("empty-hint").hidden = all || active.length > 0;
+  $("empty-hint").hidden = all || active.length > 0 || pendingFor(null).length > 0;
   $("list-hint").hidden = all || active.length === 0;
   // Nothing to sort is nothing to decide about: the bar arrives with the list.
   $("list-toolbar").hidden = active.length === 0;
@@ -1699,26 +1704,78 @@ function xpFloat(amount) {
 
 /* ---------------- task actions ---------------- */
 
+/* ---- placeholders for tasks still being made ----
+ * Creating a task waits on the server, and on the AI more often than not, so
+ * for a second or ten there is nothing to show. A shimmering row where the
+ * new one will land says "it's coming" instead of leaving you wondering if
+ * the click took. Each entry is {parentId, count, label}; null parentId is
+ * the top of the list. */
+const pendingRows = new Map();
+let pendingSeq = 0;
+
+function pendingFor(parentId) {
+  return [...pendingRows.values()].filter((p) => p.parentId === parentId);
+}
+
+function startPending(parentId, count, label) {
+  const id = ++pendingSeq;
+  pendingRows.set(id, { parentId, count, label });
+  render();
+  return id;
+}
+
+/* Taken off without a redraw when the reply is about to redraw anyway. */
+function endPending(id, redraw = true) {
+  if (pendingRows.delete(id) && redraw) render();
+}
+
+function shimmerRows({ count, label }) {
+  return Array.from({ length: count }, (_, i) => {
+    const el = document.createElement("div");
+    el.className = "task shimmer-row";
+    el.setAttribute("role", "status");
+    el.setAttribute("aria-label", label);
+    if (i) el.setAttribute("aria-hidden", "true");
+    const row = document.createElement("div");
+    row.className = "task-row";
+    const box = document.createElement("span");
+    box.className = "shimmer shimmer-box";
+    const line = document.createElement("span");
+    line.className = "shimmer shimmer-line";
+    // Lines of a few lengths, so a stack of them reads as tasks, not stripes.
+    line.style.width = [62, 44, 54, 38][i % 4] + "%";
+    row.append(box, line);
+    el.appendChild(row);
+    return el;
+  });
+}
+
 async function addTask(title, parentId = null) {
   // The box kicks as it lets go, so the eye is already travelling down to the
   // list by the time the new row arrives there. Staging, in one line.
   if (!parentId) Motion.kick($("add-form"), "sent");
+  const pending = startPending(parentId, 1, `Adding “${title}”…`);
   try {
-    applyState(await api("/tasks", {
+    const next = await api("/tasks", {
       method: "POST",
       body: JSON.stringify({ title, parent_id: parentId }),
-    }));
-  } catch (e) { toast(e.message, true); }
+    });
+    endPending(pending, false);
+    applyState(next);
+  } catch (e) { endPending(pending); toast(e.message, true); }
 }
 
 async function breakdown(id, btn) {
   if (btn) { btn.disabled = true; btn.textContent = "…"; }
+  const pending = startPending(id, 3, "Breaking this task down…");
   try {
-    applyState(await api(`/tasks/${id}/breakdown`, {
+    const next = await api(`/tasks/${id}/breakdown`, {
       method: "POST",
       body: JSON.stringify({ granularity: Number($("add-granularity").value) || null }),
-    }));
-  } catch (e) { toast(e.message, true); }
+    });
+    endPending(pending, false);
+    applyState(next);
+  } catch (e) { endPending(pending); toast(e.message, true); }
   if (btn) { btn.disabled = false; btn.textContent = "⚡"; }
 }
 
@@ -2593,21 +2650,26 @@ function maybeShowThankless() {
 
 /* ---------------- braindump ---------------- */
 
+/* The dialog steps aside straight away and the list shows where the tasks
+ * will land while the deep model thinks. The text stays in the box until the
+ * tasks exist, so a failure reopens it with nothing lost. */
 async function compileBraindump() {
   const text = $("b-text").value.trim();
   if (!text) return;
   const btn = $("b-compile");
   btn.disabled = true;
-  $("b-status").textContent = "Compiling… (the deep model is thinking, this can take a moment)";
+  Motion.closeDialog($("modal-braindump"));
+  const pending = startPending(null, 3, "Compiling your braindump into tasks…");
   try {
     const res = await api("/compile", { method: "POST", body: JSON.stringify({ text }) });
+    endPending(pending, false);
     applyState(res);
     $("b-text").value = "";
-    $("modal-braindump").close();
     if (!res.queued) toast("Braindump compiled into tasks ✓");
   } catch (e) {
-    $("b-status").textContent = "";
+    endPending(pending);
     toast(e.message, true);
+    $("modal-braindump").showModal();
   }
   btn.disabled = false;
   $("b-status").textContent = "";
