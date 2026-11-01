@@ -2733,3 +2733,15 @@ def test_a_template_needs_a_name_and_a_task(client):
                        json={"name": "   "}).status_code == 400
     assert client.post("/api/tasks/nope/template",
                        json={"name": "x"}).status_code == 404
+
+
+def test_overview_has_xp_per_hour_for_each_day(client):
+    state = create(client, title="paid", estimated_time=30, impact=8, effort=3)
+    tid = find(state, "paid")["id"]
+    client.post(f"/api/tasks/{tid}/complete", json={"actual_time": 25})
+    data = client.get("/api/overview").json()
+    series = data["xp_hourly"]
+    assert len(series) == len(data["trend"])
+    today = series[-1]
+    assert today["xp"] > 0 and today["per_hour"] > 0
+    assert all(d["per_hour"] is None for d in series[:-1])

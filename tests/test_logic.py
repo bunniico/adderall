@@ -1580,3 +1580,34 @@ def test_an_unreadable_budget_reads_as_none_rather_than_crashing():
     assert logic.daily_budget({"daily_budget_usd": None}) == 0.0
     assert logic.daily_budget({"daily_budget_usd": "twopence"}) == 0.0
     assert logic.daily_budget({"daily_budget_usd": -5}) == 0.0
+
+
+# ---- XP per hour, day by day (the Overview chart) ----
+
+def test_hourly_xp_by_day_buckets_by_local_day_and_leaves_gaps():
+    from datetime import date
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo("America/New_York")
+    rows = [
+        # 23:30 local on the 3rd (03:30 UTC on the 4th) belongs to the 3rd.
+        {"xp": 30, "estimated_time": 60, "finished_at": "2026-10-04T03:30:00+00:00"},
+        {"xp": 10, "estimated_time": 30, "finished_at": "2026-10-03T15:00:00+00:00"},
+        {"xp": 50, "estimated_time": 50, "finished_at": "2026-10-05T15:00:00+00:00"},
+    ]
+    series = logic.hourly_xp_by_day(rows, 0.0, tz, 3, date(2026, 10, 5))
+    assert [d["day"] for d in series] == ["2026-10-03", "2026-10-04", "2026-10-05"]
+    assert series[0] == {"day": "2026-10-03", "xp": 40, "minutes": 90, "per_hour": 26.7}
+    assert series[1]["per_hour"] is None and series[1]["xp"] == 0
+    assert series[2]["per_hour"] == 60.0
+
+
+def test_hourly_xp_by_day_uses_the_buffered_estimate_like_the_rail():
+    from datetime import date, timezone as tzmod
+    rows = [{"xp": 39, "estimated_time": 30, "finished_at": "2026-10-05T12:00:00+00:00"}]
+    series = logic.hourly_xp_by_day(rows, 0.30, tzmod.utc, 1, date(2026, 10, 5))
+    buffered = logic.buffered_estimate(30, 0.30)
+    assert series[0]["minutes"] == buffered
+    assert series[0]["per_hour"] == round(39 / buffered * 60, 1)
+    # ...and it agrees with the rail's per-minute figure for that same day.
+    per_min = logic.average_xp_per_minute([{"xp": 39, "estimated_time": 30}], 0.30)
+    assert abs(series[0]["per_hour"] - per_min * 60) < 0.1
