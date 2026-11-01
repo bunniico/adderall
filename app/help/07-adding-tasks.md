@@ -4,7 +4,7 @@ Type into the box at the top of a list and press Enter.
 
 ## How it works
 
-A new task lands in the project you are on. In the background, the AI estimates how long it takes, suggests impact and effort, and suggests a start time. Each of those can be turned off in ⚙ Settings, and each can be changed by hand.
+A new task lands in the project you are on. While it is being made, a shimmering placeholder row shows where it will appear (several, for a breakdown or a braindump), so you know the click took. In the background, the AI estimates how long it takes, suggests impact and effort, and suggests a start time. Each of those can be turned off in ⚙ Settings, and each can be changed by hand.
 
 **Dates in the title.** With *Read deadlines/repeats from the title* on, the app reads scheduling words straight off what you typed and tidies them out of the title:
 

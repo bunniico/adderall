@@ -1058,10 +1058,12 @@ function taskNode(task, isSub) {
     el.appendChild(badges);
   }
 
-  if (!collapsed && (subs.length || composing)) {
+  const waiting = pendingFor(task.id);
+  if (!collapsed && (subs.length || composing || waiting.length)) {
     const wrap = document.createElement("div");
     wrap.className = "subtasks";
     for (const sub of subs) wrap.appendChild(taskNode(sub, true));
+    for (const p of waiting) wrap.append(...shimmerRows(p));
     if (composing) wrap.appendChild(subtaskComposer(task.id));
     el.appendChild(wrap);
   }
@@ -1329,6 +1331,9 @@ function render() {
   list.replaceChildren();
   const active = state.tasks.filter(
     (t) => t.status === "todo" || t.status === "in_progress");
+  // New top-level tasks on their way: a placeholder where the eye already is,
+  // at the head of the list under the box they were typed into.
+  for (const p of pendingFor(null)) list.append(...shimmerRows(p));
   for (const t of sortActive(active)) list.appendChild(taskNode(t, false));
   // The compiled list has nowhere to put a new task and no order of its own
   // to drag one into, so the box and the hint about dragging both stand down
@@ -1336,7 +1341,7 @@ function render() {
   const all = !!state.all_tasks;
   $("add-form").hidden = all;
   $("all-hint").hidden = !all;
-  $("empty-hint").hidden = all || active.length > 0;
+  $("empty-hint").hidden = all || active.length > 0 || pendingFor(null).length > 0;
   $("list-hint").hidden = all || active.length === 0;
   // Nothing to sort is nothing to decide about: the bar arrives with the list.
   $("list-toolbar").hidden = active.length === 0;
@@ -1388,12 +1393,11 @@ function renderRail() {
   $("rail-goal").textContent = on ? `${xp.into_level} / ${xp.level_span}` : "off";
   $("rail-goal-fill").style.width = (on ? xp.progress * 100 : 0) + "%";
   $("rail-xp").textContent = on ? `level ${xp.level} · ${xp.total} XP earned` : "";
-  $("rail-minute-xp").textContent =
-    on && xp.per_minute != null ? xp.per_minute.toFixed(2) : "—";
+  railAverage("rail-minute-xp", on ? xp.per_minute : null, 2);
   // Pace rather than rate: what the last month has paid out per day, quiet
   // days included. The window is only in the tooltip because the row is a
   // label and a number wide, and an unlabelled 30 would read as the value.
-  $("rail-daily-xp").textContent = on && xp.daily != null ? Math.round(xp.daily) : "—";
+  railAverage("rail-daily-xp", on ? xp.daily : null, 0, 1);
   $("rail-daily-xp-label").title =
     on ? `XP a day over the last ${xp.daily_days} days, quiet days included` : "";
 
@@ -1405,6 +1409,53 @@ function renderRail() {
   const xpLeft = xpToEarn(open);
   $("rail-time-total").textContent = open.length ? fmtMinutes(timeLeft) : "—";
   $("rail-xp-left").textContent = !on ? "off" : open.length ? xpLeft : "—";
+}
+
+/* The two averages under the level, drawn so a change is seen: the number
+ * counts from where it was to where it is, and the difference floats up off
+ * it ("+0.4"). Nothing moves on the first draw or when the value is gone, and
+ * reduced motion gets the new number straight away, float and all. */
+const railShown = {};   // id -> the value currently on screen
+const RAIL_COUNT_MS = 900;
+
+function railAverage(id, value, digits, floatDigits = digits) {
+  const el = $(id);
+  const prev = railShown[id];
+  railShown[id] = value;
+  if (value == null) { el.textContent = "—"; return; }
+  const fmt = (v) => v.toFixed(digits);
+  if (prev == null || fmt(prev) === fmt(value)) {
+    if (el.dataset.counting !== "1") el.textContent = fmt(value);
+    return;
+  }
+  const delta = value - prev;
+  railFloat(el, `${delta > 0 ? "+" : "−"}${Math.abs(delta).toFixed(floatDigits || 1)}`,
+            delta < 0);
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    el.textContent = fmt(value);
+    return;
+  }
+  const started = performance.now();
+  el.dataset.counting = "1";
+  const step = (now) => {
+    if (railShown[id] !== value) return;  // a newer value took over
+    const t = Math.min(1, (now - started) / RAIL_COUNT_MS);
+    const eased = 1 - Math.pow(1 - t, 3);
+    el.textContent = fmt(prev + delta * eased);
+    if (t < 1) requestAnimationFrame(step);
+    else delete el.dataset.counting;
+  };
+  requestAnimationFrame(step);
+}
+
+function railFloat(el, text, down) {
+  const float = document.createElement("span");
+  float.className = "rail-float" + (down ? " down" : "");
+  float.textContent = text;
+  float.setAttribute("aria-hidden", "true");
+  el.parentElement.appendChild(float);
+  float.addEventListener("animationend", () => float.remove());
+  setTimeout(() => float.remove(), 2000);  // in case the animation never runs
 }
 
 /* The list is rebuilt wholesale on every state change, so anything the user
@@ -1541,6 +1592,83 @@ function wireConnectionBanner() {
   window.addEventListener("offline", show);
   window.addEventListener("online", hide);
   if (!navigator.onLine) show();
+}
+
+/* ---------------- 💬 Ask ----------------
+ * A conversation with the app itself. Kept in the page, and sent whole on
+ * each message; the server stores none of it. When a reply changed something,
+ * the fresh state comes back with it and the list redraws. */
+const chatHistory = [];
+let chatBusy = false;
+
+function chatBubble(role, text, actions = []) {
+  const el = document.createElement("div");
+  el.className = `chat-msg ${role}`;
+  el.textContent = text;  // plain text: a model's reply is never HTML here
+  if (actions.length) {
+    const row = document.createElement("div");
+    row.className = "chat-actions";
+    for (const a of actions) {
+      const chip = document.createElement("span");
+      chip.className = "chat-action" + (a.ok ? "" : " failed");
+      chip.textContent = (a.ok ? "🔧 " : "⚠ ") + a.tool.replaceAll("_", " ");
+      chip.title = a.ok ? "Ran" : "This one failed";
+      row.appendChild(chip);
+    }
+    el.appendChild(row);
+  }
+  const log = $("chat-log");
+  log.appendChild(el);
+  log.scrollTop = log.scrollHeight;
+  return el;
+}
+
+async function sendChat() {
+  const input = $("chat-input");
+  const text = input.value.trim();
+  if (!text || chatBusy) return;
+  chatBusy = true;
+  $("chat-send").disabled = true;
+  input.value = "";
+  chatHistory.push({ role: "user", content: text });
+  chatBubble("user", text);
+  const pending = chatBubble("assistant pending", "Thinking…");
+  try {
+    const res = await api("/chat", {
+      method: "POST", body: JSON.stringify({ messages: chatHistory.slice(-60) }),
+    });
+    pending.remove();
+    chatHistory.push({ role: "assistant", content: res.reply });
+    chatBubble("assistant", res.reply, res.actions || []);
+    if (res.state) applyState(res.state);
+  } catch (e) {
+    pending.remove();
+    chatHistory.pop();  // not answered, so not part of the conversation
+    chatBubble("assistant error", e.message);
+    input.value = text;
+  }
+  chatBusy = false;
+  $("chat-send").disabled = false;
+  input.focus();
+}
+
+function wireChat() {
+  $("btn-chat").addEventListener("click", () => {
+    $("modal-chat").showModal();
+    $("chat-input").focus();
+  });
+  $("chat-form").addEventListener("submit", (e) => { e.preventDefault(); sendChat(); });
+  $("chat-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      sendChat();
+    }
+  });
+  $("chat-clear").addEventListener("click", () => {
+    chatHistory.length = 0;
+    for (const el of $("chat-log").querySelectorAll(".chat-msg")) el.remove();
+    $("chat-input").focus();
+  });
 }
 
 function celebrate() {
@@ -1699,26 +1827,78 @@ function xpFloat(amount) {
 
 /* ---------------- task actions ---------------- */
 
+/* ---- placeholders for tasks still being made ----
+ * Creating a task waits on the server, and on the AI more often than not, so
+ * for a second or ten there is nothing to show. A shimmering row where the
+ * new one will land says "it's coming" instead of leaving you wondering if
+ * the click took. Each entry is {parentId, count, label}; null parentId is
+ * the top of the list. */
+const pendingRows = new Map();
+let pendingSeq = 0;
+
+function pendingFor(parentId) {
+  return [...pendingRows.values()].filter((p) => p.parentId === parentId);
+}
+
+function startPending(parentId, count, label) {
+  const id = ++pendingSeq;
+  pendingRows.set(id, { parentId, count, label });
+  render();
+  return id;
+}
+
+/* Taken off without a redraw when the reply is about to redraw anyway. */
+function endPending(id, redraw = true) {
+  if (pendingRows.delete(id) && redraw) render();
+}
+
+function shimmerRows({ count, label }) {
+  return Array.from({ length: count }, (_, i) => {
+    const el = document.createElement("div");
+    el.className = "task shimmer-row";
+    el.setAttribute("role", "status");
+    el.setAttribute("aria-label", label);
+    if (i) el.setAttribute("aria-hidden", "true");
+    const row = document.createElement("div");
+    row.className = "task-row";
+    const box = document.createElement("span");
+    box.className = "shimmer shimmer-box";
+    const line = document.createElement("span");
+    line.className = "shimmer shimmer-line";
+    // Lines of a few lengths, so a stack of them reads as tasks, not stripes.
+    line.style.width = [62, 44, 54, 38][i % 4] + "%";
+    row.append(box, line);
+    el.appendChild(row);
+    return el;
+  });
+}
+
 async function addTask(title, parentId = null) {
   // The box kicks as it lets go, so the eye is already travelling down to the
   // list by the time the new row arrives there. Staging, in one line.
   if (!parentId) Motion.kick($("add-form"), "sent");
+  const pending = startPending(parentId, 1, `Adding “${title}”…`);
   try {
-    applyState(await api("/tasks", {
+    const next = await api("/tasks", {
       method: "POST",
       body: JSON.stringify({ title, parent_id: parentId }),
-    }));
-  } catch (e) { toast(e.message, true); }
+    });
+    endPending(pending, false);
+    applyState(next);
+  } catch (e) { endPending(pending); toast(e.message, true); }
 }
 
 async function breakdown(id, btn) {
   if (btn) { btn.disabled = true; btn.textContent = "…"; }
+  const pending = startPending(id, 3, "Breaking this task down…");
   try {
-    applyState(await api(`/tasks/${id}/breakdown`, {
+    const next = await api(`/tasks/${id}/breakdown`, {
       method: "POST",
       body: JSON.stringify({ granularity: Number($("add-granularity").value) || null }),
-    }));
-  } catch (e) { toast(e.message, true); }
+    });
+    endPending(pending, false);
+    applyState(next);
+  } catch (e) { endPending(pending); toast(e.message, true); }
   if (btn) { btn.disabled = false; btn.textContent = "⚡"; }
 }
 
@@ -2593,21 +2773,26 @@ function maybeShowThankless() {
 
 /* ---------------- braindump ---------------- */
 
+/* The dialog steps aside straight away and the list shows where the tasks
+ * will land while the deep model thinks. The text stays in the box until the
+ * tasks exist, so a failure reopens it with nothing lost. */
 async function compileBraindump() {
   const text = $("b-text").value.trim();
   if (!text) return;
   const btn = $("b-compile");
   btn.disabled = true;
-  $("b-status").textContent = "Compiling… (the deep model is thinking, this can take a moment)";
+  Motion.closeDialog($("modal-braindump"));
+  const pending = startPending(null, 3, "Compiling your braindump into tasks…");
   try {
     const res = await api("/compile", { method: "POST", body: JSON.stringify({ text }) });
+    endPending(pending, false);
     applyState(res);
     $("b-text").value = "";
-    $("modal-braindump").close();
     if (!res.queued) toast("Braindump compiled into tasks ✓");
   } catch (e) {
-    $("b-status").textContent = "";
+    endPending(pending);
     toast(e.message, true);
+    $("modal-braindump").showModal();
   }
   btn.disabled = false;
   $("b-status").textContent = "";
@@ -2655,6 +2840,21 @@ function fillDayStarts() {
       select.appendChild(opt);
     }
   }
+}
+
+/* Says out loud that an end hour before the start hour is a night shift,
+ * not a mistake, and which day the hours after midnight belong to. */
+function updateOvernightNote() {
+  const start = Number($("s-day-start").value);
+  const end = Number($("s-day-end").value);
+  const note = $("s-day-overnight");
+  note.hidden = !(end < start);
+  if (note.hidden) return;
+  const hour = (h) => new Date(2000, 0, 1, h)
+    .toLocaleTimeString(undefined, { hour: "numeric" });
+  note.textContent = `🌙 Overnight: your day runs from ${hour(start)} to ` +
+    `${hour(end)} the next morning, and the hours after midnight count as ` +
+    `part of the day the shift started on.`;
 }
 
 /* What the cap has actually learned to be, in a sentence. A setting that
@@ -2751,6 +2951,7 @@ function openSettings() {
   }
   $("s-day-start").value = String(settings.day_start ?? 9);
   $("s-day-end").value = String(settings.day_end ?? 22);
+  updateOvernightNote();
   $("s-spread").checked = settings.spread_tasks !== false;
   $("s-capacity-note").textContent = capacityLearned();
   $("s-threshold").value = settings.matrix_threshold;
@@ -3128,6 +3329,9 @@ function listenForAlarms() {
  */
 
 const FOCUS_KEY = "adderall.focus.v1";
+// Auto mode is a preference rather than part of one session, so it outlives
+// the session it was switched on in.
+const FOCUS_AUTO_KEY = "adderall.focus.auto";
 const FOCUS_PERSIST = [
   "active", "projectId", "rootId", "rootTitle", "taskId", "taskTitle",
   "taskDescription", "path", "stepsLeft",
@@ -3157,7 +3361,52 @@ const focus = {
   skipped: [],
   cuesFired: [],
   timer: null,
+  auto: false,        // move on by itself when the timer runs out
 };
+
+function loadFocusAuto() {
+  try { focus.auto = localStorage.getItem(FOCUS_AUTO_KEY) === "1"; } catch {}
+  renderFocusAuto();
+}
+
+function setFocusAuto(on) {
+  focus.auto = on;
+  try { localStorage.setItem(FOCUS_AUTO_KEY, on ? "1" : "0"); } catch {}
+  renderFocusAuto();
+  toast(on ? "Auto on: when time runs out, Focus moves to the next task by itself."
+           : "Auto off: Focus waits for you when time runs out.");
+}
+
+function renderFocusAuto() {
+  const btn = $("f-auto");
+  btn.textContent = focus.auto ? "⏭ Auto: on" : "⏭ Auto: off";
+  btn.setAttribute("aria-pressed", String(focus.auto));
+  btn.classList.toggle("on", focus.auto);
+}
+
+/* Time is up and Auto is on: leave this task open, as Next task would, and
+ * move on without waiting for a click. Said out loud (toast + notification),
+ * because a screen that changed by itself while you looked away is exactly
+ * the "wait, what happened" moment this app is meant to prevent. */
+let focusAutoMoving = false;  // one move per time-up, however slow the server
+
+async function autoAdvanceFocus() {
+  const was = focus.taskTitle;
+  const id = focus.taskId;
+  if (!id || focusAutoMoving) return;
+  focusAutoMoving = true;
+  try {
+    focus.skipped.push(id);
+    await patchTask(id, { status: "todo" });
+    if (await advanceFocus()) {
+      const msg = `⏭ Time's up on “${was}”. Now: “${focus.taskTitle}”`;
+      toast(msg);
+      notify(msg);
+    }
+  } finally {
+    focusAutoMoving = false;
+  }
+}
 
 function saveFocus() {
   try {
@@ -3376,6 +3625,10 @@ function renderFocusPill() {
 function focusTick() {
   if (!focus.active) return;
   if (!focus.paused) fireFocusCues();
+  if (focus.auto && !focus.paused && !focus.advancing && focusRemainingSec() <= 0) {
+    autoAdvanceFocus();
+    return;
+  }
   if (focus.open) drawFocusTimers();
   else renderFocusPill();
 }
@@ -3591,6 +3844,8 @@ function wire() {
   $("btn-settings").addEventListener("click", openSettings);
   $("s-save").addEventListener("click", saveSettings);
   wireSettingsTabs();
+  $("s-day-start").addEventListener("change", updateOvernightNote);
+  $("s-day-end").addEventListener("change", updateOvernightNote);
   $("s-clickup-sync").addEventListener("click", syncClickUp);
   $("s-buffer").addEventListener("input", () =>
     $("s-buffer-val").textContent = $("s-buffer").value + "%");
@@ -3674,6 +3929,7 @@ function wire() {
   });
   $("f-done").addEventListener("click", finishFocus);
   $("f-skip").addEventListener("click", skipFocus);
+  $("f-auto").addEventListener("click", () => setFocusAuto(!focus.auto));
   $("f-pause").addEventListener("click", () => {
     focus.paused = !focus.paused;
     $("f-pause").textContent = focus.paused ? "▶ Resume" : "⏸ Pause";
@@ -3726,6 +3982,7 @@ function wire() {
   wireOverview();
   wireHabits();
   wireHelp();
+  wireChat();
 
   // Ask for notification permission on first interaction (needed for alarms).
   document.body.addEventListener("click", () => {
@@ -3744,6 +4001,7 @@ async function boot() {
   // custom ones are ready, so nothing is silent and nothing is blocked.
   Motion.loadCustom();
   wire();
+  loadFocusAuto();
   restoreFocus();  // a session survives reloads — pick it back up
   try {
     settings = await api("/settings");
@@ -3754,7 +4012,7 @@ async function boot() {
     applyState(await api("/state"));
     // wireCalendar() has already read back which view you were last in.
     if (cal.mode && mod("calendar")) setCalendarMode(true);
-    const aiOn = ["magic_todo", "braindump", "ai_estimates"].some(mod);
+    const aiOn = ["magic_todo", "braindump", "ai_estimates", "ai_chat"].some(mod);
     if (!settings.has_api_key && aiOn)
       toast("No Anthropic API key set — AI features are off. Add one in ⚙ Settings.");
   } catch (e) {

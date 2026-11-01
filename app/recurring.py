@@ -129,11 +129,11 @@ def _end_of_working_day(now: datetime, settings: dict, tz) -> datetime:
     day, which is a number this app already keeps (`day_end`, the hour your
     day closes).
     """
-    window = logic.day_planner(settings).window_end
-    minute = min(window, 24 * 60 - 1)
-    local = now.astimezone(tz)
-    return (datetime.combine(local.date(), datetime.min.time(), tzinfo=tz)
-            + timedelta(minutes=minute))
+    planner = logic.day_planner(settings)
+    minute = min(planner.window_end, 24 * 60 - 1)
+    # The working day, which for an overnight shift is the one still running
+    # at two in the morning rather than the date that has just begun.
+    return planner._instant(planner.local_day(now), minute).astimezone(tz)
 
 
 def lead_horizon(rule: dict, now: datetime, tz) -> datetime:

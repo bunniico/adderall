@@ -18,7 +18,7 @@ A finished task pays its rate for every minute of its **padded estimate** (the e
 
 **Speed bonus.** If you time a task (with ▶ Start or [Focus mode](20-focus-mode.md)) and finish inside its padded estimate, it pays up to 20% more. The bonus grows as you get closer to your raw estimate and is full once you are inside it. Going faster than that earns nothing extra, and running over costs nothing.
 
-Your level and a progress bar sit in the top-right corner. When XP lands, the bar slides and `+62 XP` floats up under it; passing a level runs the bar out to full before starting the next one.
+Your level and a progress bar sit in the top-right corner. When XP lands, the bar slides and `+62 XP` floats up under it; passing a level runs the bar out to full before starting the next one. The bar's colour says how far through the level you are, red when it has just started, yellow halfway, green as the next level gets close. The wave and bubbles stop if your system asks for reduced motion.
 
 Levels get steadily further apart: 100 XP to reach level 2, another 200 to reach level 3, and so on.
 
@@ -26,6 +26,8 @@ The side rail shows two averages:
 
 - **Average XP / minute**, across every estimated task that has ever paid out. This is the number to raise: it goes up when you spend your time on work that matters and when tasks go to plan.
 - **Average daily XP** over the last 30 days, counting quiet days. The Overview repeats this one as a tile.
+
+When either one changes, it counts up (or down) to its new value and the difference floats off it, like `+0.14`, so you can see what the task you just finished did to your average.
 
 The rail's **XP left** adds up what finishing every open task in the list would pay, before any speed bonus. The Done list keeps what each task paid. The whole thing, confetti included, is one switch: the *XP and levels* [module](27-modules.md) in ⚙ Settings.
 

@@ -38,6 +38,17 @@ def test_normalize_converts_due_date_and_appends_url():
     assert got["description"] == "Get it out the door.\n\nhttps://app.clickup.com/t/abc123"
 
 
+def test_normalize_reads_completed_from_the_status_type():
+    def status(kind):
+        return clickup._normalize({"id": "x", "name": "t",
+                                   "status": {"status": "whatever", "type": kind}})
+    assert status("closed")["completed"] is True
+    assert status("done")["completed"] is True
+    assert status("open")["completed"] is False
+    assert status("custom")["completed"] is False
+    assert clickup._normalize({"id": "x", "name": "t"})["completed"] is False
+
+
 def test_normalize_handles_missing_fields():
     got = clickup._normalize({"id": "x", "name": "", "due_date": None})
     assert got["title"] == "Untitled ClickUp task"
@@ -294,6 +305,129 @@ def test_sync_without_a_token_raises_and_does_nothing(monkeypatch, temp_db):
         clickup.sync({"clickup_api_token": ""})
     assert called == []
     assert db.list_projects() == [db.ensure_project()]  # no "ClickUp" tab appeared
+
+
+# ---------------------------------------------------------------------------
+# finishing tasks that were completed in ClickUp
+# ---------------------------------------------------------------------------
+
+def _imported(db, title):
+    project = next(p for p in db.list_projects() if p["name"] == "ClickUp")
+    return next(t for t in db.list_tasks(project["id"]) if t["title"] == title)
+
+
+def test_a_task_completed_in_clickup_is_completed_here(monkeypatch, temp_db):
+    db = temp_db
+    monkeypatch.setattr(clickup, "fetch_assigned_tasks",
+                        lambda token: [_remote("c1", "Finish me"), _remote("c2", "Keep me")])
+    clickup.sync({"clickup_api_token": "pk_test"})
+
+    # c1 was closed in ClickUp, so the open-tasks pass no longer returns it.
+    asked = []
+    monkeypatch.setattr(clickup, "fetch_assigned_tasks",
+                        lambda token: [_remote("c2", "Keep me")])
+    monkeypatch.setattr(clickup, "fetch_completed",
+                        lambda token, ids: asked.extend(ids) or {"c1"})
+    result = clickup.sync({"clickup_api_token": "pk_test"})
+
+    assert asked == ["c1"]  # only the one that dropped off is looked up
+    done = _imported(db, "Finish me")
+    assert done["status"] == "done"
+    assert result["completed"] == [done["id"]]
+    assert _imported(db, "Keep me")["status"] == "todo"
+
+
+def test_a_task_that_drops_off_for_another_reason_is_left_alone(monkeypatch, temp_db):
+    db = temp_db
+    monkeypatch.setattr(clickup, "fetch_assigned_tasks",
+                        lambda token: [_remote("c1", "Reassigned")])
+    clickup.sync({"clickup_api_token": "pk_test"})
+
+    monkeypatch.setattr(clickup, "fetch_assigned_tasks", lambda token: [])
+    monkeypatch.setattr(clickup, "fetch_completed", lambda token, ids: set())
+    result = clickup.sync({"clickup_api_token": "pk_test"})
+
+    assert result["completed"] == []
+    assert _imported(db, "Reassigned")["status"] == "todo"
+
+
+def test_a_done_type_task_still_on_the_open_list_is_completed(monkeypatch, temp_db):
+    """A `done` status can still come back from the open-tasks pass, so the
+    pass itself has to read it, not just the lookup of tasks that vanished."""
+    db = temp_db
+    monkeypatch.setattr(clickup, "fetch_assigned_tasks",
+                        lambda token: [_remote("c1", "Shipped")])
+    clickup.sync({"clickup_api_token": "pk_test"})
+
+    monkeypatch.setattr(clickup, "fetch_assigned_tasks",
+                        lambda token: [{**_remote("c1", "Shipped"), "completed": True}])
+    clickup.sync({"clickup_api_token": "pk_test"})
+    assert _imported(db, "Shipped")["status"] == "done"
+
+
+def test_an_already_completed_clickup_task_is_never_imported(monkeypatch, temp_db):
+    db = temp_db
+    monkeypatch.setattr(clickup, "fetch_assigned_tasks",
+                        lambda token: [{**_remote("c1", "Old news"), "completed": True}])
+    result = clickup.sync({"clickup_api_token": "pk_test"})
+    assert result["created"] == []
+    assert db.get_task_by_clickup_id("c1") is None
+
+
+def test_completing_from_clickup_pays_xp_like_a_tick(monkeypatch, temp_db):
+    db = temp_db
+    monkeypatch.setattr(clickup, "fetch_assigned_tasks",
+                        lambda token: [_remote("c1", "Worth something")])
+    clickup.sync({"clickup_api_token": "pk_test"})
+    task = _imported(db, "Worth something")
+    db.update_task(task["id"], {"estimated_time": 30, "impact": 8, "effort": 3})
+
+    monkeypatch.setattr(clickup, "fetch_assigned_tasks", lambda token: [])
+    monkeypatch.setattr(clickup, "fetch_completed", lambda token, ids: {"c1"})
+    clickup.sync({"clickup_api_token": "pk_test"})
+    assert db.get_task(task["id"])["xp_awarded"] > 0
+
+
+def test_a_task_you_already_finished_here_is_not_looked_up(monkeypatch, temp_db):
+    db = temp_db
+    monkeypatch.setattr(clickup, "fetch_assigned_tasks",
+                        lambda token: [_remote("c1", "Done here")])
+    clickup.sync({"clickup_api_token": "pk_test"})
+    db.update_task(_imported(db, "Done here")["id"], {"status": "discarded"})
+
+    monkeypatch.setattr(clickup, "fetch_assigned_tasks", lambda token: [])
+    asked = []
+    monkeypatch.setattr(clickup, "fetch_completed",
+                        lambda token, ids: asked.extend(ids) or set())
+    clickup.sync({"clickup_api_token": "pk_test"})
+    assert asked == []
+    assert _imported(db, "Done here")["status"] == "discarded"
+
+
+def test_fetch_completed_reads_each_task_and_skips_unreadable_ones(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        task_id = request.url.path.rsplit("/", 1)[-1]
+        if task_id == "gone":
+            return httpx.Response(404, json={"err": "Task not found"})
+        kind = "closed" if task_id == "closed1" else "open"
+        return httpx.Response(200, json={"id": task_id,
+                                         "status": {"status": "x", "type": kind}})
+
+    monkeypatch.setattr(clickup, "_client",
+                        lambda token: httpx.Client(base_url=clickup.API_BASE,
+                                                   transport=httpx.MockTransport(handler)))
+    assert clickup.fetch_completed("pk", ["closed1", "open1", "gone"]) == {"closed1"}
+
+
+def test_fetch_completed_lets_a_network_error_fail_the_sync(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("no route to host", request=request)
+
+    monkeypatch.setattr(clickup, "_client",
+                        lambda token: httpx.Client(base_url=clickup.API_BASE,
+                                                   transport=httpx.MockTransport(handler)))
+    with pytest.raises(clickup.ClickUpNetworkError):
+        clickup.fetch_completed("pk", ["c1"])
 
 
 # ---------------------------------------------------------------------------

@@ -4,7 +4,7 @@ Every task gets a time estimate, and every estimate gets padded.
 
 ## How it works
 
-**The estimate** is seeded by the AI and always yours to change: open the task and edit *Raw estimate (minutes)*.
+**The estimate** is seeded by the AI and always yours to change: open the task and edit *Raw estimate (minutes)*. The AI sees what a step belongs to and a handful of other tasks from the same list with their estimates and scores, so new numbers are sized against your list rather than guessed in a vacuum.
 
 **The time tax** is a buffer added on top of every estimate: 30% by default, adjustable from 25% to 50% in ⚙ Settings. A 45-minute task is planned as about an hour. On the calendar's Day view the tax is drawn as a striped tail on each block.
 
