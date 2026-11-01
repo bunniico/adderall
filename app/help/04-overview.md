@@ -8,6 +8,8 @@ The **Overview** tab is the first one in the strip. It reads your lists rather t
 
 **Finished work** is a chart of the last 30 days: one bar per day, minutes above and tasks below, with a line for your [day cap](17-planning-your-days.md). Days where you finished nothing are drawn rather than skipped.
 
+**XP per hour** shows, for each of the same 30 days, what that day's finished work paid for every hour of it, measured the same way as the rail's *Average XP / Minute* (XP over padded estimate). A line marks the month's average; days with nothing paid have no bar.
+
 **Next up** lists the most urgent task on each list, in the order [▶ Focus](20-focus-mode.md) would hand them to you. **Coming up** lists the nearest deadlines across every list. Each row says which tab it came from, and clicking one opens it right there.
 
 At the bottom, **Work left by list** and **Work left by category** show where the remaining work sits: per project, and per corner of the [impact/effort matrix](13-impact-and-effort.md).

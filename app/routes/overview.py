@@ -228,6 +228,11 @@ def _overview() -> dict:
                          "none")],
         "capacity": core.capacity(settings),
         "xp": core.xp_state(settings, ratios),
+        # XP per hour, day by day, over the same window as the trend.
+        "xp_hourly": logic.hourly_xp_by_day(
+            db.xp_log(OVERVIEW_TREND_DAYS),
+            logic.effective_buffer(settings, ratios), tz,
+            OVERVIEW_TREND_DAYS, today),
     }
 
 
