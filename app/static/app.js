@@ -1353,8 +1353,9 @@ function render() {
 
   // Done, dropped, and gone by. A missed beat belongs here rather than in the
   // list: it is not a thing to do any more, and it is not a thing you did.
+  // Archived ones are put away, not gone: they still count in every number.
   const finished = state.tasks.filter(
-    (t) => ["done", "discarded", "missed"].includes(t.status));
+    (t) => ["done", "discarded", "missed"].includes(t.status) && !t.archived);
   $("done-section").hidden = finished.length === 0;
   const doneList = $("done-list");
   doneList.replaceChildren();
@@ -1592,6 +1593,26 @@ function wireConnectionBanner() {
   window.addEventListener("offline", show);
   window.addEventListener("online", hide);
   if (!navigator.onLine) show();
+}
+
+/* Clear the Done list without losing anything: the tasks are flagged, not
+ * deleted, and keep counting towards XP and every average. */
+async function archiveFinished() {
+  const ids = state.tasks.filter(
+    (t) => ["done", "discarded", "missed"].includes(t.status) && !t.archived)
+    .map((t) => t.id);
+  if (!ids.length) return;
+  const move = (archived) => api("/tasks/archive", {
+    method: "POST", body: JSON.stringify({ task_ids: ids, archived }),
+  });
+  try {
+    applyState(await move(true));
+    toast(`Archived ${ids.length} finished task${ids.length === 1 ? "" : "s"}.`, false, {
+      run: async () => {
+        try { applyState(await move(false)); } catch (e) { toast(e.message, true); }
+      },
+    });
+  } catch (e) { toast(e.message, true); }
 }
 
 /* ---------------- 💬 Ask ----------------
@@ -3790,6 +3811,7 @@ function wire() {
   });
 
   $("templates-btn").addEventListener("click", openTemplates);
+  $("btn-archive-done").addEventListener("click", archiveFinished);
   // A pop-up menu closes on a click anywhere else, on Escape, and when the
   // page moves under it.
   document.addEventListener("pointerdown", (e) => {

@@ -15,6 +15,8 @@ Folds are saved per task, so the list comes back in the shape you left it, on ev
 
 **Discard** (🗑 in the task dialog) is different: it keeps the task and marks it dropped, so it moves to the *Done, dropped & missed* section.
 
+**🗄 Archive all**, inside that section, clears it out in one go. Nothing is deleted: archived tasks still count towards XP, the averages, the learned buffer and the Overview, they are just no longer drawn. The toast has an **Undo**, and reopening an archived task brings it back.
+
 ## Why it works this way
 
 A task with subtasks is one line by design, and may well be folded shut. That makes what you are about to lose invisible at the moment you click ✕, so the confirmation spells it out instead of asking a bare "are you sure".

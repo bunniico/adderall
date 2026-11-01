@@ -216,6 +216,11 @@ class DropRequest(BaseModel):
     task_ids: list[str] = Field(min_length=1, max_length=500)
 
 
+class ArchiveRequest(BaseModel):
+    task_ids: list[str] = Field(min_length=1, max_length=2000)
+    archived: bool = True
+
+
 class SettingsUpdate(BaseModel):
     model_config = {"extra": "allow"}
 
@@ -768,6 +773,15 @@ def drop_tasks(body: DropRequest):
             recurring.close_occurrence(task)
         dropped.append({"task_id": task_id, "was": was["status"]})
     return {"dropped": dropped, "state": core.state()}
+
+
+@app.post("/api/tasks/archive")
+def archive_tasks(body: ArchiveRequest):
+    """Put finished tasks away from the Done list (or, with `archived: false`,
+    bring them back). Open tasks are skipped: there is nothing finished about
+    them to put away. Archived tasks stay in every calculation."""
+    db.set_archived(body.task_ids, body.archived)
+    return core.state()
 
 
 @app.post("/api/replan")

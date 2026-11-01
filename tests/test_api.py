@@ -2790,6 +2790,51 @@ def test_overview_has_xp_per_hour_for_each_day(client):
 
 
 # ---------------------------------------------------------------------------
+# archiving the Done list
+# ---------------------------------------------------------------------------
+
+def _finish(client, title, **kw):
+    state = create(client, title=title, **kw)
+    tid = find(state, title)["id"]
+    return client.post(f"/api/tasks/{tid}/complete", json={"actual_time": 20}).json(), tid
+
+
+def test_archiving_hides_finished_tasks_but_keeps_every_number(client):
+    _, done_id = _finish(client, "done one", estimated_time=30, impact=8, effort=3)
+    state = create(client, title="dropped one")
+    dropped = find(state, "dropped one")["id"]
+    client.patch(f"/api/tasks/{dropped}", json={"status": "discarded"})
+    open_id = find(create(client, title="still open"), "still open")["id"]
+    before = client.get("/api/state").json()
+    overview_before = client.get("/api/overview").json()
+
+    after = client.post("/api/tasks/archive",
+                        json={"task_ids": [done_id, dropped, open_id]}).json()
+
+    assert find(after, "done one")["archived"] is True
+    assert find(after, "dropped one")["archived"] is True
+    assert find(after, "still open")["archived"] is False  # open tasks are skipped
+    assert after["xp"] == before["xp"]
+    assert client.get("/api/overview").json()["trend"] == overview_before["trend"]
+    from app import db
+    assert db.get_task(done_id)["updated_at"] == find(before, "done one")["updated_at"]
+
+
+def test_archiving_can_be_undone(client):
+    _, tid = _finish(client, "done one")
+    client.post("/api/tasks/archive", json={"task_ids": [tid]})
+    state = client.post("/api/tasks/archive",
+                        json={"task_ids": [tid], "archived": False}).json()
+    assert find(state, "done one")["archived"] is False
+
+
+def test_reopening_an_archived_task_unarchives_it(client):
+    _, tid = _finish(client, "done one")
+    client.post("/api/tasks/archive", json={"task_ids": [tid]})
+    state = client.patch(f"/api/tasks/{tid}", json={"status": "todo"}).json()
+    assert find(state, "done one")["archived"] is False
+
+
 # AI context: what the model is told about the rest of the list
 # ---------------------------------------------------------------------------
 
