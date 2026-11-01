@@ -2,63 +2,52 @@
 
 > Note: This application requires a Claude API key and a workspace ID if using an identity-based API key. See Anthropic's API site for more details.
 
-goblin.tools is cool, but it also sucks sometimes.
-
-Here's what I want to try to fix it:
-
-I want to make a single-user, locally hosted web app for people with executive dysfunction
+I'm making a single-user, locally hosted web app for people with executive dysfunction
 (ADHD, autism, AuDHD) designed to help us prioritize and organize tasks with minimal effort.
 
-It ports the four most useful goblin.tools ideas:
-- **Magic ToDo**, 
-- **Taskmaster**, 
-- **Estimator**,
-- **Compiler**
-
-The app automatically sets deadline and priority using a mix of the Eisenhower matrix and Action-Impact matrix. More importantly, it fixes the horrible UI goblin.tools has that never works.
-
 ## Quick start
+
+### Step 1
+
+Run these commands to clone the repository and start the docker container.
+**Alternatively, you can download the latest release by going to the releases section and clicking the "source code" button.**
 
 ```bash
 git clone https://github.com/bunniico/adderall
 docker compose up
 ```
 
-Then open <http://localhost:8000>.
+### Step 2
+That should be all you need to do as long as you have the requirements, the app should now be running.
 
-Your tasks live in a SQLite file under `./data/` and survive restarts,
-tab closes, and crashes. 
+You can now open <http://localhost:8000> in a browser, and you'll see Adderall!
 
-This also means that you can access this app on any device on the network, so if its a shared network I would probably change the configuration a bit and/or add a password/login.
+Please note that you can access this app on any device on the same network if they know the port, **using this application on a shared or public network is not recommended.**
 
-Without Docker:
+### Step 2 (Alternative)
 
+If you don't have Docker, you can also start the app with these commands:
 ```bash
 pip install -r requirements.txt
 uvicorn app.main:app --port 8000
 ```
 
-### Updating
-
-The Docker image bakes in the app code, so a plain `docker compose up` after
-pulling keeps running the **old** build. Always rebuild:
+### How to update?
 
 ```bash
 git pull
 docker compose up --build
 ```
 
-Your tasks are unaffected — they live in the mounted `./data/` volume, not in
-the image.
+Your tasks are not directly affected by updates. I may add an option to disable auto-updating in the future, or further build out the updating behavior.
 
-To not have to remember any of that, start it with the included script, which
-pulls and rebuilds every time:
-
+If you don't want to run those commands each time you want to update, I've included a shell script to do it for you:
 ```bash
 ./start.sh          # foreground, Ctrl-C to stop
 ./start.sh -d       # background
 ```
 
+**Note to other developers:**
 If the pull fails (local edits, diverged history) it says so and starts the
 version you already have, rather than refusing to launch.
 
