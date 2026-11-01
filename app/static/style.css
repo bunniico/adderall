@@ -669,6 +669,8 @@ textarea { resize: vertical; }
 .done-section { margin-top: 24px; color: var(--muted); }
 .done-section summary { cursor: pointer; }
 #done-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.done-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
+.done-actions button { padding: 4px 10px; font-size: 12.5px; }
 
 /* ---- modals ---- */
 dialog {

@@ -164,6 +164,11 @@ CREATE TABLE IF NOT EXISTS tasks (
     -- they were made from, so a re-sync can find and update them instead of
     -- creating duplicates. See clickup.py.
     clickup_id    TEXT,
+    -- Put away out of the Done list. Purely about what is drawn: an archived
+    -- task still counts everywhere the app does arithmetic (XP, averages,
+    -- the learned buffer and day cap), which is why it is a flag and not a
+    -- delete.
+    archived      INTEGER NOT NULL DEFAULT 0,
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL
 );
@@ -263,7 +268,7 @@ TASK_FIELDS = {
     "estimated_time",
     "actual_time", "impact", "effort", "status", "ack_thankless", "collapsed",
     "order_index", "started_at", "series_id", "clickup_id", "repeat_carry",
-    "flexibility", "workday_only",
+    "flexibility", "workday_only", "archived",
 }
 
 
@@ -362,6 +367,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
         # 3 everywhere keeps every existing plan exactly where it is.
         conn.execute(
             "ALTER TABLE tasks ADD COLUMN flexibility INTEGER NOT NULL DEFAULT 3")
+    if "archived" not in cols:
+        # Nothing was archived before the column existed.
+        conn.execute("ALTER TABLE tasks ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
     if "planned_at" not in cols:
         # Where the app decided this task goes, and the spans it booked for it.
         # Null on every existing row, which reads as "never planned" and is
@@ -520,6 +528,7 @@ def _row_to_task(row: sqlite3.Row) -> dict:
     task["collapsed"] = bool(task["collapsed"])
     task["repeat_carry"] = bool(task["repeat_carry"])
     task["workday_only"] = bool(task["workday_only"])
+    task["archived"] = bool(task["archived"])
     # Stored as JSON because a list of spans has no shape SQLite knows.
     if task.get("planned_blocks"):
         try:
@@ -582,6 +591,8 @@ def update_task(task_id: str, fields: dict) -> dict | None:
     cols = {k: v for k, v in fields.items() if k in TASK_FIELDS}
     if not cols:
         return get_task(task_id)
+    if cols.get("status") in ("todo", "in_progress"):
+        cols["archived"] = 0  # reopened: back where it can be seen
     cols["updated_at"] = now_iso()
     sets = ", ".join(f"{k} = ?" for k in cols)
     with connect() as conn:
@@ -592,6 +603,25 @@ def update_task(task_id: str, fields: dict) -> dict | None:
             return None
     bump_plan_rev()
     return get_task(task_id)
+
+
+def set_archived(task_ids: list[str], archived: bool) -> int:
+    """Put finished tasks away, or bring them back.
+
+    Deliberately leaves `updated_at` alone: it stands in for when a task was
+    finished (see `completed_history`), and tidying the Done list must not
+    move a week-old finish onto today. Nothing about the plan changes either,
+    so the plan rev is not bumped.
+    """
+    if not task_ids:
+        return 0
+    marks = ", ".join("?" for _ in task_ids)
+    with connect() as conn:
+        cur = conn.execute(
+            f"UPDATE tasks SET archived = ? WHERE id IN ({marks}) "
+            "AND status NOT IN ('todo', 'in_progress')",
+            [int(archived), *task_ids])
+    return cur.rowcount
 
 
 def delete_task(task_id: str) -> bool:
