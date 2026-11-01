@@ -910,6 +910,17 @@ def test_tab_counts_only_unfinished_tasks(client):
     assert state["projects"][0]["open_tasks"] == 1
 
 
+def test_tab_counts_top_level_rows_not_their_steps(client):
+    state = create(client, title="parent")
+    parent = find(state, "parent")["id"]
+    for step in ("one", "two", "three"):
+        state = create(client, title=step, parent_id=parent)
+    assert state["projects"][0]["open_tasks"] == 1
+    # Steps left open under a dropped parent are not on the list either.
+    state = client.patch(f"/api/tasks/{parent}", json={"status": "discarded"}).json()
+    assert state["projects"][0]["open_tasks"] == 0
+
+
 def test_subtasks_and_braindump_land_in_the_open_tab(client):
     state = new_project(client, "work")
     work = state["active_project_id"]
