@@ -127,9 +127,10 @@ It's a one-way mirror, and deliberately simple about it: re-syncing refreshes
 an imported task's title, description and due date from ClickUp, but nothing
 else — its estimate, impact/effort, status, subtasks and which tab it lives
 in are yours, and sync never touches them once it exists. Nothing is pushed
-back to ClickUp, and a task that stops showing up as "assigned and open" in
-ClickUp (finished, reassigned, deleted) is simply left alone rather than
-auto-completed or removed here.
+back to ClickUp. A task moved to a completed status in ClickUp (a status of
+type closed or done) is marked done here on the next sync and pays its XP like
+a tick; one that stops showing up for any other reason (reassigned, deleted)
+is simply left alone rather than removed here.
 
 Runs on the same kind of sweep as the recurring-task job below — once at
 startup, then every `ADDERALL_CLICKUP_INTERVAL` seconds (1800 by default; `0`
