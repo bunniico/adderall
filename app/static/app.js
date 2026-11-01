@@ -1609,6 +1609,50 @@ function wireConnectionBanner() {
   if (!navigator.onLine) show();
 }
 
+/* ---------------- keeping up with other devices ----------------
+ * Every change here round-trips at once, but a change made on your phone
+ * only reaches this tab when it next asks. So it asks: once a minute while
+ * it is on screen, and straight away when you come back to it. Never while
+ * you are in the middle of something a redraw would knock over: an open
+ * dialog or menu, a drag, a rename, or typing into the list. */
+const REFRESH_MS = 60_000;
+const REFRESH_MIN_GAP_MS = 2_000;  // focus and visibility often fire together
+let lastRefresh = 0;
+let refreshing = false;
+
+function busyForRefresh() {
+  if (document.hidden || refreshing) return true;
+  if (document.querySelector("dialog[open]") || openMenu) return true;
+  if (dragId || dragProjectId || renamingProject) return true;
+  const el = document.activeElement;
+  return !!el?.closest?.("#task-list, #done-list, #tab-strip, #add-form") &&
+    !!el.closest("input, textarea, select");
+}
+
+async function backgroundRefresh() {
+  if (busyForRefresh() || Date.now() - lastRefresh < REFRESH_MIN_GAP_MS) return;
+  refreshing = true;
+  lastRefresh = Date.now();
+  try {
+    applyState(await api("/state"));
+    // Habits are only re-read when asked; a tick from another device counts.
+    refreshHabits(true);
+  } catch {
+    // Quiet on purpose: the connection banner already speaks for a dead
+    // server, and a toast every minute would only nag about it.
+  } finally {
+    refreshing = false;
+  }
+}
+
+function wireAutoRefresh() {
+  setInterval(backgroundRefresh, REFRESH_MS);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) backgroundRefresh();
+  });
+  window.addEventListener("focus", backgroundRefresh);
+}
+
 /* Clear the Done list without losing anything: the tasks are flagged, not
  * deleted, and keep counting towards XP and every average. */
 async function archiveFinished() {
@@ -4046,6 +4090,7 @@ async function boot() {
     await reportTimezone();
     $("add-granularity").value = settings.granularity;
     applyState(await api("/state"));
+    lastRefresh = Date.now();
     // wireCalendar() has already read back which view you were last in.
     if (cal.mode && mod("calendar")) setCalendarMode(true);
     const aiOn = ["magic_todo", "braindump", "ai_estimates", "ai_chat"].some(mod);
@@ -4057,6 +4102,7 @@ async function boot() {
   // Outside the try: with no settings every module counts as on, which is
   // what keeps the alarm stream listening while the server is down.
   applyModules();
+  wireAutoRefresh();
 }
 
 boot();
