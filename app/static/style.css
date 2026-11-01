@@ -711,6 +711,22 @@ dialog.closing::backdrop { animation: fade-in var(--t-fast) var(--ease-in) rever
   padding: 12px 14px 14px;
 }
 .s-group legend { font-size: 13px; color: var(--muted); padding: 0 6px; }
+/* Settings tabs: one section on screen at a time. A class rather than the
+   hidden attribute, because modules already use hidden for their own parts. */
+.s-tabs {
+  display: flex; gap: 4px; flex-wrap: wrap;
+  border-bottom: 1px solid var(--border); padding-bottom: 8px;
+}
+.s-tabs button.s-tab {
+  background: transparent; border: 1px solid transparent; color: var(--muted);
+  padding: 5px 10px; font-size: 13px; border-radius: 7px;
+}
+.s-tabs button.s-tab:hover { background: var(--panel-2); color: var(--text-bright); }
+.s-tabs button.s-tab[aria-selected="true"] {
+  background: var(--panel-2); border-color: var(--accent); color: var(--text-bright);
+}
+.s-panel { display: flex; flex-direction: column; gap: 12px; }
+.s-panel:not(.active) { display: none; }
 /* Settings → Modules: a switch per module, under the group it belongs to. */
 .module-list { display: flex; flex-direction: column; gap: 12px; }
 .module-group { display: flex; flex-direction: column; gap: 6px; }
