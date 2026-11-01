@@ -1543,6 +1543,83 @@ function wireConnectionBanner() {
   if (!navigator.onLine) show();
 }
 
+/* ---------------- 💬 Ask ----------------
+ * A conversation with the app itself. Kept in the page, and sent whole on
+ * each message; the server stores none of it. When a reply changed something,
+ * the fresh state comes back with it and the list redraws. */
+const chatHistory = [];
+let chatBusy = false;
+
+function chatBubble(role, text, actions = []) {
+  const el = document.createElement("div");
+  el.className = `chat-msg ${role}`;
+  el.textContent = text;  // plain text: a model's reply is never HTML here
+  if (actions.length) {
+    const row = document.createElement("div");
+    row.className = "chat-actions";
+    for (const a of actions) {
+      const chip = document.createElement("span");
+      chip.className = "chat-action" + (a.ok ? "" : " failed");
+      chip.textContent = (a.ok ? "🔧 " : "⚠ ") + a.tool.replaceAll("_", " ");
+      chip.title = a.ok ? "Ran" : "This one failed";
+      row.appendChild(chip);
+    }
+    el.appendChild(row);
+  }
+  const log = $("chat-log");
+  log.appendChild(el);
+  log.scrollTop = log.scrollHeight;
+  return el;
+}
+
+async function sendChat() {
+  const input = $("chat-input");
+  const text = input.value.trim();
+  if (!text || chatBusy) return;
+  chatBusy = true;
+  $("chat-send").disabled = true;
+  input.value = "";
+  chatHistory.push({ role: "user", content: text });
+  chatBubble("user", text);
+  const pending = chatBubble("assistant pending", "Thinking…");
+  try {
+    const res = await api("/chat", {
+      method: "POST", body: JSON.stringify({ messages: chatHistory.slice(-60) }),
+    });
+    pending.remove();
+    chatHistory.push({ role: "assistant", content: res.reply });
+    chatBubble("assistant", res.reply, res.actions || []);
+    if (res.state) applyState(res.state);
+  } catch (e) {
+    pending.remove();
+    chatHistory.pop();  // not answered, so not part of the conversation
+    chatBubble("assistant error", e.message);
+    input.value = text;
+  }
+  chatBusy = false;
+  $("chat-send").disabled = false;
+  input.focus();
+}
+
+function wireChat() {
+  $("btn-chat").addEventListener("click", () => {
+    $("modal-chat").showModal();
+    $("chat-input").focus();
+  });
+  $("chat-form").addEventListener("submit", (e) => { e.preventDefault(); sendChat(); });
+  $("chat-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      sendChat();
+    }
+  });
+  $("chat-clear").addEventListener("click", () => {
+    chatHistory.length = 0;
+    for (const el of $("chat-log").querySelectorAll(".chat-msg")) el.remove();
+    $("chat-input").focus();
+  });
+}
+
 function celebrate() {
   if (!mod("xp")) return;
   const box = $("celebration");
@@ -3683,6 +3760,7 @@ function wire() {
   wireOverview();
   wireHabits();
   wireHelp();
+  wireChat();
 
   // Ask for notification permission on first interaction (needed for alarms).
   document.body.addEventListener("click", () => {
@@ -3711,7 +3789,7 @@ async function boot() {
     applyState(await api("/state"));
     // wireCalendar() has already read back which view you were last in.
     if (cal.mode && mod("calendar")) setCalendarMode(true);
-    const aiOn = ["magic_todo", "braindump", "ai_estimates"].some(mod);
+    const aiOn = ["magic_todo", "braindump", "ai_estimates", "ai_chat"].some(mod);
     if (!settings.has_api_key && aiOn)
       toast("No Anthropic API key set — AI features are off. Add one in ⚙ Settings.");
   } catch (e) {

@@ -48,6 +48,8 @@ MODULES: tuple[Module, ...] = (
            "🧠 The compiler that turns a wall of text into tasks."),
     Module("ai_estimates", "AI estimates", "AI",
            "The AI fills in estimates, impact/effort scores and start times."),
+    Module("ai_chat", "Ask", "AI",
+           "💬 A chat that explains how the app works and can act on your tasks."),
     Module("calendar", "Calendar", "Views",
            "📅 Every dated task across every project, by day, week or month."),
     Module("overview", "Overview", "Views",
