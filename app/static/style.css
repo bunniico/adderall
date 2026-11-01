@@ -224,6 +224,19 @@ main { max-width: 1046px; margin: 0 auto; padding: 20px 24px 80px; }
   gap: 8px; font-size: 12.5px; color: #c3d7ea;
 }
 .rail-row b { font: 500 12px/1 var(--mono); font-weight: 500; color: var(--text); }
+.rail-row { position: relative; }
+/* The "+0.4" that rises off an average when it changes. */
+.rail-float {
+  position: absolute; right: 0; top: -8px; pointer-events: none;
+  font: 600 11px/1 var(--mono); color: var(--good);
+  animation: rail-float 1.4s var(--ease-out) forwards;
+}
+.rail-float.down { color: var(--bad); }
+@keyframes rail-float {
+  0%   { opacity: 0; transform: translateY(4px); }
+  20%  { opacity: 1; transform: translateY(-2px); }
+  100% { opacity: 0; transform: translateY(-18px); }
+}
 .rail-foot { text-align: right; font: 400 10px/1 var(--mono); color: var(--muted-3); }
 /* Placeholder only — the companion itself is not built yet, and a box that
    says so is more honest than a mascot that does nothing. */
