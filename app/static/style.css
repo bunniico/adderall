@@ -428,6 +428,25 @@ textarea { resize: vertical; }
 /* ---- task list ---- */
 .task-list { display: flex; flex-direction: column; gap: 11px; }
 
+/* A task on its way: the shape of a row, with light sweeping across it. */
+.shimmer-row .task-row { min-height: 40px; }
+.shimmer {
+  display: block; border-radius: 6px;
+  background: linear-gradient(90deg, var(--panel-2) 0%, var(--border-strong) 50%,
+                              var(--panel-2) 100%);
+  background-size: 300% 100%;
+  animation: shimmer 1.3s linear infinite;
+}
+.shimmer-box { flex: none; width: 18px; height: 18px; margin-left: 30px; }
+.shimmer-line { height: 12px; }
+@keyframes shimmer {
+  from { background-position: 100% 0; }
+  to   { background-position: -200% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .shimmer { animation: none; background: var(--panel-2); }
+}
+
 /* Depth is carried by surface, not by indentation alone: a top-level task is
    a container, a nested one is a lit card inside it, and a leaf is a plain
    row. You can tell what level you are reading at without counting margins. */
