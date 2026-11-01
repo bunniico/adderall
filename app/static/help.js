@@ -129,7 +129,9 @@ async function setHelpMode(on) {
   help.open = on;
   document.body.classList.toggle("help-mode", on);
   $("help-view").hidden = !on;
-  $("btn-help").textContent = on ? "✕ Close help" : "❓";
+  $("btn-help").textContent = on ? "✕" : "❓";
+  $("btn-help").title = on ? "Close help" : "Help: how each feature works, and why";
+  $("btn-help").setAttribute("aria-label", on ? "Close help" : "Help");
   if (!on) return;
   if (!help.articles) {
     try {

@@ -46,11 +46,13 @@
       <span id="focus-pill-title" class="focus-pill-title"></span>
       <span id="focus-pill-end" class="focus-pill-end" title="End this focus session">✕</span>
     </button>
-    <button id="btn-view" class="ghost" data-module="calendar" title="Switch between the task list and the calendar">📅 Calendar</button>
-    <button id="btn-braindump" class="ghost" data-module="braindump" title="Dump everything in your head; the Compiler turns it into tasks">🧠 Braindump</button>
-    <button id="btn-focus" class="accent" data-module="focus" title="One task at a time with a visual timer">▶ Focus</button>
-    <button id="btn-help" class="ghost" data-module="help" title="Help: how each feature works, and why">❓</button>
-    <button id="btn-settings" class="ghost" title="Settings">⚙</button>
+    <!-- Icon-only: the name of each lives in its tooltip and aria-label, so
+         the row stays one glance wide. -->
+    <button id="btn-view" class="ghost icon-btn" data-module="calendar" title="Calendar: see everything with a date on it, across every project" aria-label="Calendar">📅</button>
+    <button id="btn-braindump" class="ghost icon-btn" data-module="braindump" title="Braindump: dump everything in your head; the Compiler turns it into tasks" aria-label="Braindump">🧠</button>
+    <button id="btn-focus" class="accent icon-btn" data-module="focus" title="Focus: one task at a time with a visual timer" aria-label="Focus">▶</button>
+    <button id="btn-help" class="ghost icon-btn" data-module="help" title="Help: how each feature works, and why" aria-label="Help">❓</button>
+    <button id="btn-settings" class="ghost icon-btn" title="Settings" aria-label="Settings">⚙</button>
   </div>
 </header>
 

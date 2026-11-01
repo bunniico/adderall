@@ -365,7 +365,12 @@ button.ghost:hover { background: var(--panel-2); color: var(--text-bright); }
 }
 .topbar-actions button.ghost:hover { border-color: var(--accent); color: #eaf9ff; }
 .topbar-actions button.accent { font-size: 12.5px; padding: 7px 14px; }
-#btn-settings { width: 31px; padding: 0; display: grid; place-items: center; }
+/* The tool buttons are one glyph each, so they are squares: the same size
+   whatever the glyph, and wide enough to hit with a thumb. */
+.topbar-actions button.icon-btn {
+  width: 34px; height: 32px; padding: 0; display: grid; place-items: center;
+  font-size: 15px; line-height: 1;
+}
 button.wide { width: 100%; }
 button.close { padding: 4px 10px; font-size: 16px; }
 button:disabled { opacity: .5; cursor: wait; }
@@ -1377,7 +1382,8 @@ body.calendar-mode #list-view { display: none; }
      They wrap onto a second line instead. */
   .topbar { padding: 10px 12px; gap: 10px; flex-wrap: wrap; }
   .topbar-actions { flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
-  .topbar-actions button.ghost, .topbar-actions button.accent {
+  .topbar-actions button.ghost:not(.icon-btn),
+  .topbar-actions button.accent:not(.icon-btn) {
     padding: 7px 10px; font-size: 12px;
   }
   .project-tabs { padding: 12px 12px 0; }

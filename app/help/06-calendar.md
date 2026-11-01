@@ -1,6 +1,6 @@
 # Calendar
 
-**📅 Calendar** in the header swaps the task list for a calendar. **☰ List** swaps it back.
+**📅** (Calendar) in the header swaps the task list for a calendar. The same button turns into **☰** (List) and swaps it back.
 
 ## How it works
 
