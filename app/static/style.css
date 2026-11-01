@@ -719,6 +719,30 @@ dialog.closing::backdrop { animation: fade-in var(--t-fast) var(--ease-in) rever
    this file, so the one attribute is all an element needs. */
 [data-module][hidden] { display: none !important; }
 .modal-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* ---- 💬 Ask ---- */
+dialog.chat-dialog { width: min(640px, 96vw); }
+.chat-dialog .modal-head h2 { flex: 1; }
+.chat-log {
+  display: flex; flex-direction: column; gap: 10px;
+  max-height: min(60vh, 520px); min-height: 160px; overflow-y: auto; padding: 2px;
+}
+.chat-msg {
+  max-width: 88%; padding: 9px 12px; border-radius: 10px; font-size: 14px;
+  line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.chat-msg.user { align-self: flex-end; background: var(--accent-dim); color: var(--text-bright); }
+.chat-msg.assistant { align-self: flex-start; background: var(--panel-2); color: var(--text); }
+.chat-msg.error { border: 1px solid var(--bad); color: var(--bad); background: transparent; }
+.chat-msg.pending { color: var(--muted); animation: thinking 1.4s var(--ease-out) infinite; }
+.chat-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.chat-action {
+  font: 500 10.5px/1 var(--mono); padding: 3px 6px; border-radius: 5px;
+  border: 1px solid var(--border-strong); color: var(--muted);
+}
+.chat-action.failed { border-color: var(--bad); color: var(--bad); }
+.chat-form { display: flex; gap: 8px; align-items: flex-end; }
+.chat-form textarea { flex: 1; resize: none; }
 .modal-actions button { flex: 1; min-width: 100px; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }

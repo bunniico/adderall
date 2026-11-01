@@ -230,7 +230,7 @@ and the API answer anyone who can reach the port.
 ### Turning parts of it off
 
 Everything beyond the task list itself (ClickUp sync, the MCP server, the AI
-features, the Calendar, Overview, Habits and Help views, repeating tasks,
+features and the 💬 Ask chat, the Calendar, Overview, Habits and Help views, repeating tasks,
 focus mode, transition alarms, XP and sounds) is a module, and each one can be
 switched off in ⚙ Settings → **🧩 Modules**. Off means off: its buttons and
 settings leave the page, its API routes answer 404, and its background job
@@ -272,6 +272,7 @@ with the code.
 - [Other apps and AI agents](app/help/26-other-apps-and-agents.md)
 - [Modules](app/help/27-modules.md)
 - [Templates](app/help/28-templates.md)
+- [Ask](app/help/29-ask.md)
 
 To add or change one, edit the Markdown file. The number at the front of
 the filename sets its place in the list, the first `# ` line is its title,
@@ -314,6 +315,7 @@ Claude API only, routed by cost/quality (configurable in the DB settings):
 | Estimates + impact/effort scores + start times | `claude-haiku-4-5` | off | yes — one call per batch of tasks |
 | Task breakdown (Magic ToDo) | `claude-sonnet-5` | low effort | no (interactive) |
 | Braindump compiler | `claude-opus-5` | adaptive | yes — one call |
+| 💬 Ask (chat, with tool use) | `claude-sonnet-5` (balanced) | model default | no (interactive) |
 
 Every call uses structured JSON output (`output_config.format`), so responses
 are compact and parse deterministically. The system prompt is cache-marked.
