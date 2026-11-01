@@ -1345,6 +1345,38 @@ def test_average_daily_xp_is_zero_rather_than_nothing_when_nothing_was_earned():
     assert logic.average_daily_xp(0, days=30) == 0.0
 
 
+def test_daily_xp_average_by_day_rolls_the_window_forward():
+    from datetime import date, timezone as tzmod
+    today = date(2026, 10, 10)
+    rows = [{"xp": 30, "finished_at": "2026-10-01T12:00:00+00:00"},
+            {"xp": 60, "finished_at": "2026-10-09T12:00:00+00:00"}]
+    series = logic.daily_xp_average_by_day(rows, tzmod.utc, 10, today, window=3)
+    by_day = {d["day"]: d for d in series}
+    assert len(series) == 10 and series[-1]["day"] == "2026-10-10"
+    assert by_day["2026-10-01"] == {"day": "2026-10-01", "xp": 30, "average": 10.0}
+    assert by_day["2026-10-03"]["average"] == 10.0   # still inside the 3-day window
+    assert by_day["2026-10-04"]["average"] == 0.0    # rolled out of it
+    assert by_day["2026-10-09"]["average"] == 20.0
+    assert by_day["2026-10-10"]["xp"] == 0 and by_day["2026-10-10"]["average"] == 20.0
+
+
+def test_daily_xp_average_today_matches_the_rail():
+    from datetime import date, timezone as tzmod
+    rows = [{"xp": 90, "finished_at": "2026-10-05T12:00:00+00:00"},
+            {"xp": 30, "finished_at": "2026-09-20T12:00:00+00:00"}]
+    series = logic.daily_xp_average_by_day(rows, tzmod.utc, 5, date(2026, 10, 10))
+    assert series[-1]["average"] == round(logic.average_daily_xp(120), 1)
+
+
+def test_daily_xp_average_uses_local_days():
+    from datetime import date
+    from zoneinfo import ZoneInfo
+    rows = [{"xp": 10, "finished_at": "2026-10-05T02:00:00+00:00"}]  # 22:00 on the 4th in NY
+    series = logic.daily_xp_average_by_day(rows, ZoneInfo("America/New_York"), 2,
+                                           date(2026, 10, 5), window=1)
+    assert [d["xp"] for d in series] == [10, 0]
+
+
 # ---- start times: when a task wants to begin ----
 # The scheduler's other question. A deadline says when work must be finished;
 # a start time says which hour of which day it belongs to, which for most of

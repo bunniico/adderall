@@ -1171,6 +1171,9 @@ body.calendar-mode #list-view { display: none; }
   content: ""; width: 9px; height: 9px; border-radius: 2px; background: var(--accent);
 }
 .ov-key-soft::before { background: var(--accent-dim); }
+.ov-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.ov-dot { fill: var(--accent); }
+.ov-area { fill: var(--accent); opacity: .12; }
 
 /* The two shortlists. Rows are buttons: the whole thing is the hit target,
    because a link-sized one is exactly the friction this app exists to remove. */
