@@ -1388,12 +1388,11 @@ function renderRail() {
   $("rail-goal").textContent = on ? `${xp.into_level} / ${xp.level_span}` : "off";
   $("rail-goal-fill").style.width = (on ? xp.progress * 100 : 0) + "%";
   $("rail-xp").textContent = on ? `level ${xp.level} · ${xp.total} XP earned` : "";
-  $("rail-minute-xp").textContent =
-    on && xp.per_minute != null ? xp.per_minute.toFixed(2) : "—";
+  railAverage("rail-minute-xp", on ? xp.per_minute : null, 2);
   // Pace rather than rate: what the last month has paid out per day, quiet
   // days included. The window is only in the tooltip because the row is a
   // label and a number wide, and an unlabelled 30 would read as the value.
-  $("rail-daily-xp").textContent = on && xp.daily != null ? Math.round(xp.daily) : "—";
+  railAverage("rail-daily-xp", on ? xp.daily : null, 0, 1);
   $("rail-daily-xp-label").title =
     on ? `XP a day over the last ${xp.daily_days} days, quiet days included` : "";
 
@@ -1405,6 +1404,53 @@ function renderRail() {
   const xpLeft = xpToEarn(open);
   $("rail-time-total").textContent = open.length ? fmtMinutes(timeLeft) : "—";
   $("rail-xp-left").textContent = !on ? "off" : open.length ? xpLeft : "—";
+}
+
+/* The two averages under the level, drawn so a change is seen: the number
+ * counts from where it was to where it is, and the difference floats up off
+ * it ("+0.4"). Nothing moves on the first draw or when the value is gone, and
+ * reduced motion gets the new number straight away, float and all. */
+const railShown = {};   // id -> the value currently on screen
+const RAIL_COUNT_MS = 900;
+
+function railAverage(id, value, digits, floatDigits = digits) {
+  const el = $(id);
+  const prev = railShown[id];
+  railShown[id] = value;
+  if (value == null) { el.textContent = "—"; return; }
+  const fmt = (v) => v.toFixed(digits);
+  if (prev == null || fmt(prev) === fmt(value)) {
+    if (el.dataset.counting !== "1") el.textContent = fmt(value);
+    return;
+  }
+  const delta = value - prev;
+  railFloat(el, `${delta > 0 ? "+" : "−"}${Math.abs(delta).toFixed(floatDigits || 1)}`,
+            delta < 0);
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    el.textContent = fmt(value);
+    return;
+  }
+  const started = performance.now();
+  el.dataset.counting = "1";
+  const step = (now) => {
+    if (railShown[id] !== value) return;  // a newer value took over
+    const t = Math.min(1, (now - started) / RAIL_COUNT_MS);
+    const eased = 1 - Math.pow(1 - t, 3);
+    el.textContent = fmt(prev + delta * eased);
+    if (t < 1) requestAnimationFrame(step);
+    else delete el.dataset.counting;
+  };
+  requestAnimationFrame(step);
+}
+
+function railFloat(el, text, down) {
+  const float = document.createElement("span");
+  float.className = "rail-float" + (down ? " down" : "");
+  float.textContent = text;
+  float.setAttribute("aria-hidden", "true");
+  el.parentElement.appendChild(float);
+  float.addEventListener("animationend", () => float.remove());
+  setTimeout(() => float.remove(), 2000);  // in case the animation never runs
 }
 
 /* The list is rebuilt wholesale on every state change, so anything the user
