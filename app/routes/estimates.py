@@ -60,9 +60,11 @@ def _apply_annotations(settings: dict, targets: list[dict], want_scores: bool,
     """The actual annotate call and applying its results — shared by the
     best-effort path above and the queued retry in `_process_annotate_batch`.
     """
-    results = ai.annotate(settings, targets, want_scores=want_scores,
+    asked, context = _annotate_context(targets)
+    results = ai.annotate(settings, asked, want_scores=want_scores,
                           want_start=ask_start,
-                          now_local=core.now_local(settings) if ask_start else "")
+                          now_local=core.now_local(settings) if ask_start else "",
+                          context=context)
     now = datetime.now(timezone.utc)
     for t in targets:
         row = results.get(t["id"])
@@ -81,6 +83,29 @@ def _apply_annotations(settings: dict, targets: list[dict], want_scores: bool,
             fields["start_at"] = when.isoformat(timespec="seconds")
         if fields:
             db.update_task(t["id"], fields)
+
+
+def _annotate_context(targets: list[dict]) -> tuple[list[dict], list[dict]]:
+    """The tasks as the model is shown them, plus their neighbours.
+
+    Each step carries the title of the task it belongs to. The neighbours are
+    other open tasks in the same lists that already have an estimate, steps
+    of the same parent first, since those are the ones a new step is most
+    directly measured against.
+    """
+    ids = {t["id"] for t in targets}
+    projects = {t["project_id"] for t in targets}
+    parents = {t["parent_id"] for t in targets if t["parent_id"]}
+    rows = [t for t in db.list_tasks() if t["project_id"] in projects]
+    by_id = {t["id"]: t for t in rows}
+    asked = [{**t, "parent_title": by_id[t["parent_id"]]["title"]}
+             if t["parent_id"] in by_id else t for t in targets]
+    nearby = [t for t in rows if t["id"] not in ids and t["id"] not in parents
+              and t["status"] in ("todo", "in_progress")
+              and t["estimated_time"] is not None]
+    nearby.sort(key=lambda t: t["updated_at"] or "", reverse=True)  # recent first
+    nearby.sort(key=lambda t: t["parent_id"] not in parents)          # siblings first
+    return asked, nearby[:ai.MAX_CONTEXT]
 
 
 def _process_annotate_batch(payload: dict) -> None:
@@ -113,9 +138,11 @@ def annotate_task(task_id: str):
     # parent's slot, so a start time on one would go unread.
     want_start = bool(settings["ai_start_times"]) and task["parent_id"] is None
     try:
-        results = ai.annotate(settings, [task], want_scores=settings["ai_scoring"],
+        asked, context = _annotate_context([task])
+        results = ai.annotate(settings, asked, want_scores=settings["ai_scoring"],
                               want_start=want_start,
-                              now_local=core.now_local(settings) if want_start else "")
+                              now_local=core.now_local(settings) if want_start else "",
+                              context=context)
     except ai.AINetworkError:
         queue.enqueue("reannotate", {"task_id": task_id, "want_start": want_start})
         return core.queued_state(
@@ -149,9 +176,11 @@ def _process_reannotate(payload: dict) -> None:
     settings = db.get_settings()
     want_start = payload.get("want_start", False)
     try:
-        results = ai.annotate(settings, [task], want_scores=settings["ai_scoring"],
+        asked, context = _annotate_context([task])
+        results = ai.annotate(settings, asked, want_scores=settings["ai_scoring"],
                               want_start=want_start,
-                              now_local=core.now_local(settings) if want_start else "")
+                              now_local=core.now_local(settings) if want_start else "",
+                              context=context)
     except ai.AINetworkError as exc:
         raise queue.NetworkRetry(str(exc)) from exc
     row = results.get(task_id)

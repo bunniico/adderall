@@ -10,9 +10,13 @@ owns a field only until you edit it yourself. The due date carries one
 qualifier: ClickUp owns it only while ClickUp has one. Everything else (estimate,
 impact/effort, status, subtasks, which project it lives in) is yours; sync
 never touches it. Nothing is pushed back to ClickUp, and nothing already
-imported is ever deleted or auto-completed here — a task that stops showing
-up as "assigned and open" in ClickUp just stops being touched by future
-syncs.
+imported is ever deleted here.
+
+The one exception to "status is yours" is finishing: a task moved to a
+completed status in ClickUp (a status of type `closed` or `done`) is marked
+done here too, through the same finish path a tick takes, so it pays XP the
+same way. Anything else that makes a task drop off the "assigned and open"
+list (reassigned, deleted, access lost) leaves it alone.
 
 A task a sync sees for the first time is a new assignment, and is announced
 to every URL in the `clickup_webhooks` setting as a Discord-style message
@@ -35,7 +39,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from . import db, events, logic, modules
+from . import core, db, events, logic, modules
 
 log = logging.getLogger(__name__)
 
@@ -99,6 +103,18 @@ def _get(client: httpx.Client, path: str, **params) -> dict:
     return resp.json()
 
 
+# ClickUp status types that mean the work is finished. Status *names* are
+# whatever each workspace calls them ("complete", "shipped", ...); the type is
+# the one thing every workspace agrees on.
+COMPLETED_STATUS_TYPES = {"closed", "done"}
+
+
+def _is_completed(task: dict) -> bool:
+    status = task.get("status")
+    return isinstance(status, dict) and \
+        (status.get("type") or "").lower() in COMPLETED_STATUS_TYPES
+
+
 def _normalize(task: dict) -> dict:
     """A raw ClickUp task, trimmed to the fields the sync actually stores."""
     deadline = None
@@ -119,6 +135,7 @@ def _normalize(task: dict) -> dict:
         "description": description,
         "deadline": deadline,
         "url": url,
+        "completed": _is_completed(task),
     }
 
 
@@ -150,6 +167,32 @@ def fetch_assigned_tasks(token: str) -> list[dict]:
     return tasks
 
 
+def fetch_completed(token: str, ids: list[str]) -> set[str]:
+    """Which of these ClickUp tasks are now in a completed status.
+
+    Asked one task at a time, and only for imported tasks still open here that
+    the open-tasks pass no longer returned: a closed task drops off that list,
+    so this is the only way to tell "finished" from "reassigned". A task that
+    cannot be read (deleted, access lost) is simply not in the answer, which
+    leaves it alone. A network failure still fails the sync, like any other.
+    """
+    done: set[str] = set()
+    if not ids:
+        return done
+    with _client(token) as client:
+        for task_id in ids:
+            try:
+                raw = _get(client, f"/task/{task_id}")
+            except ClickUpNetworkError:
+                raise
+            except ClickUpUnavailable as exc:
+                log.info("clickup: could not read task %s: %s", task_id, exc)
+                continue
+            if _is_completed(raw):
+                done.add(task_id)
+    return done
+
+
 def _ensure_project() -> dict:
     """The `ClickUp` project tab, created the first time a sync needs it."""
     for project in db.list_projects():
@@ -168,8 +211,14 @@ def sync(settings: dict | None = None) -> dict:
 
     created: list[str] = []
     updated: list[str] = []
+    finished: set[str] = set()   # ClickUp ids finished over there
     for rt in remote:
         local = db.get_task_by_clickup_id(rt["id"])
+        if rt.get("completed"):
+            # Already finished in ClickUp: never worth importing, and if it
+            # was imported, it is finished here too (below).
+            finished.add(rt["id"])
+            continue
         if local is None:
             task = db.create_task({
                 "title": rt["title"], "description": rt["description"],
@@ -196,9 +245,22 @@ def sync(settings: dict | None = None) -> dict:
                 db.update_task(local["id"], changed)
                 updated.append(local["id"])
 
+    seen = {rt["id"] for rt in remote}
+    missing = [t["clickup_id"] for t in db.list_tasks()
+               if t.get("clickup_id") and t["clickup_id"] not in seen
+               and t["status"] in logic.ACTIVE_STATUSES]
+    finished |= fetch_completed(token, missing)
+
+    completed: list[str] = []
+    for clickup_id in sorted(finished):
+        local = db.get_task_by_clickup_id(clickup_id)
+        if local and local["status"] in logic.ACTIVE_STATUSES:
+            core.finish(local["id"])
+            completed.append(local["id"])
+
     db.update_settings({"clickup_last_sync_at": db.now_iso()})
     return {"project_id": project["id"], "fetched": len(remote),
-            "created": created, "updated": updated}
+            "created": created, "updated": updated, "completed": completed}
 
 
 def _announce(task: dict, settings: dict) -> None:

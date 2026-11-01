@@ -913,11 +913,100 @@ def test_a_deadline_with_no_room_at_all_draws_nothing_rather_than_guessing():
                               "length_min": 240}) != []
 
 
-def test_a_day_that_ends_before_it_starts_is_clamped_not_refused():
+def test_a_day_that_ends_before_it_starts_is_an_overnight_shift():
+    """#120: 20:00 to 06:00 is a night shift, not a typo. The window is the
+    whole ten hours, counted from when the day turns over at 06:00."""
+    planner = logic.day_planner({**SETTINGS, "day_start": 20, "day_end": 6})
+    assert planner.offset == 6 * 60
+    assert planner.window_end - planner.day_start == 10 * 60
+
+
+def test_a_day_that_ends_where_it_starts_is_still_clamped_not_refused():
     """A silly setting reads as the nearest sensible day rather than stopping
     the scheduler, the same way a malformed repeat rule does."""
-    planner = logic.day_planner({**SETTINGS, "day_start": 20, "day_end": 6})
-    assert planner.window_end == (20 + logic.MIN_DAY_HOURS) * 60
+    planner = logic.day_planner({**SETTINGS, "day_start": 9, "day_end": 9})
+    assert planner.offset == 0
+    assert planner.window_end == (9 + logic.MIN_DAY_HOURS) * 60
+
+
+def test_an_ordinary_day_has_no_offset():
+    planner = logic.day_planner({**SETTINGS, "day_start": 9, "day_end": 22})
+    assert planner.offset == 0
+    assert (planner.day_start, planner.window_end) == (9 * 60, 22 * 60)
+
+
+def test_a_shift_ending_at_midnight_runs_to_midnight():
+    planner = logic.day_planner({**SETTINGS, "day_start": 16, "day_end": 0})
+    assert planner.offset == 0
+    assert (planner.day_start, planner.window_end) == (16 * 60, 24 * 60)
+
+
+def _night(**extra):
+    return logic.day_planner({**SETTINGS, "day_start": 16, "day_end": 4,
+                              "timezone": "UTC", "day_capacity": 600,
+                              "adaptive_capacity": False, **extra},
+                             now=datetime(2026, 8, 31, 12, 0, tzinfo=timezone.utc))
+
+
+def test_two_in_the_morning_belongs_to_the_shift_that_started_the_evening_before():
+    planner = _night()
+    tue_2am = datetime(2026, 9, 1, 2, 0, tzinfo=timezone.utc)
+    assert planner.local_day(tue_2am).isoformat() == "2026-08-31"   # Monday
+    assert logic.shift_day(tue_2am, timezone.utc, planner.offset).isoformat() == "2026-08-31"
+
+
+def test_night_shift_work_is_placed_inside_the_shift_and_runs_past_midnight():
+    planner = _night()
+    monday = datetime(2026, 8, 31, 12, 0, tzinfo=timezone.utc)
+    first = planner.place("a", monday, 300)
+    second = planner.place("b", monday, 300)
+    a, b = planner.spans("a"), planner.spans("b")
+    assert a == [(datetime(2026, 8, 31, 16, 0, tzinfo=timezone.utc),
+                  datetime(2026, 8, 31, 21, 0, tzinfo=timezone.utc))]
+    # One unbroken block through midnight, still Monday's shift.
+    assert b == [(datetime(2026, 8, 31, 21, 0, tzinfo=timezone.utc),
+                  datetime(2026, 9, 1, 2, 0, tzinfo=timezone.utc))]
+    assert second == datetime(2026, 9, 1, 2, 0, tzinfo=timezone.utc)
+    assert first < second
+
+
+def test_nothing_is_placed_in_the_daytime_gap_between_shifts():
+    planner = _night()
+    monday = datetime(2026, 8, 31, 12, 0, tzinfo=timezone.utc)
+    for i in range(6):
+        planner.place(f"t{i}", monday, 240)
+    for i in range(6):
+        for start, end in planner.spans(f"t{i}"):
+            for when in (start, end - timedelta(minutes=1)):
+                hour = when.hour
+                assert hour >= 16 or hour < 4, (i, start, end)
+
+
+def test_a_deadline_after_midnight_is_laid_back_into_that_same_shift():
+    planner = _night()
+    due = datetime(2026, 9, 1, 2, 0, tzinfo=timezone.utc)   # 02:00 Tuesday
+    planner.reserve("x", due, 180)
+    assert planner.spans("x") == [(datetime(2026, 8, 31, 23, 0, tzinfo=timezone.utc), due)]
+
+
+def test_a_night_shift_on_a_working_day_may_run_into_the_next_date():
+    """Monday is a working day and Tuesday is not: Monday's shift still runs
+    to 04:00 Tuesday, because the hours after midnight are Monday's."""
+    planner = _night()
+    monday = datetime(2026, 8, 31, 12, 0, tzinfo=timezone.utc)
+    only_monday = frozenset({0})   # Python weekday: Monday
+    planner.place("a", monday, 480, days=only_monday)
+    (start, end), = planner.spans("a")
+    assert start == datetime(2026, 8, 31, 16, 0, tzinfo=timezone.utc)
+    assert end == datetime(2026, 9, 1, 0, 0, tzinfo=timezone.utc)
+
+
+def test_night_work_counts_towards_the_shift_it_was_part_of():
+    history = [{"finished_at": "2026-08-31T22:00:00+00:00", "minutes": 120},
+               {"finished_at": "2026-09-01T02:00:00+00:00", "minutes": 60}]
+    assert logic.daily_totals(history, timezone.utc, 4 * 60) == {"2026-08-31": 180}
+    assert logic.daily_totals(history, timezone.utc) == {"2026-08-31": 120,
+                                                          "2026-09-01": 60}
 
 
 def test_a_full_day_still_has_gaps_to_place_the_next_thing_in():
@@ -1343,6 +1432,38 @@ def test_average_daily_xp_is_zero_rather_than_nothing_when_nothing_was_earned():
     """A month with no XP in it earned zero a day, which is a true answer;
     `None` would read as "not enough to say" and draw an em dash instead."""
     assert logic.average_daily_xp(0, days=30) == 0.0
+
+
+def test_daily_xp_average_by_day_rolls_the_window_forward():
+    from datetime import date, timezone as tzmod
+    today = date(2026, 10, 10)
+    rows = [{"xp": 30, "finished_at": "2026-10-01T12:00:00+00:00"},
+            {"xp": 60, "finished_at": "2026-10-09T12:00:00+00:00"}]
+    series = logic.daily_xp_average_by_day(rows, tzmod.utc, 10, today, window=3)
+    by_day = {d["day"]: d for d in series}
+    assert len(series) == 10 and series[-1]["day"] == "2026-10-10"
+    assert by_day["2026-10-01"] == {"day": "2026-10-01", "xp": 30, "average": 10.0}
+    assert by_day["2026-10-03"]["average"] == 10.0   # still inside the 3-day window
+    assert by_day["2026-10-04"]["average"] == 0.0    # rolled out of it
+    assert by_day["2026-10-09"]["average"] == 20.0
+    assert by_day["2026-10-10"]["xp"] == 0 and by_day["2026-10-10"]["average"] == 20.0
+
+
+def test_daily_xp_average_today_matches_the_rail():
+    from datetime import date, timezone as tzmod
+    rows = [{"xp": 90, "finished_at": "2026-10-05T12:00:00+00:00"},
+            {"xp": 30, "finished_at": "2026-09-20T12:00:00+00:00"}]
+    series = logic.daily_xp_average_by_day(rows, tzmod.utc, 5, date(2026, 10, 10))
+    assert series[-1]["average"] == round(logic.average_daily_xp(120), 1)
+
+
+def test_daily_xp_average_uses_local_days():
+    from datetime import date
+    from zoneinfo import ZoneInfo
+    rows = [{"xp": 10, "finished_at": "2026-10-05T02:00:00+00:00"}]  # 22:00 on the 4th in NY
+    series = logic.daily_xp_average_by_day(rows, ZoneInfo("America/New_York"), 2,
+                                           date(2026, 10, 5), window=1)
+    assert [d["xp"] for d in series] == [10, 0]
 
 
 # ---- start times: when a task wants to begin ----
