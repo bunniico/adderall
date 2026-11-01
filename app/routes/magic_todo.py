@@ -16,11 +16,9 @@ class BreakdownRequest(BaseModel):
 
 
 
-@router.post("/api/tasks/{task_id}/breakdown")
-def breakdown_task(task_id: str, body: BreakdownRequest):
-    task = core.require_task(task_id)
-    settings = db.get_settings()
-    granularity = body.granularity or settings["granularity"]
+def _breakdown_context(task: dict) -> dict:
+    """What the model is shown besides the task itself: the chain of tasks it
+    sits inside, the steps it already has, and the open tasks beside it."""
     parents = []
     cursor = task
     while cursor.get("parent_id"):
@@ -28,9 +26,23 @@ def breakdown_task(task_id: str, body: BreakdownRequest):
         if not cursor:
             break
         parents.insert(0, cursor["title"])
+    rows = db.list_tasks(task["project_id"])
+    existing = [t["title"] for t in rows
+                if t["parent_id"] == task["id"] and t["status"] != "discarded"]
+    siblings = [t["title"] for t in rows
+                if t["parent_id"] == task["parent_id"] and t["id"] != task["id"]
+                and t["status"] in ("todo", "in_progress")]
+    return {"parent_titles": parents, "existing": existing, "siblings": siblings}
+
+
+@router.post("/api/tasks/{task_id}/breakdown")
+def breakdown_task(task_id: str, body: BreakdownRequest):
+    task = core.require_task(task_id)
+    settings = db.get_settings()
+    granularity = body.granularity or settings["granularity"]
     try:
         steps = ai.breakdown(settings, task["title"], task["description"],
-                             granularity, parents)
+                             granularity, **_breakdown_context(task))
     except ai.AINetworkError:
         queue.enqueue("breakdown", {"task_id": task_id, "granularity": granularity})
         return core.queued_state(
@@ -58,16 +70,9 @@ def _process_breakdown(payload: dict) -> None:
         return  # deleted before the queue got to it
     settings = db.get_settings()
     granularity = payload.get("granularity") or settings["granularity"]
-    parents = []
-    cursor = task
-    while cursor.get("parent_id"):
-        cursor = db.get_task(cursor["parent_id"])
-        if not cursor:
-            break
-        parents.insert(0, cursor["title"])
     try:
         steps = ai.breakdown(settings, task["title"], task["description"],
-                             granularity, parents)
+                             granularity, **_breakdown_context(task))
     except ai.AINetworkError as exc:
         raise queue.NetworkRetry(str(exc)) from exc
     new_ids = []

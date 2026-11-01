@@ -24,7 +24,7 @@ def client(monkeypatch, tmp_path):
     # so a stubbed one is always in the future rather than instantly overdue.
     monkeypatch.setattr(main.ai, "annotate",
                         lambda settings, tasks, want_scores=True,
-                               want_start=False, now_local="": {
+                               want_start=False, now_local="", context=None: {
                             t["id"]: {"id": t["id"], "minutes": 30, "impact": 7,
                                       "effort": 3,
                                       **({"start_in_minutes": 120} if want_start else {})}
@@ -36,7 +36,7 @@ def client(monkeypatch, tmp_path):
     # tests that are about start times turn the setting back on themselves.
     db.update_settings({"ai_start_times": False})
     monkeypatch.setattr(main.ai, "breakdown",
-                        lambda settings, title, desc, granularity, parents=None:
+                        lambda settings, title, desc, granularity, **context:
                         [f"step {i}" for i in range(1, 4)])
     # "call dentist" deliberately omits `subtasks` entirely: a leaf is
     # allowed to arrive without the key.
@@ -750,7 +750,7 @@ def test_breakdown_network_failure_is_queued_then_runs_on_retry(client, monkeypa
 
     calls = {"n": 0}
 
-    def flaky(settings, title, desc, granularity, parents=None):
+    def flaky(settings, title, desc, granularity, **context):
         calls["n"] += 1
         if calls["n"] == 1:
             raise main.ai.AINetworkError("no route to the internet")
@@ -776,7 +776,8 @@ def test_reannotate_network_failure_is_queued_then_runs_on_retry(client, monkeyp
 
     calls = {"n": 0}
 
-    def flaky(settings, tasks, want_scores=True, want_start=False, now_local=""):
+    def flaky(settings, tasks, want_scores=True, want_start=False, now_local="",
+              context=None):
         calls["n"] += 1
         if calls["n"] == 1:
             raise main.ai.AINetworkError("no route to the internet")
@@ -907,6 +908,17 @@ def test_tab_counts_only_unfinished_tasks(client):
     create(client, title="b")
     state = client.post(f"/api/tasks/{find(state, 'a')['id']}/complete", json={}).json()
     assert state["projects"][0]["open_tasks"] == 1
+
+
+def test_tab_counts_top_level_rows_not_their_steps(client):
+    state = create(client, title="parent")
+    parent = find(state, "parent")["id"]
+    for step in ("one", "two", "three"):
+        state = create(client, title=step, parent_id=parent)
+    assert state["projects"][0]["open_tasks"] == 1
+    # Steps left open under a dropped parent are not on the list either.
+    state = client.patch(f"/api/tasks/{parent}", json={"status": "discarded"}).json()
+    assert state["projects"][0]["open_tasks"] == 0
 
 
 def test_subtasks_and_braindump_land_in_the_open_tab(client):
@@ -1370,6 +1382,16 @@ def test_overview_ignores_finished_work(client):
     assert [t["title"] for t in data["top"]] == ["still to do"]
 
 
+def test_overview_has_the_daily_xp_average_for_each_day(client):
+    done = find(create(client, title="paid", estimated_time=30, impact=8, effort=3), "paid")
+    state = client.post(f"/api/tasks/{done['id']}/complete", json={}).json()
+    data = overview(client)
+    series = data["xp_daily"]
+    assert len(series) == len(data["trend"])
+    assert series[-1]["xp"] == state["xp"]["total"]
+    assert series[-1]["average"] == round(state["xp"]["daily"], 1)
+
+
 def test_overview_trend_draws_the_quiet_days_too(client):
     """A chart made only of the days you finished something on reads as a
     streak. The gaps are the point, so every day in the window is a row."""
@@ -1608,6 +1630,26 @@ def test_a_finished_task_is_drawn_where_the_work_happened_not_where_it_was_plann
     # no longer owns next to a record of when the work actually happened.
     row = db.get_task(ids[0])
     assert row["planned_at"] is None and row["planned_blocks"] is None
+
+
+def test_a_night_shift_plans_work_only_inside_the_shift(client):
+    """#120: a 16:00-04:00 day. Everything the app places itself lands in the
+    shift, including the hours after midnight, and never in the daytime."""
+    from app import db
+    db.update_settings({"day_start": 16, "day_end": 4, "day_capacity": 600,
+                        "adaptive_capacity": False, "timezone": "UTC",
+                        "working_days": [0, 1, 2, 3, 4, 5, 6]})
+    for i in range(8):
+        create(client, title=f"night {i}", estimated_time=120, impact=7, effort=3)
+    payload = client.get("/api/calendar").json()
+    blocks = [b for e in payload["events"] for b in e.get("blocks") or []]
+    assert blocks
+    for opened, closed in blocks:
+        start, end = logic_parse(opened), logic_parse(closed)
+        last = end - timedelta(minutes=1)
+        for when in (start, last):
+            assert when.hour >= 16 or when.hour < 4, (opened, closed)
+    assert not _stacked(payload)
 
 
 def test_a_task_finished_without_being_started_is_not_drawn_at_all(client):
@@ -2796,3 +2838,45 @@ def test_an_unreadable_view_header_is_ignored(client):
     res = client.get("/api/state", headers={"X-Adderall-View": "not json"})
     assert res.status_code == 200
     assert res.json()["active_project_id"] == home
+
+
+# AI context: what the model is told about the rest of the list
+# ---------------------------------------------------------------------------
+
+def test_breakdown_is_told_the_steps_and_tasks_already_there(client, monkeypatch):
+    from app import main
+    seen = {}
+
+    def spy(settings, title, desc, granularity, **context):
+        seen.update(context)
+        return ["new step"]
+
+    monkeypatch.setattr(main.ai, "breakdown", spy)
+    state = create(client, title="clean kitchen")
+    parent = find(state, "clean kitchen")["id"]
+    create(client, title="wipe counters", parent_id=parent)
+    create(client, title="email landlord")
+    client.post(f"/api/tasks/{parent}/breakdown", json={})
+    assert seen["existing"] == ["wipe counters"]
+    assert seen["siblings"] == ["email landlord"]
+    assert seen["parent_titles"] == []
+
+
+def test_annotate_is_told_about_neighbours_and_parents(client, monkeypatch):
+    from app import main
+    calls = []
+
+    def spy(settings, tasks, want_scores=True, want_start=False, now_local="",
+            context=None):
+        calls.append({"tasks": tasks, "context": context})
+        return {}
+
+    create(client, title="email landlord", estimated_time=15, impact=7, effort=2)
+    state = create(client, title="clean kitchen", estimated_time=60, impact=5, effort=5)
+    parent = find(state, "clean kitchen")["id"]
+    monkeypatch.setattr(main.ai, "annotate", spy)
+    create(client, title="buy soap", parent_id=parent)
+    asked = calls[-1]["tasks"][0]
+    assert asked["parent_title"] == "clean kitchen"
+    titles = [c["title"] for c in calls[-1]["context"]]
+    assert titles == ["email landlord"]  # the parent itself is not a neighbour

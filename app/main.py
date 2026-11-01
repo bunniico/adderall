@@ -24,8 +24,8 @@ from starlette.routing import Route
 
 from . import (ai, clickup, core, db, events, logic, mcp_server, modules, queue,
                recurring, scheduler, title_parse)
-from .routes import (alarms, braindump, calendar, estimates, focus, habits, help,
-                     magic_todo, overview, templates)
+from .routes import (alarms, braindump, calendar, chat, estimates, focus, habits,
+                     help, magic_todo, overview, templates)
 from .routes import clickup as clickup_routes
 from .routes import recurring as recurring_routes
 
@@ -880,7 +880,8 @@ app.include_router(templates.router)
 # Each module's routes, every one of them answering 404 while its module is
 # off. See `modules.py`.
 for module_routes in (clickup_routes, magic_todo, braindump, estimates, calendar,
-                      overview, habits, help, recurring_routes, focus, alarms):
+                      overview, habits, help, recurring_routes, focus, alarms,
+                      chat):
     app.include_router(module_routes.router)
 
 
