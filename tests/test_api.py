@@ -1370,6 +1370,16 @@ def test_overview_ignores_finished_work(client):
     assert [t["title"] for t in data["top"]] == ["still to do"]
 
 
+def test_overview_has_the_daily_xp_average_for_each_day(client):
+    done = find(create(client, title="paid", estimated_time=30, impact=8, effort=3), "paid")
+    state = client.post(f"/api/tasks/{done['id']}/complete", json={}).json()
+    data = overview(client)
+    series = data["xp_daily"]
+    assert len(series) == len(data["trend"])
+    assert series[-1]["xp"] == state["xp"]["total"]
+    assert series[-1]["average"] == round(state["xp"]["daily"], 1)
+
+
 def test_overview_trend_draws_the_quiet_days_too(client):
     """A chart made only of the days you finished something on reads as a
     streak. The gaps are the point, so every day in the window is a row."""

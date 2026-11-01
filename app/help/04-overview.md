@@ -12,6 +12,8 @@ The **Overview** tab is the first one in the strip. It reads your lists rather t
 
 At the bottom, **Work left by list** and **Work left by category** show where the remaining work sits: per project, and per corner of the [impact/effort matrix](13-impact-and-effort.md).
 
+**Average daily XP** is a line through the same 30 days showing what the rail's *Average Daily XP* read at the end of each one (a rolling month, quiet days included), so you can see whether your pace is climbing or slipping. Hover a day for what it paid on its own.
+
 Unlike [All](03-the-all-tab.md), the Overview is there even with a single project.
 
 ## Why it works this way

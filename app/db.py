@@ -751,6 +751,18 @@ def xp_since(days: int) -> int:
     return int(row["xp"])
 
 
+def xp_paid_log(days: int) -> list[dict]:
+    """Every payout inside the window, with when — the rows `xp_since` sums,
+    dated, so the daily average can be worked out as of any day in it."""
+    with connect() as conn:
+        rows = conn.execute(
+            """SELECT xp_awarded, updated_at FROM tasks
+               WHERE xp_awarded IS NOT NULL AND updated_at >= ?""",
+            (cutoff_iso(days),),
+        ).fetchall()
+    return [{"xp": r["xp_awarded"], "finished_at": r["updated_at"]} for r in rows]
+
+
 def completed_history(days: int = 45) -> list[dict]:
     """When recent work was finished and how long it took.
 

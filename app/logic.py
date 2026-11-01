@@ -1106,6 +1106,31 @@ def average_daily_xp(window_xp: int, days: int = XP_WINDOW_DAYS) -> float | None
     return (window_xp / days) if days > 0 else None
 
 
+def daily_xp_average_by_day(rows: list[dict], tz: tzinfo, days: int, today: date,
+                            window: int = XP_WINDOW_DAYS) -> list[dict]:
+    """What Average Daily XP stood at at the end of each local day.
+
+    For every day in the last `days`: that day's own XP, and the rolling
+    `window`-day average ending on it, worked out exactly as
+    `average_daily_xp` does today (quiet days included). `rows` has to reach
+    back `days + window` days for the oldest point to be a full window.
+    """
+    per_day: dict[date, int] = {}
+    for row in rows:
+        when = parse_dt(row.get("finished_at"))
+        if when is None:
+            continue
+        key = when.astimezone(tz).date()
+        per_day[key] = per_day.get(key, 0) + int(row["xp"])
+    series = []
+    for back in range(days - 1, -1, -1):
+        day = today - timedelta(days=back)
+        earned = sum(per_day.get(day - timedelta(days=k), 0) for k in range(window))
+        series.append({"day": day.isoformat(), "xp": per_day.get(day, 0),
+                       "average": round(average_daily_xp(earned, window), 1)})
+    return series
+
+
 def level_threshold(level: int) -> int:
     """Total XP needed to have reached `level`. Everyone starts at level 1."""
     level = max(1, int(level))
