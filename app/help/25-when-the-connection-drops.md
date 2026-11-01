@@ -6,6 +6,8 @@ There are two connections, and they fail differently.
 
 **Your browser to the app.** If the server stops answering (it is down, the machine is asleep, the network dropped), a banner says so at the top of the page. Once the server is back, the next thing you do just works.
 
+**Changes from other devices.** The page re-reads your lists once a minute while it is on screen, and straight away when you switch back to it, so a task added or ticked on your phone shows up here without a reload. It waits while you are in the middle of something (a dialog, a drag, a rename, typing into the list) so nothing is pulled out from under you.
+
 **The app to the internet.** Breakdown, re-estimate, the braindump compiler and ClickUp sync all call out to the internet. If a call fails because the machine has no connection, it is **queued** instead: a message tells you so, and it runs on its own once the connection is back. You do not need to redo anything, and a queued request survives a restart.
 
 A missing or invalid API key, or the AI declining a request, still fails straight away.
