@@ -30,13 +30,26 @@ let toggleFocusFor = null;    // collapse toggle to re-focus after a fold/unfold
 
 /* ---------------- API ---------------- */
 
+/* Which list this browser tab is on. Kept per tab (sessionStorage survives a
+ * reload but is not shared with other tabs) and sent with every call, so two
+ * tabs can sit on two different projects without switching each other. A
+ * fresh tab has none yet and opens wherever you were last. */
+const VIEW_KEY = "adderall.view";
+let tabView = null;
+try { tabView = JSON.parse(sessionStorage.getItem(VIEW_KEY) || "null"); } catch {}
+
+function rememberView(s) {
+  tabView = { project: s.active_project_id, all: !!s.all_tasks,
+              overview: !!s.overview, habits: !!s.habits };
+  try { sessionStorage.setItem(VIEW_KEY, JSON.stringify(tabView)); } catch {}
+}
+
 async function api(path, options = {}) {
   let res;
+  const headers = { "Content-Type": "application/json" };
+  if (tabView) headers["X-Adderall-View"] = JSON.stringify(tabView);
   try {
-    res = await fetch("/api" + path, {
-      headers: { "Content-Type": "application/json" },
-      ...options,
-    });
+    res = await fetch("/api" + path, { headers, ...options });
   } catch {
     // fetch() itself rejected: the browser never got a response at all,
     // which means the connection to the server is down — as opposed to the
@@ -58,6 +71,7 @@ function applyState(newState) {
   // It applies on its own once the connection comes back; nothing here
   // needs to retry it.
   if (newState.queued) toast(newState.queued.message);
+  rememberView(newState);
   const prevQuads = {};
   for (const t of flatten(state.tasks)) prevQuads[t.id] = t.quadrant;
   state = newState;

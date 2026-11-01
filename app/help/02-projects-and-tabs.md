@@ -12,6 +12,8 @@ Each tab across the top is a project: one list of tasks. Work, house, that side 
 
 Adding, braindumping, breaking down, ordering and focusing all act on the tab you are on and leave the others alone. The app reopens on the tab you were last in, and the tab order you set is the same on every device.
 
+**Several browser tabs at once.** Each browser tab keeps its own place: one can sit on Work while another sits on House or the Overview, and switching in one never moves the other. Reloading a browser tab keeps its place. A newly opened browser tab starts wherever you switched to last.
+
 To move a task to another project, open it and pick a new **Project** in its dialog. Its subtasks go with it.
 
 ## Why it works this way
