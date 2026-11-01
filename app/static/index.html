@@ -578,189 +578,212 @@
     <div class="modal-head"><h2>⚙ Settings</h2>
       <button type="button" class="ghost close" data-close>✕</button></div>
 
-    <!-- Which parts of the app are on. Built from the server's module list
-         (see modules.py), so a new module needs no change here. Turning one
-         off hides it and stops it on the server; its data stays put. -->
-    <fieldset class="s-group">
-      <legend>🧩 Modules</legend>
-      <div id="s-modules" class="module-list"></div>
-      <p class="muted">Turning a module off hides it and stops its work on the
-        server. Nothing it saved is deleted: turn it back on and it is all
-        still there.</p>
-    </fieldset>
+    <!-- One section at a time. Every control is still in the page, so one
+         Save writes them all, whichever tab they are on. -->
+    <div class="s-tabs" role="tablist" aria-label="Settings sections">
+      <button type="button" class="s-tab" role="tab" id="s-tab-planning" data-tab="planning" aria-controls="s-panel-planning">📅 Planning</button>
+      <button type="button" class="s-tab" role="tab" id="s-tab-ai" data-tab="ai" aria-controls="s-panel-ai">✨ AI &amp; tasks</button>
+      <button type="button" class="s-tab" role="tab" id="s-tab-alarms" data-tab="alarms" aria-controls="s-panel-alarms">⏰ Alarms &amp; timer</button>
+      <button type="button" class="s-tab" role="tab" id="s-tab-sounds" data-tab="sounds" aria-controls="s-panel-sounds" data-module="sounds">🔉 Sounds</button>
+      <button type="button" class="s-tab" role="tab" id="s-tab-clickup" data-tab="clickup" aria-controls="s-panel-clickup" data-module="clickup">🔄 ClickUp</button>
+      <button type="button" class="s-tab" role="tab" id="s-tab-modules" data-tab="modules" aria-controls="s-panel-modules">🧩 Modules</button>
+    </div>
 
-    <label class="row"><input id="s-auto-deadlines" type="checkbox">
-      Auto-deadlines <span class="muted">— assign a deadline when you don't set one</span></label>
+    <section class="s-panel" role="tabpanel" id="s-panel-planning" aria-labelledby="s-tab-planning" data-tab="planning">
+      <label class="row"><input id="s-auto-deadlines" type="checkbox">
+        Auto-deadlines <span class="muted">— assign a deadline when you don't set one</span></label>
 
-    <label>Time-tax buffer: <output id="s-buffer-val"></output>
-      <input id="s-buffer" type="range" min="25" max="50" value="30">
-      <span class="muted">Every estimate gets this padding — plans always take longer than they feel like they will.</span>
-    </label>
-
-    <label class="row"><input id="s-adaptive" type="checkbox">
-      Adaptive buffer <span class="muted">— learn from your actual completion times (only raises, never lowers)</span></label>
-
-    <fieldset class="s-group">
-      <legend>How much a day holds</legend>
-
-      <label>Roughly how many hours of work in a day? <output id="s-capacity-val"></output>
-        <input id="s-capacity" type="range" min="1" max="16" step="0.5" value="8">
-        <span class="muted">How much work a day is allowed to hold, not how
-          long the day is. The calendar warns when a day goes past this, and
-          new deadlines are packed up to it and no further.</span>
+      <label>Time-tax buffer: <output id="s-buffer-val"></output>
+        <input id="s-buffer" type="range" min="25" max="50" value="30">
+        <span class="muted">Every estimate gets this padding — plans always take longer than they feel like they will.</span>
       </label>
 
-      <label class="row"><input id="s-adaptive-capacity" type="checkbox">
-        Learn my real day <span class="muted">— if you almost never reach that
-        number (or clear it every single day), it moves to meet the days you
-        actually have. A goal you have never once hit isn't a plan.</span></label>
-      <p id="s-capacity-note" class="muted"></p>
+      <label class="row"><input id="s-adaptive" type="checkbox">
+        Adaptive buffer <span class="muted">— learn from your actual completion times (only raises, never lowers)</span></label>
 
-      <label>Which days do you work?
-        <span id="s-working-days" class="day-picker"></span>
-        <span class="muted">Nothing the app schedules for itself goes on a day
-          you have not ticked. A deadline or a start time you set yourself
-          still does, and so does a repeating job whose own rule names that
-          day — a preference should not make a commitment impossible.</span>
+      <fieldset class="s-group">
+        <legend>How much a day holds</legend>
+
+        <label>Roughly how many hours of work in a day? <output id="s-capacity-val"></output>
+          <input id="s-capacity" type="range" min="1" max="16" step="0.5" value="8">
+          <span class="muted">How much work a day is allowed to hold, not how
+            long the day is. The calendar warns when a day goes past this, and
+            new deadlines are packed up to it and no further.</span>
+        </label>
+
+        <label class="row"><input id="s-adaptive-capacity" type="checkbox">
+          Learn my real day <span class="muted">— if you almost never reach that
+          number (or clear it every single day), it moves to meet the days you
+          actually have. A goal you have never once hit isn't a plan.</span></label>
+        <p id="s-capacity-note" class="muted"></p>
+
+        <label>Which days do you work?
+          <span id="s-working-days" class="day-picker"></span>
+          <span class="muted">Nothing the app schedules for itself goes on a day
+            you have not ticked. A deadline or a start time you set yourself
+            still does, and so does a repeating job whose own rule names that
+            day — a preference should not make a commitment impossible.</span>
+        </label>
+
+        <label>What time does your day start?
+          <select id="s-day-start"></select>
+          <span class="muted">Not when you wake up: when you have had your
+            coffee and your meds and you are actually ready to go. Nothing the
+            app schedules is put before this, in your own timezone.</span>
+        </label>
+
+        <label>...and when are you done for the day?
+          <select id="s-day-end"></select>
+          <span class="muted">The other end of the same window. Nothing the app
+            schedules runs past it — only a start time or a deadline you set
+            yourself can put work outside these hours. Pick an hour earlier than
+            your start for a shift that runs past midnight.</span>
+          <span id="s-day-overnight" class="muted" hidden></span>
+        </label>
+
+        <label class="row"><input id="s-spread" type="checkbox">
+          Spread work out <span class="muted">— give each task a slot in a day
+          that still has room, instead of dropping everything the app schedules
+          onto the same afternoon.</span></label>
+      </fieldset>
+
+      <label>Impact/effort threshold: <output id="s-threshold-val"></output>
+        <input id="s-threshold" type="range" min="1" max="9" value="5">
       </label>
 
-      <label>What time does your day start?
-        <select id="s-day-start"></select>
-        <span class="muted">Not when you wake up: when you have had your
-          coffee and your meds and you are actually ready to go. Nothing the
-          app schedules is put before this, in your own timezone.</span>
+      <label class="row"><input id="s-manual-order" type="checkbox">
+        Manual order <span class="muted">— keep the list exactly as you drag it, instead of
+        sorting it. Turns itself on the first time you move a task; it is the same
+        switch as <b>Manual</b> in the list's Sort control.</span></label>
+
+      <label>Week starts on
+        <select id="s-week-start">
+          <option value="0">Sunday</option>
+          <option value="1">Monday</option>
+        </select>
+      </label>
+    </section>
+
+    <section class="s-panel" role="tabpanel" id="s-panel-ai" aria-labelledby="s-tab-ai" data-tab="ai">
+      <label class="row" data-module="ai_estimates"><input id="s-ai-scoring" type="checkbox">
+        AI impact/effort suggestions</label>
+
+      <label class="row" data-module="ai_estimates"><input id="s-ai-start-times" type="checkbox">
+        AI start times <span class="muted">— let the AI say when each new task
+        wants to begin. Dinner lands this evening, a game you'll get to
+        eventually lands weeks out, and the scheduler works from that.</span></label>
+
+      <label class="row"><input id="s-title-parsing" type="checkbox">
+        Read deadlines/repeats from the title <span class="muted">— "pay rent
+        tomorrow" or "water the plants every day" sets the deadline or repeat
+        and tidies the phrase out of the title, automatically.</span></label>
+
+      <label class="row"><input id="s-title-parsing-ai" type="checkbox">
+        …and let the AI take a second look <span class="muted">— only when the
+        title's phrasing is too loose for the built-in parser to catch.</span></label>
+
+      <label data-module="magic_todo">Default breakdown granularity: <output id="s-granularity-val"></output>
+        <input id="s-granularity" type="range" min="1" max="5" value="3">
       </label>
 
-      <label>...and when are you done for the day?
-        <select id="s-day-end"></select>
-        <span class="muted">The other end of the same window. Nothing the app
-          schedules runs past it — only a start time or a deadline you set
-          yourself can put work outside these hours. Pick an hour earlier than
-          your start for a shift that runs past midnight.</span>
-        <span id="s-day-overnight" class="muted" hidden></span>
+      <label>Daily AI budget <span id="s-spend-status" class="tag"></span>
+        <input id="s-budget" type="number" min="0" step="0.50" placeholder="0 — no budget">
+        <span class="muted">— roughly what a day of Claude API is allowed to
+          cost. Rather than stop working, the app answers with cheaper models as
+          the day's spend climbs: braindumps at half the budget, breakdowns at
+          three quarters, everything once it is spent. The figure is this app's
+          own estimate from the tokens each call reported, not your invoice.</span>
       </label>
 
-      <label class="row"><input id="s-spread" type="checkbox">
-        Spread work out <span class="muted">— give each task a slot in a day
-        that still has room, instead of dropping everything the app schedules
-        onto the same afternoon.</span></label>
-    </fieldset>
-
-    <label>Impact/effort threshold: <output id="s-threshold-val"></output>
-      <input id="s-threshold" type="range" min="1" max="9" value="5">
-    </label>
-
-    <label class="row" data-module="ai_estimates"><input id="s-ai-scoring" type="checkbox">
-      AI impact/effort suggestions</label>
-
-    <label class="row" data-module="ai_estimates"><input id="s-ai-start-times" type="checkbox">
-      AI start times <span class="muted">— let the AI say when each new task
-      wants to begin. Dinner lands this evening, a game you'll get to
-      eventually lands weeks out, and the scheduler works from that.</span></label>
-
-    <label class="row"><input id="s-title-parsing" type="checkbox">
-      Read deadlines/repeats from the title <span class="muted">— "pay rent
-      tomorrow" or "water the plants every day" sets the deadline or repeat
-      and tidies the phrase out of the title, automatically.</span></label>
-
-    <label class="row"><input id="s-title-parsing-ai" type="checkbox">
-      …and let the AI take a second look <span class="muted">— only when the
-      title's phrasing is too loose for the built-in parser to catch.</span></label>
-
-    <fieldset class="s-group" data-module="alarms">
-      <legend>⏰ Transition alarms</legend>
-      <div class="grid3">
-        <label>Stop <input id="s-stop-lead" type="number" min="0" max="240"> <span class="muted">min before</span></label>
-        <label>Ready <input id="s-ready-lead" type="number" min="0" max="240"> <span class="muted">min before</span></label>
-        <label>Go <input id="s-go-lead" type="number" min="0" max="60"> <span class="muted">min before</span></label>
-      </div>
-      <label>Alarm webhooks <span class="muted">— one URL per line; each alarm is
-        POSTed to every one. A Discord webhook URL gets a Discord message.</span>
-        <textarea id="s-webhooks" rows="2" placeholder="https://discord.com/api/webhooks/…"></textarea></label>
-    </fieldset>
-
-    <label>Week starts on
-      <select id="s-week-start">
-        <option value="0">Sunday</option>
-        <option value="1">Monday</option>
-      </select>
-    </label>
-
-    <label>Timer style
-      <select id="s-timer-style">
-        <option value="both">Analog dial + color block</option>
-        <option value="analog">Analog dial only</option>
-        <option value="block">Color block only</option>
-      </select>
-    </label>
-
-    <label data-module="magic_todo">Default breakdown granularity: <output id="s-granularity-val"></output>
-      <input id="s-granularity" type="range" min="1" max="5" value="3">
-    </label>
-
-    <!-- Sounds. The built-in set is synthesized on the fly, so there is
-         nothing to download and nothing to load before the first click makes
-         a noise. Anything you pick here replaces one of them; the files stay
-         in this browser and are never uploaded anywhere. -->
-    <fieldset class="s-group" data-module="sounds">
-      <legend>🔉 Sounds</legend>
-      <label class="row"><input id="s-sound" type="checkbox">
-        Sound on <span class="muted">— a soft click on every press, and a
-        chime when something lands</span></label>
-      <label>Volume: <output id="s-volume-val"></output>
-        <input id="s-volume" type="range" min="0" max="100" value="55">
+      <label>Anthropic API key <span id="s-key-status" class="tag"></span>
+        <input id="s-api-key" type="password" placeholder="sk-ant-… (leave blank to keep current)">
       </label>
-      <div id="sound-slots" class="sound-slots"></div>
-      <p class="muted">Pick your own audio for any of these — mp3, wav, ogg,
-        anything this browser can play, up to 2 MB each. They're kept in this
-        browser only, so they don't follow you to another device.</p>
-    </fieldset>
 
-    <label class="row"><input id="s-manual-order" type="checkbox">
-      Manual order <span class="muted">— keep the list exactly as you drag it, instead of
-      sorting it. Turns itself on the first time you move a task; it is the same
-      switch as <b>Manual</b> in the list's Sort control.</span></label>
-
-    <label>Daily AI budget <span id="s-spend-status" class="tag"></span>
-      <input id="s-budget" type="number" min="0" step="0.50" placeholder="0 — no budget">
-      <span class="muted">— roughly what a day of Claude API is allowed to
-        cost. Rather than stop working, the app answers with cheaper models as
-        the day's spend climbs: braindumps at half the budget, breakdowns at
-        three quarters, everything once it is spent. The figure is this app's
-        own estimate from the tokens each call reported, not your invoice.</span>
-    </label>
-
-    <label>Anthropic API key <span id="s-key-status" class="tag"></span>
-      <input id="s-api-key" type="password" placeholder="sk-ant-… (leave blank to keep current)">
-    </label>
-
-    <label>Workspace ID <span class="muted">— only needed if your key is identity-linked</span>
-      <input id="s-workspace-id" type="text" placeholder="wrkspc_… (from platform.claude.com/workspaces/&lt;id&gt;)">
-    </label>
-
-    <!-- One-way import of tasks assigned to you in ClickUp, into their own
-         "ClickUp" tab. See clickup.py for what a sync does and does not
-         touch. -->
-    <fieldset class="s-group" data-module="clickup">
-      <legend>🔄 ClickUp sync</legend>
-      <label>ClickUp API token <span id="s-clickup-status" class="tag"></span>
-        <input id="s-clickup-token" type="password" placeholder="pk_… (leave blank to keep current)">
+      <label>Workspace ID <span class="muted">— only needed if your key is identity-linked</span>
+        <input id="s-workspace-id" type="text" placeholder="wrkspc_… (from platform.claude.com/workspaces/&lt;id&gt;)">
       </label>
-      <p class="muted">Pulls every open task assigned to you, across every
-        ClickUp workspace the token can see, into a <b>ClickUp</b> tab —
-        created the first time a sync runs. Re-syncing refreshes an imported
-        task's title, description and due date from ClickUp; everything else
-        (estimate, priority, status, which tab it's in) is yours to manage
-        here and is never touched. Nothing is pushed back to ClickUp.</p>
-      <label>New assignment webhooks <span class="muted">— one URL per line.
-        Each task newly assigned to you is POSTed to every one as a
-        Discord-style message (<code>{"content": "…"}</code>).</span>
-        <textarea id="s-clickup-webhooks" rows="2" placeholder="https://…"></textarea></label>
-      <p id="s-clickup-last-sync" class="muted"></p>
-      <div class="modal-actions">
-        <button type="button" id="s-clickup-sync" class="ghost wide">Sync now</button>
-      </div>
-    </fieldset>
+    </section>
+
+    <section class="s-panel" role="tabpanel" id="s-panel-alarms" aria-labelledby="s-tab-alarms" data-tab="alarms">
+      <fieldset class="s-group" data-module="alarms">
+        <legend>⏰ Transition alarms</legend>
+        <div class="grid3">
+          <label>Stop <input id="s-stop-lead" type="number" min="0" max="240"> <span class="muted">min before</span></label>
+          <label>Ready <input id="s-ready-lead" type="number" min="0" max="240"> <span class="muted">min before</span></label>
+          <label>Go <input id="s-go-lead" type="number" min="0" max="60"> <span class="muted">min before</span></label>
+        </div>
+        <label>Alarm webhooks <span class="muted">— one URL per line; each alarm is
+          POSTed to every one. A Discord webhook URL gets a Discord message.</span>
+          <textarea id="s-webhooks" rows="2" placeholder="https://discord.com/api/webhooks/…"></textarea></label>
+      </fieldset>
+
+      <label>Timer style
+        <select id="s-timer-style">
+          <option value="both">Analog dial + color block</option>
+          <option value="analog">Analog dial only</option>
+          <option value="block">Color block only</option>
+        </select>
+      </label>
+    </section>
+
+    <section class="s-panel" role="tabpanel" id="s-panel-sounds" aria-labelledby="s-tab-sounds" data-tab="sounds">
+      <!-- Sounds. The built-in set is synthesized on the fly, so there is
+           nothing to download and nothing to load before the first click makes
+           a noise. Anything you pick here replaces one of them; the files stay
+           in this browser and are never uploaded anywhere. -->
+      <fieldset class="s-group" data-module="sounds">
+        <legend>🔉 Sounds</legend>
+        <label class="row"><input id="s-sound" type="checkbox">
+          Sound on <span class="muted">— a soft click on every press, and a
+          chime when something lands</span></label>
+        <label>Volume: <output id="s-volume-val"></output>
+          <input id="s-volume" type="range" min="0" max="100" value="55">
+        </label>
+        <div id="sound-slots" class="sound-slots"></div>
+        <p class="muted">Pick your own audio for any of these — mp3, wav, ogg,
+          anything this browser can play, up to 2 MB each. They're kept in this
+          browser only, so they don't follow you to another device.</p>
+      </fieldset>
+    </section>
+
+    <section class="s-panel" role="tabpanel" id="s-panel-clickup" aria-labelledby="s-tab-clickup" data-tab="clickup">
+      <!-- One-way import of tasks assigned to you in ClickUp, into their own
+           "ClickUp" tab. See clickup.py for what a sync does and does not
+           touch. -->
+      <fieldset class="s-group" data-module="clickup">
+        <legend>🔄 ClickUp sync</legend>
+        <label>ClickUp API token <span id="s-clickup-status" class="tag"></span>
+          <input id="s-clickup-token" type="password" placeholder="pk_… (leave blank to keep current)">
+        </label>
+        <p class="muted">Pulls every open task assigned to you, across every
+          ClickUp workspace the token can see, into a <b>ClickUp</b> tab —
+          created the first time a sync runs. Re-syncing refreshes an imported
+          task's title, description and due date from ClickUp; everything else
+          (estimate, priority, status, which tab it's in) is yours to manage
+          here and is never touched. Nothing is pushed back to ClickUp.</p>
+        <label>New assignment webhooks <span class="muted">— one URL per line.
+          Each task newly assigned to you is POSTed to every one as a
+          Discord-style message (<code>{"content": "…"}</code>).</span>
+          <textarea id="s-clickup-webhooks" rows="2" placeholder="https://…"></textarea></label>
+        <p id="s-clickup-last-sync" class="muted"></p>
+        <div class="modal-actions">
+          <button type="button" id="s-clickup-sync" class="ghost wide">Sync now</button>
+        </div>
+      </fieldset>
+    </section>
+
+    <section class="s-panel" role="tabpanel" id="s-panel-modules" aria-labelledby="s-tab-modules" data-tab="modules">
+      <!-- Which parts of the app are on. Built from the server's module list
+           (see modules.py), so a new module needs no change here. Turning one
+           off hides it and stops it on the server; its data stays put. -->
+      <fieldset class="s-group">
+        <legend>🧩 Modules</legend>
+        <div id="s-modules" class="module-list"></div>
+        <p class="muted">Turning a module off hides it and stops its work on the
+          server. Nothing it saved is deleted: turn it back on and it is all
+          still there.</p>
+      </fieldset>
+    </section>
 
     <div class="modal-actions">
       <button id="s-save" class="accent wide">Save settings</button>

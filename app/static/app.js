@@ -2892,8 +2892,50 @@ async function reportTimezone() {
   } catch { /* a plan an hour out of place beats no plan at all */ }
 }
 
+/* ---- settings tabs ---- */
+const SETTINGS_TAB_KEY = "adderall.settingsTab";
+
+function settingsTabs() {
+  return [...$("modal-settings").querySelectorAll(".s-tab")];
+}
+
+/* Show one section. A tab whose module is off is skipped, so a remembered
+ * ClickUp tab falls back to the first one once ClickUp is switched off. */
+function showSettingsTab(id, focusTab = false) {
+  const visible = settingsTabs().filter((t) => !t.hidden);
+  const tab = visible.find((t) => t.dataset.tab === id) || visible[0];
+  for (const t of settingsTabs()) {
+    const on = t === tab;
+    t.setAttribute("aria-selected", String(on));
+    t.tabIndex = on ? 0 : -1;
+  }
+  for (const panel of $("modal-settings").querySelectorAll(".s-panel"))
+    panel.classList.toggle("active", panel.dataset.tab === tab.dataset.tab);
+  if (focusTab) tab.focus();
+  try { localStorage.setItem(SETTINGS_TAB_KEY, tab.dataset.tab); } catch {}
+}
+
+function wireSettingsTabs() {
+  for (const tab of settingsTabs()) {
+    tab.addEventListener("click", () => showSettingsTab(tab.dataset.tab));
+    tab.addEventListener("keydown", (e) => {
+      const visible = settingsTabs().filter((t) => !t.hidden);
+      const i = visible.indexOf(tab);
+      const next = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0,
+                     End: visible.length - 1 }[e.key];
+      if (next === undefined) return;
+      e.preventDefault();
+      const target = visible[(next + visible.length) % visible.length];
+      showSettingsTab(target.dataset.tab, true);
+    });
+  }
+}
+
 function openSettings() {
   renderModuleSwitches();
+  let remembered = null;
+  try { remembered = localStorage.getItem(SETTINGS_TAB_KEY); } catch {}
+  showSettingsTab(remembered);
   $("s-auto-deadlines").checked = settings.auto_deadlines;
   $("s-buffer").value = Math.round(settings.buffer * 100);
   $("s-buffer-val").textContent = Math.round(settings.buffer * 100) + "%";
@@ -3801,6 +3843,7 @@ function wire() {
   $("btn-focus").addEventListener("click", () => startFocus(null));
   $("btn-settings").addEventListener("click", openSettings);
   $("s-save").addEventListener("click", saveSettings);
+  wireSettingsTabs();
   $("s-day-start").addEventListener("change", updateOvernightNote);
   $("s-day-end").addEventListener("change", updateOvernightNote);
   $("s-clickup-sync").addEventListener("click", syncClickUp);
