@@ -69,6 +69,32 @@ def test_workspace_error_gets_actionable_message(monkeypatch):
     assert "ANTHROPIC_WORKSPACE_ID" in str(exc.value)
 
 
+# ---------- no key configured ----------
+
+@pytest.fixture()
+def no_credentials(monkeypatch, tmp_path):
+    """Nothing the SDK could resolve credentials from: no key, token or profile."""
+    for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
+                 "ANTHROPIC_PROFILE", "ANTHROPIC_IDENTITY_TOKEN",
+                 "ANTHROPIC_IDENTITY_TOKEN_FILE", "ANTHROPIC_CONFIG_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))  # no ~/.config/anthropic profile
+
+
+def test_no_key_raises_ai_unavailable(no_credentials):
+    with pytest.raises(ai.AIUnavailable) as exc:
+        ai._call({}, "fast", "hi", {"type": "object"})
+    assert "API key missing" in str(exc.value)
+
+
+def test_create_task_without_key_still_succeeds(no_credentials):
+    from fastapi.testclient import TestClient
+    from app import main
+    importlib.reload(main)
+    res = TestClient(main.app).post("/api/tasks", json={"title": "x"})
+    assert res.status_code == 201
+
+
 # ---------- logging ----------
 
 class FakeBlock:

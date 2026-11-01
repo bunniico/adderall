@@ -358,10 +358,11 @@ function setCalendarMode(on) {
   // The calendar has its own project filter; two project pickers on screen at
   // once would just disagree with each other.
   $("project-tabs").hidden = on;
-  $("btn-view").textContent = on ? "☰ List" : "📅 Calendar";
+  $("btn-view").textContent = on ? "☰" : "📅";
   $("btn-view").title = on
-    ? "Back to the task list"
-    : "See everything with a date on it, across every project";
+    ? "List: back to the task list"
+    : "Calendar: see everything with a date on it, across every project";
+  $("btn-view").setAttribute("aria-label", on ? "List" : "Calendar");
   saveCalendarPrefs();
   // Coming back out lands on whichever tab you left — which may be the
   // Overview, whose numbers have gone stale while it was behind the calendar,

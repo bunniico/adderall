@@ -1395,8 +1395,9 @@ function render() {
 
   // Done, dropped, and gone by. A missed beat belongs here rather than in the
   // list: it is not a thing to do any more, and it is not a thing you did.
+  // Archived ones are put away, not gone: they still count in every number.
   const finished = state.tasks.filter(
-    (t) => ["done", "discarded", "missed"].includes(t.status) &&
+    (t) => ["done", "discarded", "missed"].includes(t.status) && !t.archived &&
       (!searchShown || searchShown.has(t.id)));
   $("done-section").hidden = finished.length === 0;
   const doneList = $("done-list");
@@ -1635,6 +1636,26 @@ function wireConnectionBanner() {
   window.addEventListener("offline", show);
   window.addEventListener("online", hide);
   if (!navigator.onLine) show();
+}
+
+/* Clear the Done list without losing anything: the tasks are flagged, not
+ * deleted, and keep counting towards XP and every average. */
+async function archiveFinished() {
+  const ids = state.tasks.filter(
+    (t) => ["done", "discarded", "missed"].includes(t.status) && !t.archived)
+    .map((t) => t.id);
+  if (!ids.length) return;
+  const move = (archived) => api("/tasks/archive", {
+    method: "POST", body: JSON.stringify({ task_ids: ids, archived }),
+  });
+  try {
+    applyState(await move(true));
+    toast(`Archived ${ids.length} finished task${ids.length === 1 ? "" : "s"}.`, false, {
+      run: async () => {
+        try { applyState(await move(false)); } catch (e) { toast(e.message, true); }
+      },
+    });
+  } catch (e) { toast(e.message, true); }
 }
 
 /* ---------------- 💬 Ask ----------------
@@ -2935,8 +2956,50 @@ async function reportTimezone() {
   } catch { /* a plan an hour out of place beats no plan at all */ }
 }
 
+/* ---- settings tabs ---- */
+const SETTINGS_TAB_KEY = "adderall.settingsTab";
+
+function settingsTabs() {
+  return [...$("modal-settings").querySelectorAll(".s-tab")];
+}
+
+/* Show one section. A tab whose module is off is skipped, so a remembered
+ * ClickUp tab falls back to the first one once ClickUp is switched off. */
+function showSettingsTab(id, focusTab = false) {
+  const visible = settingsTabs().filter((t) => !t.hidden);
+  const tab = visible.find((t) => t.dataset.tab === id) || visible[0];
+  for (const t of settingsTabs()) {
+    const on = t === tab;
+    t.setAttribute("aria-selected", String(on));
+    t.tabIndex = on ? 0 : -1;
+  }
+  for (const panel of $("modal-settings").querySelectorAll(".s-panel"))
+    panel.classList.toggle("active", panel.dataset.tab === tab.dataset.tab);
+  if (focusTab) tab.focus();
+  try { localStorage.setItem(SETTINGS_TAB_KEY, tab.dataset.tab); } catch {}
+}
+
+function wireSettingsTabs() {
+  for (const tab of settingsTabs()) {
+    tab.addEventListener("click", () => showSettingsTab(tab.dataset.tab));
+    tab.addEventListener("keydown", (e) => {
+      const visible = settingsTabs().filter((t) => !t.hidden);
+      const i = visible.indexOf(tab);
+      const next = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0,
+                     End: visible.length - 1 }[e.key];
+      if (next === undefined) return;
+      e.preventDefault();
+      const target = visible[(next + visible.length) % visible.length];
+      showSettingsTab(target.dataset.tab, true);
+    });
+  }
+}
+
 function openSettings() {
   renderModuleSwitches();
+  let remembered = null;
+  try { remembered = localStorage.getItem(SETTINGS_TAB_KEY); } catch {}
+  showSettingsTab(remembered);
   $("s-auto-deadlines").checked = settings.auto_deadlines;
   $("s-buffer").value = Math.round(settings.buffer * 100);
   $("s-buffer-val").textContent = Math.round(settings.buffer * 100) + "%";
@@ -3791,6 +3854,7 @@ function wire() {
   });
 
   $("templates-btn").addEventListener("click", openTemplates);
+  $("btn-archive-done").addEventListener("click", archiveFinished);
 
   // Search: narrows as you type. Escape clears it; "/" jumps to it from
   // anywhere that isn't already a text field.
@@ -3865,6 +3929,7 @@ function wire() {
   $("btn-focus").addEventListener("click", () => startFocus(null));
   $("btn-settings").addEventListener("click", openSettings);
   $("s-save").addEventListener("click", saveSettings);
+  wireSettingsTabs();
   $("s-day-start").addEventListener("change", updateOvernightNote);
   $("s-day-end").addEventListener("change", updateOvernightNote);
   $("s-clickup-sync").addEventListener("click", syncClickUp);

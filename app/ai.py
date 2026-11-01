@@ -350,13 +350,20 @@ def _request(settings: dict, model: str, prompt: str, schema: dict,
         # thought and billed either way, and the summary is what makes it
         # visible in the logs below.
         kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
+    missing_key = AIUnavailable(
+        "Anthropic API key missing or invalid. Set it in Settings or via "
+        "the ANTHROPIC_API_KEY environment variable."
+    )
     try:
         return _client(settings).messages.create(**kwargs)
     except anthropic.AuthenticationError as exc:
-        raise AIUnavailable(
-            "Anthropic API key missing or invalid. Set it in Settings or via "
-            "the ANTHROPIC_API_KEY environment variable."
-        ) from exc
+        raise missing_key from exc
+    except TypeError as exc:
+        # With no key, token or profile to find, the SDK raises a bare
+        # TypeError at request time rather than an API error.
+        if "Could not resolve authentication method" in str(exc):
+            raise missing_key from exc
+        raise
     except anthropic.APIStatusError as exc:
         if "anthropic-workspace-id" in str(exc.message):
             raise AIUnavailable(
