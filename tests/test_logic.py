@@ -913,11 +913,100 @@ def test_a_deadline_with_no_room_at_all_draws_nothing_rather_than_guessing():
                               "length_min": 240}) != []
 
 
-def test_a_day_that_ends_before_it_starts_is_clamped_not_refused():
+def test_a_day_that_ends_before_it_starts_is_an_overnight_shift():
+    """#120: 20:00 to 06:00 is a night shift, not a typo. The window is the
+    whole ten hours, counted from when the day turns over at 06:00."""
+    planner = logic.day_planner({**SETTINGS, "day_start": 20, "day_end": 6})
+    assert planner.offset == 6 * 60
+    assert planner.window_end - planner.day_start == 10 * 60
+
+
+def test_a_day_that_ends_where_it_starts_is_still_clamped_not_refused():
     """A silly setting reads as the nearest sensible day rather than stopping
     the scheduler, the same way a malformed repeat rule does."""
-    planner = logic.day_planner({**SETTINGS, "day_start": 20, "day_end": 6})
-    assert planner.window_end == (20 + logic.MIN_DAY_HOURS) * 60
+    planner = logic.day_planner({**SETTINGS, "day_start": 9, "day_end": 9})
+    assert planner.offset == 0
+    assert planner.window_end == (9 + logic.MIN_DAY_HOURS) * 60
+
+
+def test_an_ordinary_day_has_no_offset():
+    planner = logic.day_planner({**SETTINGS, "day_start": 9, "day_end": 22})
+    assert planner.offset == 0
+    assert (planner.day_start, planner.window_end) == (9 * 60, 22 * 60)
+
+
+def test_a_shift_ending_at_midnight_runs_to_midnight():
+    planner = logic.day_planner({**SETTINGS, "day_start": 16, "day_end": 0})
+    assert planner.offset == 0
+    assert (planner.day_start, planner.window_end) == (16 * 60, 24 * 60)
+
+
+def _night(**extra):
+    return logic.day_planner({**SETTINGS, "day_start": 16, "day_end": 4,
+                              "timezone": "UTC", "day_capacity": 600,
+                              "adaptive_capacity": False, **extra},
+                             now=datetime(2026, 8, 31, 12, 0, tzinfo=timezone.utc))
+
+
+def test_two_in_the_morning_belongs_to_the_shift_that_started_the_evening_before():
+    planner = _night()
+    tue_2am = datetime(2026, 9, 1, 2, 0, tzinfo=timezone.utc)
+    assert planner.local_day(tue_2am).isoformat() == "2026-08-31"   # Monday
+    assert logic.shift_day(tue_2am, timezone.utc, planner.offset).isoformat() == "2026-08-31"
+
+
+def test_night_shift_work_is_placed_inside_the_shift_and_runs_past_midnight():
+    planner = _night()
+    monday = datetime(2026, 8, 31, 12, 0, tzinfo=timezone.utc)
+    first = planner.place("a", monday, 300)
+    second = planner.place("b", monday, 300)
+    a, b = planner.spans("a"), planner.spans("b")
+    assert a == [(datetime(2026, 8, 31, 16, 0, tzinfo=timezone.utc),
+                  datetime(2026, 8, 31, 21, 0, tzinfo=timezone.utc))]
+    # One unbroken block through midnight, still Monday's shift.
+    assert b == [(datetime(2026, 8, 31, 21, 0, tzinfo=timezone.utc),
+                  datetime(2026, 9, 1, 2, 0, tzinfo=timezone.utc))]
+    assert second == datetime(2026, 9, 1, 2, 0, tzinfo=timezone.utc)
+    assert first < second
+
+
+def test_nothing_is_placed_in_the_daytime_gap_between_shifts():
+    planner = _night()
+    monday = datetime(2026, 8, 31, 12, 0, tzinfo=timezone.utc)
+    for i in range(6):
+        planner.place(f"t{i}", monday, 240)
+    for i in range(6):
+        for start, end in planner.spans(f"t{i}"):
+            for when in (start, end - timedelta(minutes=1)):
+                hour = when.hour
+                assert hour >= 16 or hour < 4, (i, start, end)
+
+
+def test_a_deadline_after_midnight_is_laid_back_into_that_same_shift():
+    planner = _night()
+    due = datetime(2026, 9, 1, 2, 0, tzinfo=timezone.utc)   # 02:00 Tuesday
+    planner.reserve("x", due, 180)
+    assert planner.spans("x") == [(datetime(2026, 8, 31, 23, 0, tzinfo=timezone.utc), due)]
+
+
+def test_a_night_shift_on_a_working_day_may_run_into_the_next_date():
+    """Monday is a working day and Tuesday is not: Monday's shift still runs
+    to 04:00 Tuesday, because the hours after midnight are Monday's."""
+    planner = _night()
+    monday = datetime(2026, 8, 31, 12, 0, tzinfo=timezone.utc)
+    only_monday = frozenset({0})   # Python weekday: Monday
+    planner.place("a", monday, 480, days=only_monday)
+    (start, end), = planner.spans("a")
+    assert start == datetime(2026, 8, 31, 16, 0, tzinfo=timezone.utc)
+    assert end == datetime(2026, 9, 1, 0, 0, tzinfo=timezone.utc)
+
+
+def test_night_work_counts_towards_the_shift_it_was_part_of():
+    history = [{"finished_at": "2026-08-31T22:00:00+00:00", "minutes": 120},
+               {"finished_at": "2026-09-01T02:00:00+00:00", "minutes": 60}]
+    assert logic.daily_totals(history, timezone.utc, 4 * 60) == {"2026-08-31": 180}
+    assert logic.daily_totals(history, timezone.utc) == {"2026-08-31": 120,
+                                                          "2026-09-01": 60}
 
 
 def test_a_full_day_still_has_gaps_to_place_the_next_thing_in():

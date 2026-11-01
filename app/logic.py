@@ -242,12 +242,34 @@ def _median(values: list[float]) -> float:
     return (ordered[mid - 1] + ordered[mid]) / 2.0
 
 
-def daily_totals(history: list[dict], tz: tzinfo = timezone.utc) -> dict[str, int]:
+def day_offset(day_start: int, day_end: int) -> int:
+    """Minutes after local midnight at which a working "day" turns over.
+
+    Zero for an ordinary day. A day that closes at an hour before it opens,
+    a 16:00 to 04:00 shift, runs past midnight, and the whole shift belongs to
+    the date it started on: Monday's shift is Monday's work, including the
+    hours after midnight. So the day turns over when the shift ends, not at
+    midnight, and everything that asks "which day is this" asks it from there.
+    """
+    start, end = int(day_start), int(day_end)
+    return end * 60 if 0 <= end < start <= 23 else 0
+
+
+def shift_day(when: datetime, tz: tzinfo, offset: int = 0) -> date:
+    """The working day an instant belongs to (see `day_offset`)."""
+    return (when.astimezone(tz) - timedelta(minutes=offset)).date()
+
+
+def daily_totals(history: list[dict], tz: tzinfo = timezone.utc,
+                 offset: int = 0) -> dict[str, int]:
     """Minutes of work finished per local day.
 
     Only days you finished *something* on are counted. A weekend off is not
     evidence that you can manage twenty minutes a day, and letting it count as
     one would drag the cap down to nothing over a fortnight.
+
+    A day is a working day: with an overnight shift, what you finished at two
+    in the morning counts towards the shift it was part of.
     """
     totals: dict[str, int] = {}
     for row in history:
@@ -255,7 +277,7 @@ def daily_totals(history: list[dict], tz: tzinfo = timezone.utc) -> dict[str, in
         minutes = row.get("minutes")
         if when is None or not minutes:
             continue
-        key = when.astimezone(tz).date().isoformat()
+        key = shift_day(when, tz, offset).isoformat()
         totals[key] = totals.get(key, 0) + int(minutes)
     return totals
 
@@ -284,7 +306,9 @@ def capacity_plan(settings: dict, history: list[dict] | None = None,
         "adaptive": bool(settings.get("adaptive_capacity", True)),
     }
     tz = tz or resolve_tz(settings.get("timezone"))
-    totals = sorted(daily_totals(history or [], tz).values())
+    offset = day_offset(settings.get("day_start", DEFAULT_DAY_START),
+                        settings.get("day_end", DEFAULT_DAY_END))
+    totals = sorted(daily_totals(history or [], tz, offset).values())
     plan["days"] = len(totals)
     if not plan["adaptive"] or len(totals) < CAPACITY_MIN_DAYS:
         return plan
@@ -341,12 +365,19 @@ class DayPlanner:
                  search_days: int = PLACEMENT_SEARCH_DAYS,
                  now: datetime | None = None) -> None:
         self.capacity = max(30, min(24 * 60, int(capacity or DEFAULT_CAPACITY)))
-        self.day_start = max(0, min(23, int(day_start))) * 60
-        # Clamped, not rejected: a day that ends before it starts is a typo, and
-        # a scheduler that refuses to schedule is worse than one that reads a
-        # sensible day out of a silly setting.
-        self.day_end = min(24 * 60, max(self.day_start + MIN_DAY_HOURS * 60,
-                                        int(day_end) * 60))
+        start_h = max(0, min(23, int(day_start)))
+        # A day that ends at an earlier hour than it starts is an overnight
+        # shift, not a typo. Every minute below is counted from when the
+        # working day turns over (`day_offset`) rather than from midnight, so
+        # a 16:00-04:00 shift is one unbroken window on the date it starts,
+        # and everything else in here is unchanged by it.
+        self.offset = day_offset(start_h, int(day_end))
+        self.day_start = start_h * 60 - self.offset
+        end = 24 * 60 if self.offset or int(day_end) == 0 < start_h else int(day_end) * 60
+        # Clamped, not rejected: a day shorter than a couple of hours is a
+        # slip, and a scheduler that refuses to schedule is worse than one
+        # that reads a sensible day out of a silly setting.
+        self.day_end = min(24 * 60, max(self.day_start + MIN_DAY_HOURS * 60, end))
         self.tz = tz
         # The hours already gone. Work laid backwards from a deadline that is
         # still ahead of you stops here rather than filling this morning.
@@ -372,9 +403,10 @@ class DayPlanner:
         return when.astimezone(self.tz)
 
     def local_day(self, when: datetime) -> date:
-        """Which local day an instant falls on — the unit everything here
-        books against, and the one the caller has to rank by."""
-        return self._local(when).date()
+        """Which working day an instant falls on — the unit everything here
+        books against, and the one the caller has to rank by. The local date,
+        unless the day runs past midnight (see `day_offset`)."""
+        return (self._local(when) - timedelta(minutes=self.offset)).date()
 
     def _allows(self, day: date, days: frozenset[int] | None) -> bool:
         """May work go on this local day? Anything with no rule may go
@@ -382,7 +414,10 @@ class DayPlanner:
         return days is None or day.weekday() in days
 
     def _midnight(self, day: date) -> datetime:
-        return datetime.combine(day, time(0, 0), tzinfo=self.tz)
+        """Where `day`'s minutes are counted from: local midnight, or the hour
+        an overnight shift ends."""
+        return (datetime.combine(day, time(0, 0), tzinfo=self.tz)
+                + timedelta(minutes=self.offset))
 
     def _instant(self, day: date, minute: float) -> datetime:
         return (self._midnight(day) + timedelta(minutes=minute)).astimezone(timezone.utc)
@@ -411,7 +446,7 @@ class DayPlanner:
         start, end = self._local(start), self._local(end)
         if end <= start:
             end = start + timedelta(minutes=1)
-        day, last = start.date(), end.date()
+        day, last = self.local_day(start), self.local_day(end)
         while day <= last:
             base = self._midnight(day)
             first = max(0.0, (start - base).total_seconds() / 60.0)
@@ -450,7 +485,7 @@ class DayPlanner:
         if not_before is None:
             return floor
         local = self._local(not_before)
-        if local.date() != day:
+        if self.local_day(not_before) != day:
             return floor
         into_day = (local - self._midnight(day)).total_seconds() / 60.0
         return max(floor, int(math.ceil(into_day)))
@@ -502,7 +537,7 @@ class DayPlanner:
         dinner at six runs until it is finished and not a minute past.
         """
         for _ in range(self.search_days + 1):
-            pinned = pin is not None and self._local(pin).date() == day
+            pinned = pin is not None and self.local_day(pin) == day
             if not pinned and not self._allows(day, days):
                 day += timedelta(days=1)
                 continue
@@ -575,7 +610,7 @@ class DayPlanner:
         evening before.
         """
         local = self._local(deadline)
-        day = local.date()
+        day = self.local_day(deadline)
         dl_min = int((local - self._midnight(day)).total_seconds() // 60)
         spans: list[tuple[datetime, datetime]] = []
         remaining = length
@@ -601,7 +636,7 @@ class DayPlanner:
         # of its plan. One that has passed is historical either way, and work
         # that was due last Tuesday belongs on last Tuesday.
         honour_now = self.now is not None and deadline > self.now
-        today = self._local(self.now).date() if self.now is not None else None
+        today = self.local_day(self.now) if self.now is not None else None
 
         ceiling = min(dl_min, self.window_end)
         for _ in range(self.search_days + 1):
@@ -612,7 +647,7 @@ class DayPlanner:
             # The deadline's own day is the commitment and is always allowed;
             # every earlier day it reaches back through has to be one the
             # rhythm names.
-            if day != local.date() and not self._allows(day, days):
+            if day != self.local_day(deadline) and not self._allows(day, days):
                 day -= timedelta(days=1)
                 ceiling = self.window_end
                 continue
@@ -662,7 +697,7 @@ class DayPlanner:
         for _ in range(self.search_days + 1):
             if remaining <= 0:
                 break
-            pinned = pin is not None and self._local(pin).date() == day
+            pinned = pin is not None and self.local_day(pin) == day
             # A day the rhythm does not name is not a day it may use. The
             # pinned day is the exception: that hour is the commitment itself,
             # and refusing it would leave the work nowhere to begin.
@@ -770,7 +805,7 @@ class DayPlanner:
         if key in self._placed:
             return self._placed[key]
         length = max(1, int(length))
-        day = self._local(target).date()
+        day = self.local_day(target)
         slot = self._first_fit(day, length, not_before, pin, days)
         if slot is not None:
             chosen, start = slot
@@ -1803,8 +1838,8 @@ def reschedule_plan(tasks: list[dict], settings: dict, ids: list[str],
     if days is None:
         start = parse_dt(floor) or now
     else:
-        local = now.astimezone(planner.tz) + timedelta(days=days)
-        start = planner._instant(local.date(), planner.day_start)
+        start = planner._instant(planner.local_day(now) + timedelta(days=days),
+                                 planner.day_start)
     start = max(start, now)
 
     out: list[dict] = []
@@ -2266,10 +2301,8 @@ def occurrence_window(at: datetime, rule: dict | None,
     """
     if not (rule or {}).get("time"):
         return None, at
-    tz = resolve_tz(settings.get("timezone"))
-    local = at.astimezone(tz)
-    closes = (datetime.combine(local.date(), time(0, 0), tzinfo=tz)
-              + timedelta(minutes=day_planner(settings).window_end))
+    planner = day_planner(settings)
+    closes = planner._instant(planner.local_day(at), planner.window_end)
     # An hour past the close of the day is its own deadline. Nothing else
     # would be: a day that ends at 22:00 and a job that starts at 23:00 is a
     # deliberate late night, and moving its deadline backwards would put the
