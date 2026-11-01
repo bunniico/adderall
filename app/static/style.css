@@ -373,6 +373,7 @@ button:disabled { opacity: .5; cursor: wait; }
    thinking, not broken. */
 button:disabled { animation: thinking 1.4s var(--ease-out) infinite; }
 @keyframes thinking { 50% { opacity: .34; } }
+#f-auto.on { color: var(--accent); border-color: var(--accent); }
 
 input, textarea, select {
   font: inherit; color: var(--text); background: var(--panel);

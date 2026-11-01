@@ -16,6 +16,8 @@ Pick which timer you see under *Timer style* in ⚙ Settings.
 
 Buttons: **⏸ Pause**, **↺ Reset timer** (start this block over), **+5 min**, **✓ Done**, and **Next task →**.
 
+**⏭ Auto** (top corner) changes what happens when time runs out. Off, Focus waits for you to press a button. On, it moves to the next task by itself, starts its timer, and tells you with a message and a notification. The task whose time ran out stays open, just as **Next task →** leaves it; it is not marked done. The setting is remembered for next time.
+
 **It walks the task tree depth-first**: a task's subtasks come before the task itself, so a session drills down to the smallest first step and works back up.
 
 **Closing the overlay only minimises it.** The timer keeps running. A **▶ pill** in the header shows the countdown; click it to come back. The session survives a page reload. **⏹ End session** ends it for good.
