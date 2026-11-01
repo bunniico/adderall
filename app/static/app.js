@@ -27,6 +27,7 @@ let subtaskDraftText = "";
 let handleFocusFor = null;    // drag handle to re-focus after a keyboard move
 let tabFocusFor = null;       // project tab to re-focus after a keyboard move
 let toggleFocusFor = null;    // collapse toggle to re-focus after a fold/unfold
+let searchQuery = "";         // what the search box is narrowing the list to
 
 /* ---------------- API ---------------- */
 
@@ -766,6 +767,37 @@ async function setSort(field, dir) {
   renderSortBar();
 }
 
+/* Which rows the search box lets through, or null when nothing is typed.
+ * A task that matches comes with all of its steps ("hit"); one that only
+ * holds a match comes with just the branches leading to it ("path"), drawn
+ * unfolded so the match is on screen and still read in context. Only the
+ * drawing consults this: totals, badges and delete warnings keep reading the
+ * whole task. */
+let searchShown = null;
+
+function searchRows(tasks, query) {
+  const q = query.trim().toLowerCase();
+  if (!q) return null;
+  const shown = new Map();
+  const hit = (t) => (t.title || "").toLowerCase().includes(q) ||
+    (t.description || "").toLowerCase().includes(q);
+  const walk = (list) => {
+    let any = false;
+    for (const t of list) {
+      if (hit(t)) {
+        for (const d of flatten([t])) shown.set(d.id, "hit");
+        any = true;
+      } else if (walk(t.subtasks || [])) {
+        shown.set(t.id, "path");
+        any = true;
+      }
+    }
+    return any;
+  };
+  walk(tasks);
+  return shown;
+}
+
 function sortActive(tasks) {
   const key = (t) => t.list_sort_key || t.sort_key;
   return [...tasks].sort((a, b) => {
@@ -886,7 +918,9 @@ function taskNode(task, isSub) {
   const composing = active && subtaskDraftFor === task.id;
   // Folding is only ever about subtasks you can actually see: a stale flag on
   // a task whose subtasks are all finished must not hide anything.
-  const collapsed = !!task.collapsed && subs.length > 0;
+  // A search match inside a folded task is unfolded to, never hidden by it.
+  const collapsed = !!task.collapsed && subs.length > 0 &&
+    searchShown?.get(task.id) !== "path";
   el.className = "task" + (active ? "" : " done-task") +
     (task.id === state.next_task_id ? " next" : "") +
     // Drawn as a container rather than a row: it gets the lid, the heavier
@@ -1076,7 +1110,9 @@ function taskNode(task, isSub) {
   if (!collapsed && (subs.length || composing || waiting.length)) {
     const wrap = document.createElement("div");
     wrap.className = "subtasks";
-    for (const sub of subs) wrap.appendChild(taskNode(sub, true));
+    for (const sub of subs) {
+      if (!searchShown || searchShown.has(sub.id)) wrap.appendChild(taskNode(sub, true));
+    }
     for (const p of waiting) wrap.append(...shimmerRows(p));
     if (composing) wrap.appendChild(subtaskComposer(task.id));
     el.appendChild(wrap);
@@ -1345,10 +1381,13 @@ function render() {
   list.replaceChildren();
   const active = state.tasks.filter(
     (t) => t.status === "todo" || t.status === "in_progress");
+  searchShown = searchRows(state.tasks, searchQuery);
+  const searching = !!searchShown;
+  const shown = searching ? active.filter((t) => searchShown.has(t.id)) : active;
   // New top-level tasks on their way: a placeholder where the eye already is,
   // at the head of the list under the box they were typed into.
   for (const p of pendingFor(null)) list.append(...shimmerRows(p));
-  for (const t of sortActive(active)) list.appendChild(taskNode(t, false));
+  for (const t of sortActive(shown)) list.appendChild(taskNode(t, false));
   // The compiled list has nowhere to put a new task and no order of its own
   // to drag one into, so the box and the hint about dragging both stand down
   // and say why.
@@ -1358,7 +1397,10 @@ function render() {
   $("empty-hint").hidden = all || active.length > 0 || pendingFor(null).length > 0;
   $("list-hint").hidden = all || active.length === 0;
   // Nothing to sort is nothing to decide about: the bar arrives with the list.
-  $("list-toolbar").hidden = active.length === 0;
+  // It stays while a search is typed in, so the search can be cleared.
+  $("list-toolbar").hidden = active.length === 0 && !searching;
+  $("search-empty").hidden = !searching || shown.length > 0 || active.length === 0;
+  $("search-empty").textContent = `No open tasks match “${searchQuery.trim()}”.`;
   renderSortBar();
   const project = (state.projects || []).find(
     (p) => p.id === state.active_project_id);
@@ -1369,7 +1411,8 @@ function render() {
   // list: it is not a thing to do any more, and it is not a thing you did.
   // Archived ones are put away, not gone: they still count in every number.
   const finished = state.tasks.filter(
-    (t) => ["done", "discarded", "missed"].includes(t.status) && !t.archived);
+    (t) => ["done", "discarded", "missed"].includes(t.status) && !t.archived &&
+      (!searchShown || searchShown.has(t.id)));
   $("done-section").hidden = finished.length === 0;
   const doneList = $("done-list");
   doneList.replaceChildren();
@@ -3870,6 +3913,27 @@ function wire() {
 
   $("templates-btn").addEventListener("click", openTemplates);
   $("btn-archive-done").addEventListener("click", archiveFinished);
+
+  // Search: narrows as you type. Escape clears it; "/" jumps to it from
+  // anywhere that isn't already a text field.
+  $("task-search").addEventListener("input", () => {
+    searchQuery = $("task-search").value;
+    render();
+  });
+  $("task-search").addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || !$("task-search").value) return;
+    e.preventDefault();
+    e.stopPropagation();
+    $("task-search").value = searchQuery = "";
+    render();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.target?.closest?.("input, textarea, select, [contenteditable]")) return;
+    if (document.querySelector("dialog[open]") || $("list-toolbar").hidden) return;
+    e.preventDefault();
+    $("task-search").focus();
+  });
   // A pop-up menu closes on a click anywhere else, on Escape, and when the
   // page moves under it.
   document.addEventListener("pointerdown", (e) => {
