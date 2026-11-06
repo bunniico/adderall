@@ -1034,16 +1034,23 @@ def priority_score(impact: int | None, effort: int | None, urgency_value: float,
 # Effort counts *for* you here, where it counts against a task in the ranking:
 # the list puts easy wins first to get you moving, and the pay makes up for
 # the dreaded ones.
+#
+# Above 5 the rate climbs faster with every point, so the work that matters
+# most and the tasks you dread most stand clearly apart from the merely
+# decent ones. The extra grows with the square of the points past 5, and
+# keeps the same two-to-one balance.
 XP_RATE_BASE = 0.25     # XP a minute for work that matters not at all
 XP_RATE_IMPACT = 0.10   # per point of impact
 XP_RATE_EFFORT = 0.05   # per point of effort
+XP_CURVE_IMPACT = 0.04  # times the square of the impact points above 5
+XP_CURVE_EFFORT = 0.02  # times the square of the effort points above 5
 # Timed and finished inside the padded estimate earns up to this much extra,
 # all of it once you are inside your own raw guess. Capped so that it rewards
 # a task going to plan, not a race; running over costs nothing.
 XP_SPEED_BONUS = 0.20
 # Bumped whenever the payout formula changes, so a database paid under an
 # older one is re-scored once on startup.
-XP_FORMULA = 2
+XP_FORMULA = 3
 
 # Levels sit steadily further apart — 100 XP to reach level 2, another 200 to
 # reach 3, another 300 to reach 4 — so the bar never stops moving, but the
@@ -1052,11 +1059,13 @@ XP_PER_LEVEL = 100
 
 
 def xp_rate(impact: int | None, effort: int | None) -> float:
-    """XP a minute: 0.25 for work of no impact and no effort, 1.75 at the
+    """XP a minute: 0.25 for work of no impact and no effort, 3.25 at the
     top of both, and 1.0 for a task nobody has rated."""
     imp = NEUTRAL_SCORE if impact is None else max(0, min(10, impact))
     eff = NEUTRAL_SCORE if effort is None else max(0, min(10, effort))
-    return XP_RATE_BASE + XP_RATE_IMPACT * imp + XP_RATE_EFFORT * eff
+    return (XP_RATE_BASE + XP_RATE_IMPACT * imp + XP_RATE_EFFORT * eff
+            + XP_CURVE_IMPACT * max(0, imp - 5) ** 2
+            + XP_CURVE_EFFORT * max(0, eff - 5) ** 2)
 
 
 def speed_bonus(raw_min: int | None, padded_min: int, actual_min: int | None) -> float:

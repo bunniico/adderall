@@ -2481,7 +2481,7 @@ def test_a_container_pays_through_its_steps_not_twice(client):
     state = client.post(f"/api/tasks/{tid}/breakdown", json={}).json()
     steps = find(state, "project")["subtasks"]
     assert len(steps) == 3
-    expected = sum(round(s["score"]) for s in steps)
+    expected = sum(s["xp_value"] for s in steps)
     state = client.post(f"/api/tasks/{tid}/complete", json={}).json()
     # The parent's own score is the mean of the steps; paying for it as well
     # would pay twice for one afternoon.
@@ -2494,7 +2494,7 @@ def test_finishing_by_patch_pays_the_same_as_the_button(client):
     state = create(client, title="patched", impact=7, effort=3)
     task = find(state, "patched")
     state = client.patch(f"/api/tasks/{task['id']}", json={"status": "done"}).json()
-    assert state["xp"]["gained"] == round(task["score"])
+    assert state["xp"]["gained"] == task["xp_value"]
 
 
 def test_discarding_pays_nothing(client):
