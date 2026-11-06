@@ -607,12 +607,12 @@
         Auto-deadlines <span class="muted">— assign a deadline when you don't set one</span></label>
 
       <label>Time-tax buffer: <output id="s-buffer-val"></output>
-        <input id="s-buffer" type="range" min="25" max="50" value="30">
+        <input id="s-buffer" type="range" min="0" max="50" value="30">
         <span class="muted">Every estimate gets this padding — plans always take longer than they feel like they will.</span>
       </label>
 
       <label class="row"><input id="s-adaptive" type="checkbox">
-        Adaptive buffer <span class="muted">— learn from your actual completion times (only raises, never lowers)</span></label>
+        Adaptive buffer <span class="muted">— learn from your actual completion times (raises or lowers it to match)</span></label>
 
       <fieldset class="s-group">
         <legend>How much a day holds</legend>

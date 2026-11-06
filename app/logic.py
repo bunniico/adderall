@@ -13,7 +13,7 @@ import math
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from zoneinfo import ZoneInfo
 
-BUFFER_MIN = 0.25
+BUFFER_MIN = 0.0
 BUFFER_MAX = 0.50
 DEFAULT_ESTIMATE_MIN = 30  # used for urgency math when a task has no estimate
 
@@ -130,12 +130,13 @@ def parse_dt(value: str | None) -> datetime | None:
 
 
 def effective_buffer(settings: dict, ratios: list[float]) -> float:
-    """The buffer actually applied: the configured base, raised (never lowered)
-    by the user's own overshoot history when adaptive buffering is on."""
+    """The buffer actually applied: the configured base, or, when adaptive
+    buffering is on and there is enough history, what the user's own
+    actual-vs-estimated times say, raised or lowered to match."""
     base = min(BUFFER_MAX, max(BUFFER_MIN, float(settings.get("buffer", 0.30))))
     if settings.get("adaptive_buffer") and len(ratios) >= 3:
         learned = round(sum(ratios) / len(ratios) - 1.0, 4)
-        return min(BUFFER_MAX, max(base, learned))
+        return min(BUFFER_MAX, max(BUFFER_MIN, learned))
     return base
 
 
