@@ -1469,6 +1469,13 @@ body.calendar-mode #list-view { display: none; }
 
 .nudge-presets { display: flex; flex-wrap: wrap; gap: 6px; }
 .nudge-presets button { flex: 1; min-width: 110px; font-size: 13px; padding: 6px 10px; }
+.nudge-presets button[aria-pressed="true"] {
+  background: var(--accent); border-color: var(--accent);
+  color: var(--on-accent); font-weight: 600;
+}
+#n-day { margin-top: 8px; }
+#n-when-row summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+#n-when-row label { margin-top: 8px; }
 
 /* The rail is context, never a column of work — it goes under the list well
    before the list itself has to give anything up. */

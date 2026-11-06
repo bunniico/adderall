@@ -1157,49 +1157,29 @@ function monthCell(day, list, month) {
  * happens on the server (logic.nudge_plan); this side just picks the moment. */
 
 let nudgeTargets = [];
-// Set once a pile has been previewed: which "from when" the preview was for,
-// and the signal that the button is about to reschedule rather than nudge.
-let nudgeFloor = null;
+// The preview on screen, which is exactly what "Move" writes. Nothing moves
+// until there is one, so a click never lands somewhere you have not seen.
+let nudgeMoves = null;
+// Set when you typed a time of your own, which then wins over the preview.
+let nudgeExact = false;
+// Clicking two windows quickly must not let the slower answer win.
+let nudgeAsk = 0;
 
-const NUDGE_PRESETS = [
-  {
-    label: "In 1 hour",
-    hint: "an hour from now",
-    at: () => new Date(Date.now() + 60 * 60000),
-  },
-  {
-    label: "Tonight, 6pm",
-    hint: "6pm today, or tomorrow if that has gone",
-    at: () => {
-      const d = startOfDay(new Date());
-      d.setHours(18);
-      return d > new Date() ? d : (d.setDate(d.getDate() + 1), d);
-    },
-  },
-  {
-    // The one that usually wants picking: same slot in the day, one day later.
-    label: "Tomorrow, same time",
-    hint: "tomorrow, at the time it was already set for",
-    at: (e) => atSameClockTime(e, addDays(startOfDay(new Date()), 1)),
-  },
-  {
-    label: "In 3 days",
-    hint: "three days out, same time of day",
-    at: (e) => atSameClockTime(e, addDays(startOfDay(new Date()), 3)),
-  },
-  {
-    label: "Next week",
-    hint: "a week out, same time of day",
-    at: (e) => atSameClockTime(e, addDays(startOfDay(new Date()), 7)),
-  },
+/* Roughly when, never exactly when. Each is only where the day book starts
+ * looking: it finds the first stretch with room for the whole task, and you
+ * see that stretch before anything moves. One task and a pile get the same
+ * question, because it is the same question. */
+const NUDGE_WINDOWS = [
+  { key: "room", label: "Today", hint: "the first room from now on" },
+  { key: "tomorrow", label: "Tomorrow", hint: "the first room from tomorrow morning" },
+  { key: "next_week", label: "Next week", hint: "the first room a week from today" },
+  { key: "day", label: "Pick a day…", hint: "the first room on a day you choose" },
 ];
 
-function atSameClockTime(e, day) {
-  const old = new Date(e.deadline);
-  const d = startOfDay(day);
-  d.setHours(old.getHours(), old.getMinutes(), 0, 0);
-  return d;
-}
+const fmtNudgeDay = (d) =>
+  d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+const fmtNudgeTime = (d) =>
+  d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 
 function openNudge(events) {
   nudgeTargets = events.filter(Boolean);
@@ -1211,77 +1191,81 @@ function openNudge(events) {
     : `${nudgeTargets.length} past-due tasks.`;
   const total = nudgeTargets.reduce((n, e) => n + e.length_min, 0);
   $("n-length").textContent = one
-    ? `It keeps its length: ${fmtMinutes(one.length_min)} of buffered work ` +
-      `ending at the new deadline.` +
+    ? `It keeps its length: ${fmtMinutes(one.length_min)} of buffered work.` +
       (one.has_subtasks
         ? ` Its subtasks slide by the same amount, so the plan keeps its shape.`
         : "")
     : `Each keeps its own length — ${fmtMinutes(total)} of work in total — and ` +
       `anything nested under them slides by the same amount.`;
 
-  // One task is a question about a time, and you are the one who knows it.
-  // A pile is a question about where there is room, and the day book is the
-  // one that knows *that* — so the two get different controls.
-  const presets = $("n-presets");
-  presets.replaceChildren();
-  presets.hidden = !one;
-  $("n-when-row").hidden = !one;
-  $("n-floors").hidden = !!one;
-  $("n-drop").hidden = !!one;
+  $("n-question").textContent =
+    `When do you want to work on ${one ? "it" : "them"}?`;
+  nudgeMoves = null;
+  nudgeExact = false;
+  nudgeAsk++;
+  $("n-day").hidden = true;
+  $("n-day").value = "";
+  $("n-day").min = dayKey(new Date());
   $("n-preview").hidden = true;
-  $("n-save").hidden = !one;
-  $("n-save").textContent = "Nudge";
-  nudgeFloor = null;          // a pile has to be previewed before it can go
-
-  if (one) {
-    for (const preset of NUDGE_PRESETS) {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "ghost";
-      btn.textContent = preset.label;
-      btn.title = `Move to ${preset.hint}`;
-      btn.addEventListener("click", () => applyNudge(
-        [{ task_id: one.id, deadline: preset.at(one).toISOString() }]));
-      presets.appendChild(btn);
-    }
-    // The custom picker defaults to the first preset.
-    $("n-when").value = isoToLocalInput(
-      atSameClockTime(one, addDays(startOfDay(new Date()), 1)).toISOString());
-  } else {
-    renderFloors();
-  }
+  $("n-save").hidden = true;
+  // Typing an exact time only makes sense for one task: the same instant on
+  // twelve of them is the pile again, on a different day.
+  $("n-when-row").hidden = !one;
+  $("n-when-row").open = false;
+  $("n-when").value = "";
+  $("n-drop").hidden = !!one;
+  renderWindows();
   $("modal-nudge").showModal();
 }
 
-/* Where the app should start looking for room, which is the only thing it
- * needs from you: it works out the rest. */
-const NUDGE_FLOORS = [
-  { key: "room", label: "Wherever there's room", hint: "starting today" },
-  { key: "tomorrow", label: "From tomorrow", hint: "starting tomorrow morning" },
-  { key: "next_week", label: "From next week", hint: "a week from today" },
-];
-
-function renderFloors() {
-  const box = $("n-floors");
+function renderWindows() {
+  const box = $("n-windows");
   box.replaceChildren();
-  for (const floor of NUDGE_FLOORS) {
+  for (const w of NUDGE_WINDOWS) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "ghost";
-    btn.textContent = floor.label;
-    btn.title = `Spread all ${nudgeTargets.length} over the days that have ` +
-                `room, ${floor.hint}`;
-    btn.addEventListener("click", () => previewReschedule(floor.key));
+    btn.textContent = w.label;
+    btn.title = `Find ${w.hint}`;
+    btn.setAttribute("aria-pressed", "false");
+    btn.addEventListener("click", () => {
+      pressWindow(btn);
+      if (w.key === "day") {
+        const day = $("n-day");
+        day.hidden = false;
+        day.focus();
+        try { day.showPicker(); } catch { /* not every browser has it */ }
+        if (day.value) previewReschedule(localDayStart(day.value));
+        return;
+      }
+      $("n-day").hidden = true;
+      previewReschedule(w.key);
+    });
     box.appendChild(btn);
   }
 }
 
-/* Say what it is about to do before it does it. Twelve tasks moving at once
- * is exactly the thing you want to see first and be able to say no to. */
+function pressWindow(btn) {
+  for (const b of $("n-windows").children) {
+    b.setAttribute("aria-pressed", String(b === btn));
+  }
+}
+
+// "2026-11-12" from the date input, as the start of that day here.
+function localDayStart(value) {
+  return new Date(`${value}T00:00`).toISOString();
+}
+
+/* Say where it would go before it goes there. */
 async function previewReschedule(floor) {
+  const ask = ++nudgeAsk;
   const note = $("n-preview");
+  const go = $("n-save");
   note.hidden = false;
-  note.textContent = "Working out where they fit…";
+  note.textContent = "Looking for room…";
+  go.hidden = true;
+  nudgeMoves = null;
+  nudgeExact = false;
   try {
     const plan = await api("/reschedule", {
       method: "POST",
@@ -1289,12 +1273,32 @@ async function previewReschedule(floor) {
         task_ids: nudgeTargets.map((e) => e.id), floor, preview: true,
       }),
     });
-    note.textContent = describeSpread(plan.moves);
-    nudgeFloor = floor;
-    const go = $("n-save");
+    if (ask !== nudgeAsk) return;
+    if (!plan.moves.length) { note.textContent = "Nothing to move."; return; }
+    nudgeMoves = plan.moves;
+    const one = nudgeTargets.length === 1;
+    note.textContent = one ? describeSlot(plan.moves[0]) : describeSpread(plan.moves);
+    if (one) $("n-when").value = isoToLocalInput(plan.moves[0].deadline);
     go.hidden = false;
-    go.textContent = `Reschedule ${plan.moves.length}`;
-  } catch (e) { note.textContent = e.message; }
+    go.textContent = one ? "Move it" : `Move all ${plan.moves.length}`;
+  } catch (e) {
+    if (ask === nudgeAsk) note.textContent = e.message;
+  }
+}
+
+/* When you will be doing it comes first; the deadline is what follows from
+ * that, not the thing you were asked to choose. */
+function describeSlot(move) {
+  const due = new Date(move.deadline);
+  const blocks = move.blocks || [];
+  if (!blocks.length) return `Due ${fmtNudgeDay(due)}, ${fmtNudgeTime(due)}.`;
+  const start = new Date(blocks[0][0]);
+  const end = new Date(blocks.at(-1)[1]);
+  const work = sameDay(start, end)
+    ? `${fmtNudgeDay(start)}, ${fmtNudgeTime(start)}–${fmtNudgeTime(end)}`
+    : `${fmtNudgeDay(start)} to ${fmtNudgeDay(end)}`;
+  const dueDay = sameDay(due, end) ? "" : ` ${fmtNudgeDay(due)}`;
+  return `You'll work on it ${work}. Due by ${fmtNudgeTime(due)}${dueDay}.`;
 }
 
 function describeSpread(moves) {
@@ -1315,20 +1319,39 @@ function describeSpread(moves) {
          `The busiest things go first.`;
 }
 
-async function applyReschedule(floor) {
-  $("modal-nudge").close();
-  try {
-    const plan = await api("/reschedule", {
-      method: "POST",
-      body: JSON.stringify({ task_ids: nudgeTargets.map((e) => e.id), floor }),
-    });
-    applyState(plan.state);
-    await loadCalendar();
-    const back = plan.moves.filter((m) => m.was)
-      .map((m) => ({ task_id: m.task_id, deadline: m.was }));
-    toast(`Spread ${plan.moves.length} tasks over the days that had room.`,
-          false, back.length ? { label: "Undo", run: () => applyNudge(back) } : null);
-  } catch (e) { toast(e.message, true); }
+/* You typed a time of your own: that is the answer, room or not. */
+function chooseExactTime() {
+  const when = $("n-when").value;
+  nudgeAsk++;
+  nudgeExact = !!when;
+  pressWindow(null);
+  $("n-day").hidden = true;
+  const note = $("n-preview");
+  note.hidden = !when;
+  if (when) {
+    const d = new Date(when);
+    note.textContent = `Due ${fmtNudgeDay(d)}, ${fmtNudgeTime(d)}. ` +
+      `You picked the time, so this skips the check for room.`;
+  }
+  $("n-save").hidden = !when;
+  $("n-save").textContent = "Move it";
+}
+
+function confirmNudge() {
+  if (nudgeExact) {
+    const one = nudgeTargets[0];
+    const when = $("n-when").value;
+    if (!when) { toast("Pick a date and time first."); return; }
+    applyNudge([{ task_id: one.id, deadline: new Date(when).toISOString() }],
+               one.deadline ? [{ task_id: one.id, deadline: one.deadline }] : null);
+    return;
+  }
+  if (!nudgeMoves) return;
+  // Written through the nudge rather than the reschedule, so subtasks and
+  // start times slide along with each task, the same as for one.
+  applyNudge(nudgeMoves.map((m) => ({ task_id: m.task_id, deadline: m.deadline })),
+             nudgeMoves.filter((m) => m.was)
+               .map((m) => ({ task_id: m.task_id, deadline: m.was })));
 }
 
 async function dropPile() {
@@ -1360,7 +1383,7 @@ async function undoDrop(dropped) {
   } catch (e) { toast(e.message, true); }
 }
 
-async function applyNudge(nudges) {
+async function applyNudge(nudges, back = null) {
   $("modal-nudge").close();
   try {
     applyState(await api("/nudge", {
@@ -1368,8 +1391,9 @@ async function applyNudge(nudges) {
     }));
     const when = new Date(nudges[0].deadline);
     toast(nudges.length === 1
-      ? `Nudged to ${when.toLocaleString()} — same length.`
-      : `Nudged ${nudges.length} tasks forward, each keeping its length.`);
+      ? `Moved to ${fmtNudgeDay(when)}, ${fmtNudgeTime(when)}.`
+      : `Moved ${nudges.length} tasks.`,
+      false, back && back.length ? { label: "Undo", run: () => applyNudge(back) } : null);
   } catch (e) { toast(e.message, true); }
 }
 
@@ -1397,14 +1421,10 @@ function wireCalendar() {
   filter("cal-repeats", "repeats", "checked");
   filter("cal-done", "done", "checked");
 
-  $("n-save").addEventListener("click", () => {
-    // A previewed pile goes where the preview said; one task goes where you
-    // typed. The button says which it is doing.
-    if (nudgeFloor) { applyReschedule(nudgeFloor); return; }
-    const when = $("n-when").value;
-    if (!when) { toast("Pick a date and time first."); return; }
-    const iso = new Date(when).toISOString();
-    applyNudge(nudgeTargets.map((e) => ({ task_id: e.id, deadline: iso })));
+  $("n-save").addEventListener("click", confirmNudge);
+  $("n-when").addEventListener("input", chooseExactTime);
+  $("n-day").addEventListener("change", () => {
+    if ($("n-day").value) previewReschedule(localDayStart($("n-day").value));
   });
   $("n-drop").addEventListener("click", dropPile);
   $("cal-replan").addEventListener("click", replanNow);

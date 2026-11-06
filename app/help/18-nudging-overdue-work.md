@@ -4,11 +4,11 @@ Move a missed deadline forward in one click.
 
 ## How it works
 
-The red **overdue ⏩** badge on a task is a button. Click it, in the list or on the calendar, and pick **in 1 hour**, **tonight**, **tomorrow, same time**, **in 3 days**, **next week**, or a moment of your own.
+The red **overdue ⏩** badge on a task is a button. Click it, in the list or on the calendar, and say roughly when you want to work on it: **Today**, **Tomorrow**, **Next week**, or **Pick a day…**. The app finds the first stretch on or after that with room for the whole task, and shows you when you'll be working on it and when it will be due before anything moves. Press **Move it** to accept, or open **Choose the exact time instead** to type a deadline yourself. Every move can be undone from the message that follows.
 
 The task keeps its length: the estimate never changes, so it takes up as much of the new day as it did of the old one. For a task with subtasks, the whole plan slides by the same amount, and its start time moves with its deadline.
 
-On the calendar, everything overdue is gathered into one rail with a **Nudge all** button, for when the pile is the problem. It asks where the app should start looking, previews where things will land, and offers **These aren't happening** to drop the lot.
+On the calendar, everything overdue is gathered into one rail with a **Reschedule all…** button, for when the pile is the problem. It asks the same question, spreads the pile over the days that have room (most important first), previews where things will land, and offers **These aren't happening** to drop the lot.
 
 ## Why it works this way
 

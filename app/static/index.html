@@ -819,18 +819,22 @@
 <!-- Nudge a past-due deadline forward, keeping the task's length -->
 <dialog id="modal-nudge">
   <div class="modal-body">
-    <div class="modal-head"><h2>⏩ Nudge to a new deadline</h2>
+    <div class="modal-head"><h2>🔁 Find a new time</h2>
       <button type="button" class="ghost close" data-close>✕</button></div>
     <p id="n-summary"></p>
     <p id="n-length" class="muted"></p>
-    <div id="n-presets" class="nudge-presets"></div>
-    <!-- The pile, which is a different question from one late task: not
-         "what time?" but "from when should the app start looking?" -->
-    <div id="n-floors" class="nudge-presets" hidden></div>
+    <!-- One question for one task or a pile: roughly when, and the day book
+         finds the slot. You see the slot before anything moves. -->
+    <p id="n-question">When do you want to work on it?</p>
+    <div id="n-windows" class="nudge-presets"></div>
+    <input id="n-day" type="date" hidden>
     <p id="n-preview" class="muted" hidden></p>
-    <label id="n-when-row">Or pick the moment yourself
-      <input id="n-when" type="datetime-local">
-    </label>
+    <details id="n-when-row">
+      <summary>Choose the exact time instead</summary>
+      <label>Due by
+        <input id="n-when" type="datetime-local">
+      </label>
+    </details>
     <div class="modal-actions">
       <button type="button" id="n-drop" class="ghost" hidden
               title="Take these off the list — they are not happening">
