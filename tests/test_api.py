@@ -2144,6 +2144,37 @@ def test_a_preview_says_what_it_would_do_and_writes_nothing(client):
     assert find(client.get("/api/state").json(), "overdue")["deadline"] == before
 
 
+def test_a_picked_day_previews_a_slot_on_it_and_the_nudge_keeps_the_plan(client):
+    """The dialog's flow: ask where a day has room, then write that answer
+    through the nudge, so the subtasks slide with it."""
+    from app import db
+    db.update_settings({"day_start": 9, "day_end": 22, "day_capacity": 480,
+                        "adaptive_capacity": False, "timezone": "UTC"})
+    parent = find(create(client, title="trip", deadline=iso_in(days=-1),
+                         estimated_time=60), "trip")
+    child = find(client.post("/api/tasks", json={
+        "title": "pack", "parent_id": parent["id"],
+        "deadline": iso_in(days=-3)}).json(), "pack")
+    gap_before = (logic_parse(parent["deadline"])
+                  - logic_parse(db.get_task(child["id"])["deadline"]))
+
+    day = (datetime.now(timezone.utc) + timedelta(days=5)).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    plan = client.post("/api/reschedule", json={
+        "task_ids": [parent["id"]], "floor": day.isoformat(),
+        "preview": True}).json()
+    move = plan["moves"][0]
+    assert logic_parse(move["deadline"]).date() == day.date()
+    assert move["blocks"]
+
+    client.post("/api/nudge", json={
+        "nudges": [{"task_id": parent["id"], "deadline": move["deadline"]}]})
+    assert db.get_task(parent["id"])["deadline"] == move["deadline"]
+    gap_after = (logic_parse(db.get_task(parent["id"])["deadline"])
+                 - logic_parse(db.get_task(child["id"])["deadline"]))
+    assert gap_after == gap_before
+
+
 def test_the_pile_goes_back_in_the_order_it_deserves(client):
     """Highest score first: digging out is exactly where order matters."""
     from app import db
