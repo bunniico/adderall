@@ -12,7 +12,18 @@ Each task has an **XP rate**, set by its impact and effort:
 | Each point of impact | +0.10 |
 | Each point of effort | +0.05 |
 
-An unrated task earns 1 XP a minute. The most important, hardest work earns 1.75.
+Above 5, each point is worth more than the one before it:
+
+| Impact | XP a minute | | Effort | XP a minute |
+|---|---|---|---|---|
+| 5 | 1.00 | | 5 | 1.00 |
+| 6 | 1.14 | | 6 | 1.07 |
+| 7 | 1.36 | | 7 | 1.18 |
+| 8 | 1.66 | | 8 | 1.33 |
+| 9 | 2.04 | | 9 | 1.52 |
+| 10 | 2.50 | | 10 | 1.75 |
+
+(Each column holds the other one at 5.) An unrated task earns 1 XP a minute. The most important, hardest work earns 3.25.
 
 A finished task pays its rate for every minute of its **padded estimate** (the estimate plus the [time tax](12-estimates-and-time-tax.md)). A task nobody estimated counts as 30 minutes. Each open task shows what it will pay as a green **XP** badge next to its ★ score; hover over it, or open the task, to see the rate.
 
@@ -40,6 +51,8 @@ The rail's **XP left** adds up what finishing every open task in the list would 
 **Urgency does not pay.** It still decides what the list puts first, but paying for it would pay you to let things go overdue.
 
 **Effort pays extra** because starting the task you dread is the hard part. The list puts easy wins first to get you moving, and the pay makes up for the hard ones.
+
+**The top of the scale pays the most.** Going from impact 9 to 10 is a bigger jump than going from 5 to 6, so an hour on the work that matters most is clearly worth more than an hour on work that is merely decent.
 
 **The speed bonus is small and capped** so it rewards a task going to plan, not rushing. It is paid on the estimate, never on the time you took, so working slowly is not rewarded and being slow is not punished.
 

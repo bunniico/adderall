@@ -1315,22 +1315,35 @@ def test_unknown_timezone_falls_back_to_utc():
 
 # ---- XP and levels ----
 
-def test_xp_rate_runs_from_a_quarter_to_one_and_three_quarters():
+def test_xp_rate_runs_from_a_quarter_to_three_and_a_quarter():
     assert logic.xp_rate(0, 0) == 0.25
-    assert logic.xp_rate(10, 10) == 1.75
+    assert logic.xp_rate(10, 10) == pytest.approx(3.25)
     assert logic.xp_rate(None, None) == 1.0     # unrated sits at neutral
     assert logic.xp_rate(5, 5) == 1.0
-    # Impact counts twice what effort does, and both are clamped to 0-10.
-    assert logic.xp_rate(6, 5) - logic.xp_rate(5, 5) == pytest.approx(0.10)
-    assert logic.xp_rate(5, 6) - logic.xp_rate(5, 5) == pytest.approx(0.05)
+    # Up to 5 it is a straight line, impact counting twice what effort does.
+    assert logic.xp_rate(5, 5) - logic.xp_rate(4, 5) == pytest.approx(0.10)
+    assert logic.xp_rate(5, 5) - logic.xp_rate(5, 4) == pytest.approx(0.05)
+    # Both are clamped to 0-10.
     assert logic.xp_rate(99, -3) == logic.xp_rate(10, 0)
+
+
+def test_xp_rate_climbs_faster_the_higher_impact_and_effort_go_above_5():
+    assert logic.xp_rate(8, 5) == pytest.approx(1.66)
+    assert logic.xp_rate(10, 5) == pytest.approx(2.5)
+    assert logic.xp_rate(5, 10) == pytest.approx(1.75)
+    # Each step above 5 is worth more than the one before it.
+    for rate in (lambda n: logic.xp_rate(n, 5), lambda n: logic.xp_rate(5, n)):
+        steps = [rate(n + 1) - rate(n) for n in range(5, 10)]
+        assert steps == sorted(steps) and steps[0] < steps[-1]
+    # Impact still counts twice what effort does, above 5 as well as below.
+    assert (logic.xp_rate(9, 5) - 1.0) == pytest.approx(2 * (logic.xp_rate(5, 9) - 1.0))
 
 
 def test_task_xp_pays_the_rate_for_every_padded_minute():
     # 1.0 XP a minute for 78 padded minutes.
     assert logic.task_xp(5, 5, 60, 78) == 78
-    # 1.75 XP a minute for 40 minutes.
-    assert logic.task_xp(10, 10, 30, 40) == 70
+    # 3.25 XP a minute for 40 minutes.
+    assert logic.task_xp(10, 10, 30, 40) == 130
     # A task nobody estimated counts as the app's default length.
     assert logic.task_xp(5, 5, None, None) == logic.DEFAULT_ESTIMATE_MIN
     # Never nothing: doing something always counts for something.
