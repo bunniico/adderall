@@ -29,7 +29,7 @@ from app import logic
 # a weekday assumption that creeps in shows up as a diff.
 NOW = datetime(2026, 8, 29, 12, 0, tzinfo=timezone.utc)
 
-# The base every scenario starts from. Buffer is pinned at the floor so an
+# The base every scenario starts from. Buffer is pinned at 25% so an
 # estimate in a scenario reads as the number it is: 192 minutes of work is 240
 # minutes of block, and 4 hours is recognisably 4 hours in the dump.
 SETTINGS = {

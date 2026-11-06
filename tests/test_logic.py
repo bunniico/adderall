@@ -39,17 +39,20 @@ def test_buffered_estimate_applies_time_tax():
 
 
 def test_effective_buffer_clamped_to_range():
-    assert logic.effective_buffer({"buffer": 0.10}, []) == 0.25
+    assert logic.effective_buffer({"buffer": 0.10}, []) == 0.10
+    assert logic.effective_buffer({"buffer": -0.2}, []) == 0.0
     assert logic.effective_buffer({"buffer": 0.90}, []) == 0.50
     assert logic.effective_buffer({"buffer": 0.30}, []) == 0.30
 
 
-def test_adaptive_buffer_raises_never_lowers():
+def test_adaptive_buffer_follows_history():
     s = {"buffer": 0.30, "adaptive_buffer": True}
     # user overshoots estimates by 45% on average -> buffer learns upward
     assert logic.effective_buffer(s, [1.5, 1.4, 1.45]) == 0.45
-    # user is accurate -> buffer stays at configured base
-    assert logic.effective_buffer(s, [1.0, 0.9, 1.05]) == 0.30
+    # user overshoots by 10% -> buffer learns down, below the configured base
+    assert logic.effective_buffer(s, [1.1, 1.1, 1.1]) == 0.10
+    # user is accurate or fast -> no buffer at all
+    assert logic.effective_buffer(s, [1.0, 0.9, 1.05]) == 0.0
     # capped at 50%
     assert logic.effective_buffer(s, [2.0, 2.2, 1.9]) == 0.50
     # fewer than 3 data points -> no learning yet

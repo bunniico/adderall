@@ -64,7 +64,7 @@ def check(name: str, text: str, outside_window: bool = False) -> None:
 def test_four_hour_tree_due_at_eight_in_the_morning():
     """#36: a deadline you set is booked backwards from it, into the night.
 
-    192 minutes of work is 240 minutes of block at the floor buffer, and the
+    192 minutes of work is 240 minutes of block at a 25% buffer, and the
     deadline is 08:00, so the block starts at 04:00 and the day view draws it
     there. This is the scenario the issue is named after.
     """
