@@ -1264,6 +1264,23 @@ def test_all_tasks_is_read_by_urgency_not_by_hand(client):
     assert order[0]["id"] == urgent["id"]
 
 
+def test_all_tasks_keeps_a_sort_that_is_not_manual(client):
+    """Only hand-arranged order is list-specific; sorting by score means the
+    same thing on the All tab as on any one list."""
+    soon = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    create(client, title="urgent but weak", deadline=soon,
+           impact=1, effort=10, estimated_time=30)
+    create(client, title="strong", impact=10, effort=1, estimated_time=30)
+    client.put("/api/settings", json={"sort_field": "score", "sort_dir": "desc"})
+    new_project(client, "work")
+
+    state = all_tasks(client)
+    order = sorted(state["tasks"], key=lambda t: t["list_sort_key"])
+    scores = [t["score"] for t in order]
+    assert scores == sorted(scores, reverse=True)
+    assert order[0]["title"] == "strong"
+
+
 # ---------- the Overview tab ----------
 # What the lists add up to, rather than what is on one of them. Another lens,
 # and the one that layers: turning it on leaves the tab underneath alone.

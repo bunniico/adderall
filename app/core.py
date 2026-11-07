@@ -88,11 +88,12 @@ def list_settings(settings: dict, all_view: bool) -> dict:
     """The sorter as the list on screen reads it.
 
     Hand-arranged order belongs to one list: where you dragged a task in one
-    tab says nothing about where it sits among another tab's. So the All tab
-    is read by urgency however the open tab was last arranged, and the page
-    hides the Manual option for as long as it is on.
+    tab says nothing about where it sits among another tab's. So a manual
+    sort is read by urgency on the All tab, and the page hides the Manual
+    option for as long as it is on. Every other sort means the same thing on
+    every list and is kept as chosen.
     """
-    if not all_view:
+    if not all_view or logic.sort_mode(settings)[0] != "manual":
         return settings
     return {**settings, "sort_field": "smart", "manual_order": False}
 
