@@ -1,6 +1,6 @@
 # Ask
 
-**💬** in the header opens a chat with the app itself.
+**💬** in the bottom-right corner opens a chat with the app itself.
 
 ## How it works
 

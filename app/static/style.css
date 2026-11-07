@@ -946,6 +946,14 @@ output { color: var(--text); font-weight: 600; }
 .celebration {
   position: fixed; inset: 0; pointer-events: none; z-index: 30; overflow: hidden;
 }
+/* 💬 Ask floats in the corner. Under the focus overlay, confetti and toasts. */
+.chat-fab {
+  position: fixed; right: 20px; bottom: 20px; z-index: 15;
+  width: 52px; height: 52px; padding: 0; border-radius: 50%;
+  display: grid; place-items: center; font-size: 22px; line-height: 1;
+  border-color: var(--accent);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .45);
+}
 .confetti {
   position: absolute; top: -12px; width: 9px; height: 14px; border-radius: 2px;
 }
