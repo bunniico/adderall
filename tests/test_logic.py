@@ -128,6 +128,18 @@ def test_auto_deadlines_toggle_off():
     assert d["urgency"] == 0.5  # low baseline
 
 
+def test_cleared_deadline_is_not_picked_again():
+    """A task you cleared gets no deadline; the others still get one."""
+    cleared = make_task("a", impact=8, effort=2, no_deadline=True,
+                        planned_at=(NOW + timedelta(days=1)).isoformat())
+    other = make_task("b", impact=8, effort=2)
+    for replan in (False, True):
+        derived = logic.compute([cleared, other], SETTINGS, now=NOW, replan=replan)
+        assert derived["a"]["deadline"] is None
+        assert derived["a"]["deadline_source"] == "none"
+        assert derived["b"]["deadline_source"] == "auto"
+
+
 def test_a_step_carries_no_deadline_of_its_own():
     """A tree is one commitment, and the steps inside it are a checklist.
 

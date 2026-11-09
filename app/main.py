@@ -181,6 +181,8 @@ class TaskUpdate(BaseModel):
     description: str | None = None
     deadline: str | None = None
     clear_deadline: bool = False
+    # Keep the app from picking a deadline for this task. See `logic.compute`.
+    no_deadline: bool | None = None
     start_at: str | None = None
     clear_start_at: bool = False
     estimated_time: int | None = Field(default=None, ge=1)

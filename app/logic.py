@@ -1452,7 +1452,7 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
             # date: the block still ends where you said it must. It is not
             # ignored — it is what `urgency` reads to know the hour has come.
             return user_dl, "user"
-        if not auto_deadlines:
+        if not auto_deadlines or task.get("no_deadline"):
             return None, "none"
         planned = parse_dt(task.get("planned_at"))
         if planned is not None and (not replan or flexibility(task) == 1):
@@ -1521,7 +1521,8 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
         # only true of the things that cannot move.
         for task in roots:
             planned = parse_dt(task.get("planned_at"))
-            if planned is None or parse_dt(task["deadline"]) is not None:
+            if planned is None or parse_dt(task["deadline"]) is not None \
+               or task.get("no_deadline"):
                 continue
             if replan and flexibility(task) != 1:
                 continue
@@ -1530,7 +1531,7 @@ def compute(tasks: list[dict], settings: dict, ratios: list[float] | None = None
                 planner.reserve(task["id"], planned, minutes, days=allowed(task))
         queue = []
         for i, task in enumerate(roots):
-            if parse_dt(task["deadline"]) is not None:
+            if parse_dt(task["deadline"]) is not None or task.get("no_deadline"):
                 continue
             planned = parse_dt(task.get("planned_at"))
             give = flexibility(task)
