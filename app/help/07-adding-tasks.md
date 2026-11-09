@@ -21,6 +21,8 @@ The **🌶** slider next to the box sets how fine a [breakdown](08-magic-todo.md
 
 Click any task to open its dialog, where you can edit the title, description, start time, deadline, estimate, impact, effort, repeat and project.
 
+**No deadline.** The deadline box shows the one the app picked. Empty it and save, and that task has no deadline from then on. **Let the app pick** next to the box hands it back.
+
 ## Why it works this way
 
 "Pay rent tomorrow" should not need a date picker afterwards; the words are already there. The built-in reader is deliberately cautious and leaves anything it does not recognise alone, because a wrong match that quietly reassigns a deadline is far worse than a phrase it fails to catch.

@@ -169,6 +169,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     -- "keep this off my days off". On by default: a day off you have to
     -- defend task by task is not a day off.
     workday_only  INTEGER NOT NULL DEFAULT 1,
+    -- "This has no deadline": you cleared the one the app picked, so it
+    -- stops picking one. Off by default, which is how auto-deadlines behave.
+    no_deadline   INTEGER NOT NULL DEFAULT 0,
     -- Whether a step belongs to the next occurrence of a repeating task, not
     -- just this one. On by default, matching how every step has always
     -- behaved; turned off, a step is a one-off added to this occurrence and
@@ -287,7 +290,7 @@ TASK_FIELDS = {
     "estimated_time",
     "actual_time", "impact", "effort", "status", "ack_thankless", "collapsed",
     "order_index", "started_at", "series_id", "clickup_id", "repeat_carry",
-    "flexibility", "workday_only", "archived",
+    "flexibility", "workday_only", "archived", "no_deadline",
 }
 
 
@@ -389,6 +392,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "archived" not in cols:
         # Nothing was archived before the column existed.
         conn.execute("ALTER TABLE tasks ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
+    if "no_deadline" not in cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN no_deadline INTEGER NOT NULL DEFAULT 0")
     if "planned_at" not in cols:
         # Where the app decided this task goes, and the spans it booked for it.
         # Null on every existing row, which reads as "never planned" and is
@@ -554,6 +559,7 @@ def _row_to_task(row: sqlite3.Row) -> dict:
     task["repeat_carry"] = bool(task["repeat_carry"])
     task["workday_only"] = bool(task["workday_only"])
     task["archived"] = bool(task["archived"])
+    task["no_deadline"] = bool(task["no_deadline"])
     # Stored as JSON because a list of spans has no shape SQLite knows.
     if task.get("planned_blocks"):
         try:

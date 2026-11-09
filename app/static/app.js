@@ -18,6 +18,10 @@ function mod(id) {
   return settings?.modules?.[id] !== false;
 }
 let detailTaskId = null;
+// What the deadline box held when the dialog opened, so saving an untouched
+// app-picked deadline does not turn it into one you set.
+let detailDeadlineShown = "";
+let detailLetAppPick = false;
 let renamingProject = null;   // project whose tab is currently an input box
 let renameFocusPending = false;
 const thanklessQueue = [];
@@ -2309,10 +2313,12 @@ function openDetail(id) {
   detailTaskId = id;
   $("d-title").value = task.title;
   $("d-description").value = task.description || "";
-  $("d-deadline").value = task.deadline_source === "user" ? isoToLocalInput(task.deadline) : "";
+  $("d-deadline").value = detailDeadlineShown = isoToLocalInput(task.deadline);
+  detailLetAppPick = false;
   $("d-deadline-source").textContent =
-    task.deadline_source === "auto" ? `auto: ${new Date(task.deadline).toLocaleString()}` :
+    task.deadline_source === "auto" ? "picked by the app" :
     task.deadline_source === "user" ? "set by you" : "none";
+  $("d-deadline-auto").hidden = !settings?.auto_deadlines || task.deadline_source === "auto";
   $("d-start").value = isoToLocalInput(task.start_at);
   renderStartPresets();
   updateStartNote();
@@ -2557,8 +2563,18 @@ async function saveDetail() {
   // saving one must not wipe a date left on its row from before that was so.
   if (!$("d-when-block").hidden) {
     const dl = $("d-deadline").value;
-    if (dl) fields.deadline = new Date(dl).toISOString();
-    else fields.clear_deadline = true;
+    if (detailLetAppPick && !dl) {
+      fields.clear_deadline = true;
+      fields.no_deadline = false;
+    } else if (!dl) {
+      fields.clear_deadline = true;
+      // Emptying a deadline that was there means "no deadline", so the app
+      // stops picking one. An already empty box changes nothing.
+      if (detailDeadlineShown) fields.no_deadline = true;
+    } else if (dl !== detailDeadlineShown) {
+      fields.deadline = new Date(dl).toISOString();
+      fields.no_deadline = false;
+    }
     const start = $("d-start").value;
     if (start) fields.start_at = new Date(start).toISOString();
     else fields.clear_start_at = true;
@@ -4020,6 +4036,11 @@ function wire() {
   $("d-effort").addEventListener("input", updateDetailDerived);
   $("d-estimate").addEventListener("input", updateDetailDerived);
   $("d-start").addEventListener("input", updateStartNote);
+  $("d-deadline-auto").addEventListener("click", () => {
+    $("d-deadline").value = "";
+    detailLetAppPick = true;
+    $("d-deadline-source").textContent = "the app picks one when you save";
+  });
   $("d-save").addEventListener("click", saveDetail);
   $("d-breakdown").addEventListener("click", async () => {
     $("modal-detail").close();

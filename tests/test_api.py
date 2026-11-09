@@ -716,6 +716,34 @@ def test_auto_deadline_respects_toggle(client):
     assert task["deadline_source"] == "none"
 
 
+def test_cleared_auto_deadline_stays_cleared(client):
+    state = create(client, title="someday")
+    task = find(state, "someday")
+    assert task["deadline_source"] == "auto"
+    state = client.patch(f"/api/tasks/{task['id']}",
+                         json={"clear_deadline": True, "no_deadline": True}).json()
+    task = find(state, "someday")
+    assert task["deadline"] is None
+    assert task["deadline_source"] == "none"
+    assert task["no_deadline"] is True
+    # Still cleared after another write makes the app replan.
+    create(client, title="something else")
+    assert find(client.get("/api/state").json(), "someday")["deadline"] is None
+    # "Let the app pick" hands it back.
+    state = client.patch(f"/api/tasks/{task['id']}",
+                         json={"clear_deadline": True, "no_deadline": False}).json()
+    assert find(state, "someday")["deadline_source"] == "auto"
+
+
+def test_typed_deadline_wins_over_no_deadline(client):
+    task = find(create(client, title="later"), "later")
+    client.patch(f"/api/tasks/{task['id']}", json={"no_deadline": True})
+    dl = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat(timespec="seconds")
+    state = client.patch(f"/api/tasks/{task['id']}",
+                         json={"deadline": dl, "no_deadline": False}).json()
+    assert find(state, "later")["deadline_source"] == "user"
+
+
 def test_ai_failure_does_not_block_creation(client, monkeypatch):
     from app import main
     def boom(*a, **kw):
