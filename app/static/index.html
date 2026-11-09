@@ -606,6 +606,11 @@
       <label class="row"><input id="s-auto-deadlines" type="checkbox">
         Auto-deadlines <span class="muted">— assign a deadline when you don't set one</span></label>
 
+      <label class="row" data-module="ai_estimates"><input id="s-ai-start-times" type="checkbox">
+        AI start times <span class="muted">— let the AI say when each new task
+        wants to begin. Dinner lands this evening, a game you'll get to
+        eventually lands weeks out, and the scheduler works from that.</span></label>
+
       <label>Time-tax buffer: <output id="s-buffer-val"></output>
         <input id="s-buffer" type="range" min="0" max="50" value="30">
         <span class="muted">Every estimate gets this padding — plans always take longer than they feel like they will.</span>
@@ -680,11 +685,6 @@
     <section class="s-panel" role="tabpanel" id="s-panel-ai" aria-labelledby="s-tab-ai" data-tab="ai">
       <label class="row" data-module="ai_estimates"><input id="s-ai-scoring" type="checkbox">
         AI impact/effort suggestions</label>
-
-      <label class="row" data-module="ai_estimates"><input id="s-ai-start-times" type="checkbox">
-        AI start times <span class="muted">— let the AI say when each new task
-        wants to begin. Dinner lands this evening, a game you'll get to
-        eventually lands weeks out, and the scheduler works from that.</span></label>
 
       <label class="row"><input id="s-title-parsing" type="checkbox">
         Read deadlines/repeats from the title <span class="muted">— "pay rent
